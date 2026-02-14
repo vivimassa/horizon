@@ -47,7 +47,7 @@ export function AirportFormDialog({ open, onOpenChange, airport }: AirportFormDi
         onOpenChange(false)
         router.refresh()
       }
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred')
       setLoading(false)
     }
@@ -114,7 +114,7 @@ export function AirportFormDialog({ open, onOpenChange, airport }: AirportFormDi
             <Input
               id="airport_name"
               name="airport_name"
-              defaultValue={airport?.airport_name || ''}
+              defaultValue={airport?.name || ''}
               placeholder="John F. Kennedy International Airport"
               required
               disabled={loading}

@@ -62,9 +62,9 @@ export function AirportsTable({ airports }: AirportsTableProps) {
         (airport) =>
           airport.icao_code.toLowerCase().includes(query) ||
           airport.iata_code?.toLowerCase().includes(query) ||
-          airport.airport_name.toLowerCase().includes(query) ||
-          airport.city.toLowerCase().includes(query) ||
-          airport.country.toLowerCase().includes(query)
+          airport.name.toLowerCase().includes(query) ||
+          airport.city?.toLowerCase().includes(query) ||
+          airport.country?.toLowerCase().includes(query)
       )
     }
 
@@ -187,11 +187,11 @@ export function AirportsTable({ airports }: AirportsTableProps) {
               <TableHead>
                 <Button
                   variant="ghost"
-                  onClick={() => handleSort('airport_name')}
+                  onClick={() => handleSort('name')}
                   className="font-semibold"
                 >
                   Airport Name
-                  {getSortIcon('airport_name')}
+                  {getSortIcon('name')}
                 </Button>
               </TableHead>
               <TableHead>
@@ -239,7 +239,7 @@ export function AirportsTable({ airports }: AirportsTableProps) {
                 <TableRow key={airport.id}>
                   <TableCell className="font-mono font-semibold">{airport.icao_code}</TableCell>
                   <TableCell className="font-mono">{airport.iata_code || '—'}</TableCell>
-                  <TableCell>{airport.airport_name}</TableCell>
+                  <TableCell>{airport.name}</TableCell>
                   <TableCell>{airport.city}</TableCell>
                   <TableCell>{airport.country}</TableCell>
                   <TableCell className="font-mono text-sm">{airport.timezone}</TableCell>
@@ -281,7 +281,7 @@ export function AirportsTable({ airports }: AirportsTableProps) {
           <DialogHeader>
             <DialogTitle>Delete Airport</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete {airportToDelete?.airport_name}? This action cannot be undone.
+              Are you sure you want to delete {airportToDelete?.name}? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

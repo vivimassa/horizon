@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { signIn } from '@/app/actions/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,7 +10,6 @@ import Link from 'next/link'
 export function LoginForm() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const router = useRouter()
 
   async function handleSubmit(formData: FormData) {
     setLoading(true)
@@ -24,7 +22,7 @@ export function LoginForm() {
         setLoading(false)
       }
       // If successful, redirect happens in server action
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred')
       setLoading(false)
     }
@@ -63,7 +61,7 @@ export function LoginForm() {
         {loading ? 'Signing in...' : 'Sign In'}
       </Button>
       <div className="text-center text-sm text-muted-foreground">
-        Don't have an account?{' '}
+        Don&apos;t have an account?{' '}
         <Link href="/register" className="text-primary hover:underline">
           Register
         </Link>

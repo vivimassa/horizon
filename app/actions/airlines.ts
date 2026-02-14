@@ -1,6 +1,6 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { Airline } from '@/types/database'
 
@@ -19,7 +19,7 @@ export async function getAirlines(): Promise<Airline[]> {
 }
 
 export async function createAirline(formData: FormData) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
   const airlineData = {
     icao_code: formData.get('icao_code') as string,
     iata_code: formData.get('iata_code') as string || null,
@@ -48,12 +48,12 @@ export async function createAirline(formData: FormData) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/airlines')
+  revalidatePath('/admin/master-database/airlines')
   return { success: true }
 }
 
 export async function updateAirline(id: string, formData: FormData) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
   const airlineData = {
     icao_code: formData.get('icao_code') as string,
     iata_code: formData.get('iata_code') as string || null,
@@ -82,14 +82,14 @@ export async function updateAirline(id: string, formData: FormData) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/airlines')
+  revalidatePath('/admin/master-database/airlines')
   return { success: true }
 }
 
 export async function deleteAirline(id: string) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
   const { error } = await supabase.from('airlines').delete().eq('id', id)
   if (error) return { error: error.message }
-  revalidatePath('/admin/reference-data/airlines')
+  revalidatePath('/admin/master-database/airlines')
   return { success: true }
 }

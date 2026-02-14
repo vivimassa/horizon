@@ -32,7 +32,7 @@ const roleColors: Record<string, string> = {
   crew_controller: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
   roster_planner: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-950 dark:text-yellow-300',
   crew_member: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300',
-  viewer: 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300',
+  viewer: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300',
 }
 
 const statusColors: Record<string, string> = {
@@ -57,9 +57,9 @@ export function UsersTable({ users }: { users: Operator[] }) {
     if (searchQuery) {
       const query = searchQuery.toLowerCase()
       filtered = filtered.filter(u =>
-        u.email.toLowerCase().includes(query) ||
-        u.full_name?.toLowerCase().includes(query) ||
-        u.role.toLowerCase().includes(query)
+        (u.email || '').toLowerCase().includes(query) ||
+        (u.full_name || '').toLowerCase().includes(query) ||
+        (u.role || '').toLowerCase().includes(query)
       )
     }
     if (sortColumn) {
@@ -141,23 +141,23 @@ export function UsersTable({ users }: { users: Operator[] }) {
                   <TableCell className="font-medium">{user.email}</TableCell>
                   <TableCell>{user.full_name || '—'}</TableCell>
                   <TableCell>
-                    <Badge className={roleColors[user.role]}>
-                      {roleLabels[user.role]}
+                    <Badge className={roleColors[user.role || 'viewer']}>
+                      {roleLabels[user.role || 'viewer']}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge className={statusColors[user.status]}>
-                      {user.status}
+                    <Badge className={statusColors[user.status || 'active']}>
+                      {user.status || 'active'}
                     </Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
-                      {user.enabled_modules.slice(0, 3).map(module => (
+                      {(Array.isArray(user.enabled_modules) ? user.enabled_modules as string[] : []).slice(0, 3).map((module: string) => (
                         <Badge key={module} variant="outline" className="text-xs">
                           {module}
                         </Badge>
                       ))}
-                      {user.enabled_modules.length > 3 && (
+                      {Array.isArray(user.enabled_modules) && user.enabled_modules.length > 3 && (
                         <Badge variant="outline" className="text-xs">
                           +{user.enabled_modules.length - 3}
                         </Badge>

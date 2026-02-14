@@ -40,6 +40,18 @@ const config: Config = {
   				DEFAULT: 'hsl(var(--destructive))',
   				foreground: 'hsl(var(--destructive-foreground))'
   			},
+  			success: {
+  				DEFAULT: 'hsl(var(--success))',
+  				foreground: 'hsl(var(--success-foreground))'
+  			},
+  			warning: {
+  				DEFAULT: 'hsl(var(--warning))',
+  				foreground: 'hsl(var(--warning-foreground))'
+  			},
+  			info: {
+  				DEFAULT: 'hsl(var(--info))',
+  				foreground: 'hsl(var(--info-foreground))'
+  			},
   			border: 'hsl(var(--border))',
   			input: 'hsl(var(--input))',
   			ring: 'hsl(var(--ring))',
@@ -54,8 +66,41 @@ const config: Config = {
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
-  			sm: 'calc(var(--radius) - 4px)'
-  		}
+  			sm: 'calc(var(--radius) - 4px)',
+  			xl: '16px',
+  			'2xl': '20px',
+  			'3xl': '24px',
+  		},
+  		backdropBlur: {
+  			xs: '2px',
+  			xl: '20px',
+  			'2xl': '30px',
+  			'3xl': '40px',
+  		},
+  		boxShadow: {
+  			'glass': '0 1px 3px rgba(0, 0, 0, 0.04)',
+  			'glass-lg': '0 4px 12px rgba(0, 0, 0, 0.06)',
+  			'glass-glow': '0 0 20px rgba(107, 157, 173, 0.15), 0 4px 12px rgba(0, 0, 0, 0.04)',
+  		},
+  		keyframes: {
+  			'fade-in': {
+  				from: { opacity: '0' },
+  				to: { opacity: '1' },
+  			},
+  			'fade-up': {
+  				from: { opacity: '0', transform: 'translateY(12px)' },
+  				to: { opacity: '1', transform: 'translateY(0)' },
+  			},
+  			'scale-up': {
+  				from: { opacity: '0', transform: 'scale(0.95)' },
+  				to: { opacity: '1', transform: 'scale(1)' },
+  			},
+  		},
+  		animation: {
+  			'fade-in': 'fade-in 0.3s ease-out',
+  			'fade-up': 'fade-up 0.4s ease-out',
+  			'scale-up': 'scale-up 0.3s ease-out',
+  		},
   	}
   },
   plugins: [require("tailwindcss-animate")],

@@ -73,7 +73,7 @@ export function UserEditDialog({ open, onOpenChange, user }: UserEditDialogProps
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label>Email</Label>
-            <Input value={user.email} disabled className="bg-muted" />
+            <Input value={user.email || ''} disabled className="bg-muted" />
             <p className="text-xs text-muted-foreground">Email cannot be changed</p>
           </div>
 
@@ -92,7 +92,7 @@ export function UserEditDialog({ open, onOpenChange, user }: UserEditDialogProps
             <Label htmlFor="role">
               Role <span className="text-destructive">*</span>
             </Label>
-            <Select value={role} onValueChange={setRole} disabled={loading}>
+            <Select value={role} onValueChange={setRole as (value: string) => void} disabled={loading}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -110,7 +110,7 @@ export function UserEditDialog({ open, onOpenChange, user }: UserEditDialogProps
             <Label htmlFor="status">
               Status <span className="text-destructive">*</span>
             </Label>
-            <Select value={status} onValueChange={setStatus} disabled={loading}>
+            <Select value={status} onValueChange={setStatus as (value: string) => void} disabled={loading}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>

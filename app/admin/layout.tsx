@@ -1,5 +1,5 @@
 import { ModuleGuard } from '@/components/guards/module-guard'
-import { ModuleTabs } from '@/components/navigation/module-tabs'
+import { AdminSidebar } from '@/components/navigation/admin-sidebar'
 
 export default function AdminLayout({
   children,
@@ -15,8 +15,12 @@ export default function AdminLayout({
             System administration and configuration
           </p>
         </div>
-        <ModuleTabs moduleBase="/admin" moduleName="Admin" />
-        {children}
+        <div className="flex gap-6">
+          <AdminSidebar />
+          <div className="flex-1 min-w-0">
+            {children}
+          </div>
+        </div>
       </div>
     </ModuleGuard>
   )

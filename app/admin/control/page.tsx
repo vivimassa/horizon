@@ -10,7 +10,7 @@ export default function AdminControlPage() {
         <Card className="hover:shadow-md transition-shadow">
           <CardHeader>
             <Database className="h-8 w-8 text-primary mb-2" />
-            <CardTitle>Reference Data</CardTitle>
+            <CardTitle>Master Database</CardTitle>
             <CardDescription>
               Manage airports, aircraft, airlines, countries, and routes
             </CardDescription>
@@ -18,19 +18,19 @@ export default function AdminControlPage() {
           <CardContent>
             <div className="space-y-2">
               <Button asChild className="w-full" variant="outline">
-                <Link href="/admin/reference-data/airports">Airports</Link>
+                <Link href="/admin/master-database/airports">Airports</Link>
               </Button>
               <Button asChild className="w-full" variant="outline">
-                <Link href="/admin/reference-data/countries">Countries</Link>
+                <Link href="/admin/master-database/countries">Countries</Link>
               </Button>
               <Button asChild className="w-full" variant="outline">
-                <Link href="/admin/reference-data/aircraft-types">Aircraft Types</Link>
+                <Link href="/admin/master-database/aircraft-types">Aircraft Types</Link>
               </Button>
               <Button asChild className="w-full" variant="outline">
-                <Link href="/admin/reference-data/airlines">Airlines</Link>
+                <Link href="/admin/master-database/airlines">Airlines</Link>
               </Button>
               <Button asChild className="w-full" variant="outline">
-                <Link href="/admin/reference-data/city-pairs">City Pairs</Link>
+                <Link href="/admin/master-database/city-pairs">City Pairs</Link>
               </Button>
             </div>
           </CardContent>

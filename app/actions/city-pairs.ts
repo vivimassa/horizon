@@ -1,6 +1,6 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { CityPair } from '@/types/database'
 
@@ -19,7 +19,7 @@ export async function getCityPairs(): Promise<CityPair[]> {
 }
 
 export async function createCityPair(formData: FormData) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
   const cityPairData = {
     departure_airport: formData.get('departure_airport') as string,
     arrival_airport: formData.get('arrival_airport') as string,
@@ -49,12 +49,12 @@ export async function createCityPair(formData: FormData) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/city-pairs')
+  revalidatePath('/admin/master-database/city-pairs')
   return { success: true }
 }
 
 export async function updateCityPair(id: string, formData: FormData) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
   const cityPairData = {
     departure_airport: formData.get('departure_airport') as string,
     arrival_airport: formData.get('arrival_airport') as string,
@@ -84,14 +84,14 @@ export async function updateCityPair(id: string, formData: FormData) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/city-pairs')
+  revalidatePath('/admin/master-database/city-pairs')
   return { success: true }
 }
 
 export async function deleteCityPair(id: string) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
   const { error } = await supabase.from('city_pairs').delete().eq('id', id)
   if (error) return { error: error.message }
-  revalidatePath('/admin/reference-data/city-pairs')
+  revalidatePath('/admin/master-database/city-pairs')
   return { success: true }
 }

@@ -56,3 +56,19 @@ export async function signOut() {
   revalidatePath('/', 'layout')
   redirect('/login')
 }
+
+export async function changePassword(newPassword: string): Promise<{ error?: string }> {
+  const supabase = await createClient()
+
+  if (!newPassword || newPassword.length < 6) {
+    return { error: 'Password must be at least 6 characters' }
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  return {}
+}

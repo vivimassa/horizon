@@ -8,65 +8,152 @@
   }
 }
 
-
-
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    /* ═══ LIGHT MODE ═══
+       Background: #F8F9FA — neutral regardless of scheme
+       Cards: #FFFFFF
+       Accent colors driven by --accent-hue */
+
+    --accent-hue: 220;
+    --background: 220 9% 98%;
+    --foreground: 220 20% 14%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 220 20% 14%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
-    --radius: 0.5rem;
+    --popover-foreground: 220 20% 14%;
+    --primary: 220 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 9% 94%;
+    --secondary-foreground: 220 15% 22%;
+    --muted: 210 9% 94%;
+    --muted-foreground: 220 8% 50%;
+    --accent: 210 9% 94%;
+    --accent-foreground: 220 15% 22%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 5% 93%;
+    --input: 220 5% 93%;
+    --ring: 220 100% 50%;
+    --chart-1: 194 24% 55%;
+    --chart-2: 173 40% 42%;
+    --chart-3: 207 29% 36%;
+    --chart-4: 43 50% 58%;
+    --chart-5: 27 60% 58%;
+    --radius: 0.75rem;
+
+    /* Semantic colors — full saturation */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --info: 220 100% 50%;
+    --info-foreground: 0 0% 100%;
+
+    /* ── Glass (cards, sidebars, tabs) ──
+       Light: white/70, subtle border, soft shadow */
+    --glass-bg: rgba(255, 255, 255, 0.7);
+    --glass-border: rgba(0, 0, 0, 0.06);
+    --glass-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+
+    /* ── Glass-heavy (modals, dropdowns, elevated) ──
+       Light: white/85, subtle border, medium shadow */
+    --glass-bg-heavy: rgba(255, 255, 255, 0.85);
+    --glass-border-heavy: rgba(0, 0, 0, 0.06);
+    --glass-shadow-heavy: 0 4px 16px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04);
+
+    /* ── Glass-float (dock, floating elements) ──
+       Light: same as glass but keeps shadow */
+    --glass-bg-float: rgba(255, 255, 255, 0.7);
+    --glass-border-float: rgba(0, 0, 0, 0.06);
+    --glass-shadow-float: 0 8px 32px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
   }
+
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+    /* ═══ DARK MODE ═══
+       Accent-infused grays: all surfaces tinted with var(--accent-hue)
+       Low saturation (5-15%) keeps tint subtle for any hue */
+
+    --background: var(--accent-hue) 15% 8%;
+    --foreground: var(--accent-hue) 8% 85%;
+    --card: var(--accent-hue) 10% 15%;
+    --card-foreground: var(--accent-hue) 8% 85%;
+    --popover: var(--accent-hue) 9% 18%;
+    --popover-foreground: var(--accent-hue) 8% 85%;
+    --primary: 210 56% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: var(--accent-hue) 12% 11%;
+    --secondary-foreground: var(--accent-hue) 8% 85%;
+    --muted: var(--accent-hue) 12% 11%;
+    --muted-foreground: var(--accent-hue) 8% 50%;
+    --accent: var(--accent-hue) 12% 11%;
+    --accent-foreground: var(--accent-hue) 8% 85%;
+    --destructive: 0 40% 42%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --border: var(--accent-hue) 8% 18%;
+    --input: var(--accent-hue) 8% 18%;
+    --ring: 210 56% 60%;
+    --chart-1: 194 17% 55%;
+    --chart-2: 173 25% 45%;
+    --chart-3: 38 35% 52%;
+    --chart-4: 280 24% 55%;
+    --chart-5: 340 28% 55%;
+
+    /* Semantic colors — desaturated ~30% */
+    --success: 142 50% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 45% 50%;
+    --warning-foreground: 0 0% 100%;
+    --info: 210 56% 60%;
+    --info-foreground: 0 0% 100%;
+
+    /* ── Glass (cards, sidebars, tabs) — Level 2 ──
+       No shadow. Elevation from brightness + thin border */
+    --glass-bg: hsl(var(--accent-hue) 10% 15% / 0.75);
+    --glass-border: rgba(255, 255, 255, 0.06);
+    --glass-shadow: none;
+
+    /* ── Glass-heavy (modals, dropdowns) — Level 3 ──
+       Shadow allowed for dialogs/modals */
+    --glass-bg-heavy: hsl(var(--accent-hue) 9% 18% / 0.9);
+    --glass-border-heavy: rgba(255, 255, 255, 0.08);
+    --glass-shadow-heavy: 0 4px 24px rgba(0, 0, 0, 0.4), 0 1px 6px rgba(0, 0, 0, 0.2);
+
+    /* ── Glass-float (dock) ──
+       Shadow allowed for floating elements */
+    --glass-bg-float: hsl(var(--accent-hue) 12% 10% / 0.85);
+    --glass-border-float: rgba(255, 255, 255, 0.06);
+    --glass-shadow-float: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
   }
+
+  /* ═══ COLOR SCHEME OVERRIDES ═══
+     data-scheme is set on <html>, same element as .dark class.
+     Ocean is the default — :root and .dark above already have ocean values.
+     Each non-ocean scheme overrides --accent-hue + --primary + --ring + --info. */
+
+  /* Ocean (default) — hue 220, no overrides needed (base values) */
+  [data-scheme="ocean"] { --accent-hue: 220; }
+
+  /* Violet — hue 289 */
+  [data-scheme="violet"] { --accent-hue: 289; }
+  [data-scheme="violet"]:not(.dark) { --primary: 289 52% 37%; --ring: 289 52% 37%; --info: 289 52% 37%; }
+  [data-scheme="violet"].dark { --primary: 284 28% 60%; --ring: 284 28% 60%; --info: 284 28% 60%; }
+
+  /* Ruby — hue 350 */
+  [data-scheme="ruby"] { --accent-hue: 350; }
+  [data-scheme="ruby"]:not(.dark) { --primary: 350 73% 44%; --ring: 350 73% 44%; --info: 350 73% 44%; }
+  [data-scheme="ruby"].dark { --primary: 352 50% 64%; --ring: 352 50% 64%; --info: 352 50% 64%; }
+
+  /* Amber — hue 43 */
+  [data-scheme="amber"] { --accent-hue: 43; }
+  [data-scheme="amber"]:not(.dark) { --primary: 43 89% 38%; --ring: 43 89% 38%; --info: 43 89% 38%; }
+  [data-scheme="amber"].dark { --primary: 50 52% 65%; --ring: 50 52% 65%; --info: 50 52% 65%; }
+
+  /* Teal — hue 174 */
+  [data-scheme="teal"] { --accent-hue: 174; }
+  [data-scheme="teal"]:not(.dark) { --primary: 174 100% 27%; --ring: 174 100% 27%; --info: 174 100% 27%; }
+  [data-scheme="teal"].dark { --primary: 173 30% 57%; --ring: 173 30% 57%; --info: 173 30% 57%; }
 }
-
-
 
 @layer base {
   * {
@@ -74,5 +161,88 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* ===== Custom Animations ===== */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scale-up {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes spring-hover {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1.05);
+  }
+}
+
+/* ===== Glass Utility Classes ===== */
+@layer components {
+  /* Cards, sidebars, tabs — Level 2 surface.
+     Dark: no shadow, elevation from brightness only. */
+  .glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+  }
+
+  /* Modals, dropdowns, popovers — Level 3 surface.
+     Shadow allowed in both modes. */
+  .glass-heavy {
+    background: var(--glass-bg-heavy);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--glass-border-heavy);
+    box-shadow: var(--glass-shadow-heavy);
+  }
+
+  /* Floating dock, floating FABs — always has shadow. */
+  .glass-float {
+    background: var(--glass-bg-float);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--glass-border-float);
+    box-shadow: var(--glass-shadow-float);
+  }
+
+  .app-bg {
+    background: var(--app-bg-image, hsl(var(--background)));
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
   }
 }

@@ -1,6 +1,6 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { Airport } from '@/types/database'
 
@@ -21,28 +21,25 @@ export async function getAirports(): Promise<Airport[]> {
 }
 
 export async function createAirport(formData: FormData) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
 
   const airportData = {
     icao_code: formData.get('icao_code') as string,
     iata_code: formData.get('iata_code') as string || null,
-    airport_name: formData.get('airport_name') as string,
+    name: formData.get('airport_name') as string,
     city: formData.get('city') as string,
     country: formData.get('country') as string,
     timezone: formData.get('timezone') as string,
   }
 
-  // Validate required fields
-  if (!airportData.icao_code || !airportData.airport_name || !airportData.city || !airportData.country || !airportData.timezone) {
+  if (!airportData.icao_code || !airportData.name || !airportData.city || !airportData.country || !airportData.timezone) {
     return { error: 'All required fields must be filled' }
   }
 
-  // Validate ICAO code format (4 letters)
   if (!/^[A-Z]{4}$/.test(airportData.icao_code)) {
     return { error: 'ICAO code must be exactly 4 uppercase letters' }
   }
 
-  // Validate IATA code format if provided (3 letters)
   if (airportData.iata_code && !/^[A-Z]{3}$/.test(airportData.iata_code)) {
     return { error: 'IATA code must be exactly 3 uppercase letters' }
   }
@@ -58,33 +55,30 @@ export async function createAirport(formData: FormData) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/airports')
+  revalidatePath('/admin/master-database/airports')
   return { success: true }
 }
 
 export async function updateAirport(id: string, formData: FormData) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
 
   const airportData = {
     icao_code: formData.get('icao_code') as string,
     iata_code: formData.get('iata_code') as string || null,
-    airport_name: formData.get('airport_name') as string,
+    name: formData.get('airport_name') as string,
     city: formData.get('city') as string,
     country: formData.get('country') as string,
     timezone: formData.get('timezone') as string,
   }
 
-  // Validate required fields
-  if (!airportData.icao_code || !airportData.airport_name || !airportData.city || !airportData.country || !airportData.timezone) {
+  if (!airportData.icao_code || !airportData.name || !airportData.city || !airportData.country || !airportData.timezone) {
     return { error: 'All required fields must be filled' }
   }
 
-  // Validate ICAO code format (4 letters)
   if (!/^[A-Z]{4}$/.test(airportData.icao_code)) {
     return { error: 'ICAO code must be exactly 4 uppercase letters' }
   }
 
-  // Validate IATA code format if provided (3 letters)
   if (airportData.iata_code && !/^[A-Z]{3}$/.test(airportData.iata_code)) {
     return { error: 'IATA code must be exactly 3 uppercase letters' }
   }
@@ -101,12 +95,12 @@ export async function updateAirport(id: string, formData: FormData) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/airports')
+  revalidatePath('/admin/master-database/airports')
   return { success: true }
 }
 
 export async function deleteAirport(id: string) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
 
   const { error } = await supabase
     .from('airports')
@@ -117,6 +111,6 @@ export async function deleteAirport(id: string) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/airports')
+  revalidatePath('/admin/master-database/airports')
   return { success: true }
 }

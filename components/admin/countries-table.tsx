@@ -30,10 +30,10 @@ export function CountriesTable({ countries }: { countries: Country[] }) {
     if (searchQuery) {
       const query = searchQuery.toLowerCase()
       filtered = filtered.filter(c =>
-        c.iso_code.toLowerCase().includes(query) ||
+        c.iso_code_2.toLowerCase().includes(query) ||
         c.name.toLowerCase().includes(query) ||
-        c.region.toLowerCase().includes(query) ||
-        c.currency.toLowerCase().includes(query)
+        (c.region || '').toLowerCase().includes(query) ||
+        (c.currency_code || '').toLowerCase().includes(query)
       )
     }
     if (sortColumn) {
@@ -99,10 +99,10 @@ export function CountriesTable({ countries }: { countries: Country[] }) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead><Button variant="ghost" onClick={() => handleSort('iso_code')} className="font-semibold">ISO Code{getSortIcon('iso_code')}</Button></TableHead>
+              <TableHead><Button variant="ghost" onClick={() => handleSort('iso_code_2')} className="font-semibold">ISO Code{getSortIcon('iso_code_2')}</Button></TableHead>
               <TableHead><Button variant="ghost" onClick={() => handleSort('name')} className="font-semibold">Name{getSortIcon('name')}</Button></TableHead>
               <TableHead><Button variant="ghost" onClick={() => handleSort('region')} className="font-semibold">Region{getSortIcon('region')}</Button></TableHead>
-              <TableHead><Button variant="ghost" onClick={() => handleSort('currency')} className="font-semibold">Currency{getSortIcon('currency')}</Button></TableHead>
+              <TableHead><Button variant="ghost" onClick={() => handleSort('currency_code')} className="font-semibold">Currency{getSortIcon('currency_code')}</Button></TableHead>
               <TableHead><Button variant="ghost" onClick={() => handleSort('icao_prefix')} className="font-semibold">ICAO Prefix{getSortIcon('icao_prefix')}</Button></TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -117,10 +117,10 @@ export function CountriesTable({ countries }: { countries: Country[] }) {
             ) : (
               filteredAndSortedCountries.map((country) => (
                 <TableRow key={country.id}>
-                  <TableCell className="font-mono font-semibold">{country.iso_code}</TableCell>
+                  <TableCell className="font-mono font-semibold">{country.iso_code_2}</TableCell>
                   <TableCell>{country.name}</TableCell>
                   <TableCell>{country.region}</TableCell>
-                  <TableCell className="font-mono">{country.currency}</TableCell>
+                  <TableCell className="font-mono">{country.currency_code}</TableCell>
                   <TableCell className="font-mono">{country.icao_prefix}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">

@@ -47,7 +47,7 @@ export function CountryFormDialog({ open, onOpenChange, country }: CountryFormDi
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="iso_code">ISO Code <span className="text-destructive">*</span></Label>
-              <Input id="iso_code" name="iso_code" defaultValue={country?.iso_code || ''} placeholder="US" required maxLength={2} pattern="[A-Z]{2}" className="font-mono uppercase" disabled={loading} onChange={(e) => { e.target.value = e.target.value.toUpperCase() }} />
+              <Input id="iso_code" name="iso_code" defaultValue={country?.iso_code_2 || ''} placeholder="US" required maxLength={2} pattern="[A-Z]{2}" className="font-mono uppercase" disabled={loading} onChange={(e) => { e.target.value = e.target.value.toUpperCase() }} />
               <p className="text-xs text-muted-foreground">2 uppercase letters</p>
             </div>
             <div className="space-y-2">
@@ -62,7 +62,7 @@ export function CountryFormDialog({ open, onOpenChange, country }: CountryFormDi
             </div>
             <div className="space-y-2">
               <Label htmlFor="currency">Currency <span className="text-destructive">*</span></Label>
-              <Input id="currency" name="currency" defaultValue={country?.currency || ''} placeholder="USD" required className="font-mono uppercase" disabled={loading} onChange={(e) => { e.target.value = e.target.value.toUpperCase() }} />
+              <Input id="currency" name="currency" defaultValue={country?.currency_code || ''} placeholder="USD" required className="font-mono uppercase" disabled={loading} onChange={(e) => { e.target.value = e.target.value.toUpperCase() }} />
             </div>
           </div>
           <div className="space-y-2">

@@ -1,6 +1,6 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { Country } from '@/types/database'
 
@@ -19,20 +19,22 @@ export async function getCountries(): Promise<Country[]> {
 }
 
 export async function createCountry(formData: FormData) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
+  const isoCode = formData.get('iso_code') as string
   const countryData = {
-    iso_code: formData.get('iso_code') as string,
+    iso_code_2: isoCode,
+    iso_code_3: isoCode,
     name: formData.get('name') as string,
     region: formData.get('region') as string,
-    currency: formData.get('currency') as string,
+    currency_code: formData.get('currency') as string,
     icao_prefix: formData.get('icao_prefix') as string,
   }
 
-  if (!countryData.iso_code || !countryData.name || !countryData.region || !countryData.currency || !countryData.icao_prefix) {
+  if (!countryData.iso_code_2 || !countryData.name || !countryData.region || !countryData.currency_code || !countryData.icao_prefix) {
     return { error: 'All fields are required' }
   }
 
-  if (!/^[A-Z]{2}$/.test(countryData.iso_code)) {
+  if (!/^[A-Z]{2}$/.test(countryData.iso_code_2)) {
     return { error: 'ISO code must be exactly 2 uppercase letters' }
   }
 
@@ -44,25 +46,27 @@ export async function createCountry(formData: FormData) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/countries')
+  revalidatePath('/admin/master-database/countries')
   return { success: true }
 }
 
 export async function updateCountry(id: string, formData: FormData) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
+  const isoCode = formData.get('iso_code') as string
   const countryData = {
-    iso_code: formData.get('iso_code') as string,
+    iso_code_2: isoCode,
+    iso_code_3: isoCode,
     name: formData.get('name') as string,
     region: formData.get('region') as string,
-    currency: formData.get('currency') as string,
+    currency_code: formData.get('currency') as string,
     icao_prefix: formData.get('icao_prefix') as string,
   }
 
-  if (!countryData.iso_code || !countryData.name || !countryData.region || !countryData.currency || !countryData.icao_prefix) {
+  if (!countryData.iso_code_2 || !countryData.name || !countryData.region || !countryData.currency_code || !countryData.icao_prefix) {
     return { error: 'All fields are required' }
   }
 
-  if (!/^[A-Z]{2}$/.test(countryData.iso_code)) {
+  if (!/^[A-Z]{2}$/.test(countryData.iso_code_2)) {
     return { error: 'ISO code must be exactly 2 uppercase letters' }
   }
 
@@ -74,14 +78,14 @@ export async function updateCountry(id: string, formData: FormData) {
     return { error: error.message }
   }
 
-  revalidatePath('/admin/reference-data/countries')
+  revalidatePath('/admin/master-database/countries')
   return { success: true }
 }
 
 export async function deleteCountry(id: string) {
-  const supabase = await createClient()
+  const supabase = createAdminClient()
   const { error } = await supabase.from('countries').delete().eq('id', id)
   if (error) return { error: error.message }
-  revalidatePath('/admin/reference-data/countries')
+  revalidatePath('/admin/master-database/countries')
   return { success: true }
 }

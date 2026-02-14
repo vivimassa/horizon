@@ -39,14 +39,14 @@ export async function ModuleGuard({
               <CardTitle>Access Denied</CardTitle>
             </div>
             <CardDescription>
-              You don't have permission to access the <strong>{module}</strong> module.
+              You don&apos;t have permission to access the <strong>{module}</strong> module.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-4">
               {module === 'admin'
                 ? 'Administrator access is required to view this module. Please contact your system administrator if you need access.'
-                : 'This module is not enabled for your account. Please contact your supervisor if you need access to this module.'}
+                : 'This module is not enabled for your account. Please contact your supervisor if you need access.'}
             </p>
             <Button asChild variant="outline" className="w-full">
               <Link href="/">Return to Home</Link>
