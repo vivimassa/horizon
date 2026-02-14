@@ -1,0 +1,108 @@
+═══════════════════════════════════════════════════════════════════════════════
+  APPLY RLS POLICIES - MANUAL STEPS
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️  IMPORTANT: The Supabase JS client cannot execute DDL statements automatically.
+    You need to apply the migration through the Supabase Dashboard (takes 2 minutes).
+
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: Open Supabase Dashboard SQL Editor
+───────────────────────────────────────────────────────────────────────────────
+
+1. Go to: https://supabase.com/dashboard
+2. Select your "Horizon" project
+3. Click "SQL Editor" in the left sidebar
+4. Click "New Query" button
+
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 2: Copy the Migration SQL
+───────────────────────────────────────────────────────────────────────────────
+
+1. Open this file in your editor:
+
+   C:\Users\vivim\horizon\supabase\migrations\005_create_rls_policies.sql
+
+2. Select ALL content (Ctrl+A)
+3. Copy to clipboard (Ctrl+C)
+
+   The file contains 295 lines with:
+   - 2 helper functions (is_admin, get_user_operator_id)
+   - Policies for countries table (4 policies)
+   - Policies for airports table (4 policies)
+   - Policies for airlines table (4 policies)
+   - Policies for city_pairs table (4 policies)
+   - Policies for aircraft_types table (4 policies)
+   - Policies for operators table (2 policies)
+   - Policies for user_roles table (5 policies)
+   - Policies for user_preferences table (4 policies)
+   - Policies for module_definitions table (4 policies, conditional)
+   - GRANT statements for functions
+
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 3: Paste and Execute
+───────────────────────────────────────────────────────────────────────────────
+
+1. In the Supabase SQL Editor, paste the SQL (Ctrl+V)
+2. Click "Run" button (bottom right) OR press Ctrl+Enter
+3. Wait for execution (should take 5-10 seconds)
+4. You should see: "Success. No rows returned"
+   ✅ This is CORRECT! DDL statements don't return data.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 4: Verify it Worked
+───────────────────────────────────────────────────────────────────────────────
+
+Back in your terminal, run:
+
+    npm run verify-rls
+
+Expected output:
+    ✅ Airports: 63 visible
+    ✅ Countries: 48 visible
+    ✅ Airlines: 44 visible
+    ✅ City Pairs: 72 visible
+
+═══════════════════════════════════════════════════════════════════════════════
+
+TROUBLESHOOTING
+───────────────────────────────────────────────────────────────────────────────
+
+Issue: "already exists" errors
+→ Solution: This is OK! Some policies may already exist. Continue anyway.
+
+Issue: "permission denied"
+→ Solution: Make sure you're logged into Supabase as the project owner.
+
+Issue: Data still not showing after applying
+→ Solution:
+  1. Hard refresh browser (Ctrl+Shift+R)
+  2. Run: npm run verify-rls
+  3. Check Supabase Dashboard → Logs for errors
+
+═══════════════════════════════════════════════════════════════════════════════
+
+WHY CAN'T THIS BE AUTOMATED?
+───────────────────────────────────────────────────────────────────────────────
+
+Supabase intentionally doesn't allow DDL (CREATE POLICY, CREATE FUNCTION, etc.)
+execution through the JS client for security reasons. The approved methods are:
+
+1. ✅ Supabase Dashboard SQL Editor (what you're doing)
+2. ✅ Supabase CLI: supabase db push (requires CLI installation)
+3. ✅ Direct PostgreSQL connection (requires connection string)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+QUICK REFERENCE
+───────────────────────────────────────────────────────────────────────────────
+
+File to copy:     C:\Users\vivim\horizon\supabase\migrations\005_create_rls_policies.sql
+Dashboard URL:    https://supabase.com/dashboard
+Verification:     npm run verify-rls
+Help guide:       C:\Users\vivim\horizon\RLS_SETUP_GUIDE.md
+
+═══════════════════════════════════════════════════════════════════════════════

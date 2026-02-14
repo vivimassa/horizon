@@ -17,10 +17,10 @@ import {
   FileText,
   Shield,
 } from 'lucide-react'
-import { Operator } from '@/types/database'
+import { OperatorWithRole } from '@/lib/operators'
 
 interface DockProps {
-  operator: Operator | null
+  operator: OperatorWithRole | null
   accessibleModules: string[]
 }
 

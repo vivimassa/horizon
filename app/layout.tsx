@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
-import { getCurrentOperator, getAccessibleModules } from '@/lib/operators'
+import { getCurrentOperator, getAccessibleModules, type OperatorWithRole } from '@/lib/operators'
 import { Dock } from '@/components/navigation/dock'
 import { BreadcrumbNav } from '@/components/navigation/breadcrumb-nav'
 

@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "next lint",
     "seed": "tsx scripts/seed-database-correct.ts",
-    "link-user": "tsx scripts/link-user-as-super-admin.ts"
+    "link-user": "tsx scripts/link-user-as-super-admin.ts",
+    "test-admin": "tsx scripts/test-admin-access.ts",
+    "setup-rls": "tsx scripts/setup-rls-quick.ts",
+    "apply-rls": "tsx scripts/apply-rls-now.ts",
+    "verify-rls": "tsx scripts/verify-rls-policies.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
