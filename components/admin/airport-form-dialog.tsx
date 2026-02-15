@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Airport } from '@/types/database'
-import { createAirport, updateAirport } from '@/app/actions/airports'
+import { createAirport, updateAirportFields } from '@/app/actions/airports'
 import {
   Dialog,
   DialogContent,
@@ -37,7 +37,14 @@ export function AirportFormDialog({ open, onOpenChange, airport }: AirportFormDi
 
     try {
       const result = isEdit
-        ? await updateAirport(airport.id, formData)
+        ? await updateAirportFields(airport.id, {
+            icao_code: formData.get('icao_code') as string,
+            iata_code: formData.get('iata_code') as string || null,
+            name: formData.get('airport_name') as string,
+            city: formData.get('city') as string,
+            country: formData.get('country') as string,
+            timezone: formData.get('timezone') as string,
+          })
         : await createAirport(formData)
 
       if (result?.error) {

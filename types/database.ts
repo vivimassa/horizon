@@ -116,9 +116,49 @@ export interface Database {
           name: string
           city: string | null
           country: string | null
+          country_id: string | null
           timezone: string
+          timezone_zone_id: string | null
+          utc_offset_hours: number | null
+          latitude: number | null
+          longitude: number | null
+          elevation_ft: number | null
           is_active: boolean
           created_at: string
+          longest_runway_length_m: number | null
+          longest_runway_width_m: number | null
+          runway_identifiers: string | null
+          ils_category: string | null
+          fire_category: number | null
+          slot_classification: string | null
+          slot_departure_tolerance_early: number | null
+          slot_departure_tolerance_late: number | null
+          slot_arrival_tolerance_early: number | null
+          slot_arrival_tolerance_late: number | null
+          terminals: string | null
+          curfew_times: string | null
+          crew_reporting_time_minutes: number | null
+          crew_debrief_time_minutes: number | null
+          is_home_base: boolean
+          cannot_be_used_for_diversion: boolean
+          weather_limitations: string | null
+          notes: string | null
+          fuel_available: boolean
+          fuel_types: Json | null
+          airport_authority: string | null
+          operating_hours_open: string | null
+          operating_hours_close: string | null
+          is_24_hour: boolean
+          ground_handling_agents: Json | null
+          self_handling_permitted: boolean
+          slot_coordinator_contact: string | null
+          is_crew_base: boolean
+          crew_lounge_available: boolean
+          rest_facility_available: boolean
+          crew_positioning_reporting_minutes: number | null
+          is_etops_alternate: boolean
+          etops_diversion_minutes: number | null
+          special_notes: string | null
         }
         Insert: {
           id?: string
@@ -127,9 +167,49 @@ export interface Database {
           name: string
           city?: string | null
           country?: string | null
+          country_id?: string | null
           timezone: string
+          timezone_zone_id?: string | null
+          utc_offset_hours?: number | null
+          latitude?: number | null
+          longitude?: number | null
+          elevation_ft?: number | null
           is_active?: boolean
           created_at?: string
+          longest_runway_length_m?: number | null
+          longest_runway_width_m?: number | null
+          runway_identifiers?: string | null
+          ils_category?: string | null
+          fire_category?: number | null
+          slot_classification?: string | null
+          slot_departure_tolerance_early?: number | null
+          slot_departure_tolerance_late?: number | null
+          slot_arrival_tolerance_early?: number | null
+          slot_arrival_tolerance_late?: number | null
+          terminals?: string | null
+          curfew_times?: string | null
+          crew_reporting_time_minutes?: number | null
+          crew_debrief_time_minutes?: number | null
+          is_home_base?: boolean
+          cannot_be_used_for_diversion?: boolean
+          weather_limitations?: string | null
+          notes?: string | null
+          fuel_available?: boolean
+          fuel_types?: Json | null
+          airport_authority?: string | null
+          operating_hours_open?: string | null
+          operating_hours_close?: string | null
+          is_24_hour?: boolean
+          ground_handling_agents?: Json | null
+          self_handling_permitted?: boolean
+          slot_coordinator_contact?: string | null
+          is_crew_base?: boolean
+          crew_lounge_available?: boolean
+          rest_facility_available?: boolean
+          crew_positioning_reporting_minutes?: number | null
+          is_etops_alternate?: boolean
+          etops_diversion_minutes?: number | null
+          special_notes?: string | null
         }
         Update: {
           id?: string
@@ -138,9 +218,49 @@ export interface Database {
           name?: string
           city?: string | null
           country?: string | null
+          country_id?: string | null
           timezone?: string
+          timezone_zone_id?: string | null
+          utc_offset_hours?: number | null
+          latitude?: number | null
+          longitude?: number | null
+          elevation_ft?: number | null
           is_active?: boolean
           created_at?: string
+          longest_runway_length_m?: number | null
+          longest_runway_width_m?: number | null
+          runway_identifiers?: string | null
+          ils_category?: string | null
+          fire_category?: number | null
+          slot_classification?: string | null
+          slot_departure_tolerance_early?: number | null
+          slot_departure_tolerance_late?: number | null
+          slot_arrival_tolerance_early?: number | null
+          slot_arrival_tolerance_late?: number | null
+          terminals?: string | null
+          curfew_times?: string | null
+          crew_reporting_time_minutes?: number | null
+          crew_debrief_time_minutes?: number | null
+          is_home_base?: boolean
+          cannot_be_used_for_diversion?: boolean
+          weather_limitations?: string | null
+          notes?: string | null
+          fuel_available?: boolean
+          fuel_types?: Json | null
+          airport_authority?: string | null
+          operating_hours_open?: string | null
+          operating_hours_close?: string | null
+          is_24_hour?: boolean
+          ground_handling_agents?: Json | null
+          self_handling_permitted?: boolean
+          slot_coordinator_contact?: string | null
+          is_crew_base?: boolean
+          crew_lounge_available?: boolean
+          rest_facility_available?: boolean
+          crew_positioning_reporting_minutes?: number | null
+          is_etops_alternate?: boolean
+          etops_diversion_minutes?: number | null
+          special_notes?: string | null
         }
       }
       countries: {
@@ -340,6 +460,10 @@ export interface Database {
           airport_id: string
           aircraft_type_id: string
           tat_minutes: number
+          tat_dom_dom_minutes: number | null
+          tat_dom_int_minutes: number | null
+          tat_int_dom_minutes: number | null
+          tat_int_int_minutes: number | null
           notes: string | null
           is_active: boolean
           created_at: string
@@ -349,6 +473,10 @@ export interface Database {
           airport_id: string
           aircraft_type_id: string
           tat_minutes: number
+          tat_dom_dom_minutes?: number | null
+          tat_dom_int_minutes?: number | null
+          tat_int_dom_minutes?: number | null
+          tat_int_int_minutes?: number | null
           notes?: string | null
           is_active?: boolean
           created_at?: string
@@ -358,8 +486,166 @@ export interface Database {
           airport_id?: string
           aircraft_type_id?: string
           tat_minutes?: number
+          tat_dom_dom_minutes?: number | null
+          tat_dom_int_minutes?: number | null
+          tat_int_dom_minutes?: number | null
+          tat_int_int_minutes?: number | null
           notes?: string | null
           is_active?: boolean
+          created_at?: string
+        }
+      }
+      airport_runways: {
+        Row: {
+          id: string
+          airport_id: string
+          identifier: string
+          length_m: number | null
+          width_m: number | null
+          surface: string | null
+          ils_category: string | null
+          lighting: boolean
+          status: string
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          airport_id: string
+          identifier: string
+          length_m?: number | null
+          width_m?: number | null
+          surface?: string | null
+          ils_category?: string | null
+          lighting?: boolean
+          status?: string
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          airport_id?: string
+          identifier?: string
+          length_m?: number | null
+          width_m?: number | null
+          surface?: string | null
+          ils_category?: string | null
+          lighting?: boolean
+          status?: string
+          notes?: string | null
+          created_at?: string
+        }
+      }
+      airport_terminals: {
+        Row: {
+          id: string
+          airport_id: string
+          code: string
+          name: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          airport_id: string
+          code: string
+          name?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          airport_id?: string
+          code?: string
+          name?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+      }
+      airport_curfews: {
+        Row: {
+          id: string
+          airport_id: string
+          days: string
+          no_ops_from: string
+          no_ops_until: string
+          exception: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          airport_id: string
+          days?: string
+          no_ops_from: string
+          no_ops_until: string
+          exception?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          airport_id?: string
+          days?: string
+          no_ops_from?: string
+          no_ops_until?: string
+          exception?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+      }
+      airport_frequencies: {
+        Row: {
+          id: string
+          airport_id: string
+          type: string
+          frequency: string
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          airport_id: string
+          type: string
+          frequency: string
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          airport_id?: string
+          type?: string
+          frequency?: string
+          notes?: string | null
+          created_at?: string
+        }
+      }
+      airport_weather_limits: {
+        Row: {
+          id: string
+          airport_id: string
+          limitation_type: string
+          warning_value: number | null
+          alert_value: number | null
+          unit: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          airport_id: string
+          limitation_type: string
+          warning_value?: number | null
+          alert_value?: number | null
+          unit: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          airport_id?: string
+          limitation_type?: string
+          warning_value?: number | null
+          alert_value?: number | null
+          unit?: string
           created_at?: string
         }
       }
@@ -827,6 +1113,11 @@ export type ServiceType = Database['public']['Tables']['service_types']['Row']
 export type CabinConfiguration = Database['public']['Tables']['cabin_configurations']['Row']
 export type Aircraft = Database['public']['Tables']['aircraft']['Row']
 export type AirportTatRule = Database['public']['Tables']['airport_tat_rules']['Row']
+export type AirportRunway = Database['public']['Tables']['airport_runways']['Row']
+export type AirportTerminal = Database['public']['Tables']['airport_terminals']['Row']
+export type AirportCurfew = Database['public']['Tables']['airport_curfews']['Row']
+export type AirportFrequency = Database['public']['Tables']['airport_frequencies']['Row']
+export type AirportWeatherLimit = Database['public']['Tables']['airport_weather_limits']['Row']
 export type FlightServiceType = Database['public']['Tables']['flight_service_types']['Row']
 export type DelayCode = Database['public']['Tables']['delay_codes']['Row']
 export type FlightNumber = Database['public']['Tables']['flight_numbers']['Row']

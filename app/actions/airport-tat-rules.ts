@@ -8,10 +8,14 @@ export interface TatRuleWithType {
   airport_id: string
   aircraft_type_id: string
   tat_minutes: number
+  tat_dom_dom_minutes: number | null
+  tat_dom_int_minutes: number | null
+  tat_int_dom_minutes: number | null
+  tat_int_int_minutes: number | null
   notes: string | null
   is_active: boolean
   created_at: string
-  aircraft_types: { icao_type: string; name: string } | null
+  aircraft_types: { icao_type: string; name: string; default_tat_minutes: number | null } | null
 }
 
 export async function getAllTatRules() {
@@ -28,7 +32,7 @@ export async function getTatRulesForAirport(airportId: string): Promise<TatRuleW
   const supabase = await createClient()
   const { data, error } = await supabase
     .from('airport_tat_rules')
-    .select('*, aircraft_types(icao_type, name)')
+    .select('*, aircraft_types(icao_type, name, default_tat_minutes)')
     .eq('airport_id', airportId)
     .order('created_at', { ascending: true })
 
@@ -39,26 +43,24 @@ export async function getTatRulesForAirport(airportId: string): Promise<TatRuleW
   return (data as unknown as TatRuleWithType[]) || []
 }
 
-export async function createTatRule(formData: FormData) {
-  const supabase = createAdminClient()
-
-  const ruleData = {
-    airport_id: formData.get('airport_id') as string,
-    aircraft_type_id: formData.get('aircraft_type_id') as string,
-    tat_minutes: parseInt(formData.get('tat_minutes') as string),
-    notes: formData.get('notes') as string || null,
-    is_active: formData.get('is_active') !== 'false',
-  }
-
-  if (!ruleData.airport_id || !ruleData.aircraft_type_id || !ruleData.tat_minutes) {
+export async function createTatRule(data: {
+  airport_id: string
+  aircraft_type_id: string
+  tat_minutes: number
+  tat_dom_dom_minutes?: number | null
+  tat_dom_int_minutes?: number | null
+  tat_int_dom_minutes?: number | null
+  tat_int_int_minutes?: number | null
+  notes?: string | null
+}) {
+  if (!data.airport_id || !data.aircraft_type_id || !data.tat_minutes) {
     return { error: 'Airport, aircraft type, and TAT minutes are required' }
   }
 
-  const { error } = await supabase.from('airport_tat_rules').insert(ruleData)
+  const supabase = createAdminClient()
+  const { error } = await supabase.from('airport_tat_rules').insert(data)
   if (error) {
-    if (error.code === '23505') {
-      return { error: 'A TAT rule for this airport and aircraft type already exists' }
-    }
+    if (error.code === '23505') return { error: 'A TAT rule for this airport and aircraft type already exists' }
     return { error: error.message }
   }
 
@@ -66,25 +68,20 @@ export async function createTatRule(formData: FormData) {
   return { success: true }
 }
 
-export async function updateTatRule(id: string, formData: FormData) {
+export async function updateTatRule(id: string, data: {
+  aircraft_type_id?: string
+  tat_minutes?: number
+  tat_dom_dom_minutes?: number | null
+  tat_dom_int_minutes?: number | null
+  tat_int_dom_minutes?: number | null
+  tat_int_int_minutes?: number | null
+  notes?: string | null
+  is_active?: boolean
+}) {
   const supabase = createAdminClient()
-
-  const ruleData = {
-    aircraft_type_id: formData.get('aircraft_type_id') as string,
-    tat_minutes: parseInt(formData.get('tat_minutes') as string),
-    notes: formData.get('notes') as string || null,
-    is_active: formData.get('is_active') !== 'false',
-  }
-
-  if (!ruleData.aircraft_type_id || !ruleData.tat_minutes) {
-    return { error: 'Aircraft type and TAT minutes are required' }
-  }
-
-  const { error } = await supabase.from('airport_tat_rules').update(ruleData).eq('id', id)
+  const { error } = await supabase.from('airport_tat_rules').update(data).eq('id', id)
   if (error) {
-    if (error.code === '23505') {
-      return { error: 'A TAT rule for this airport and aircraft type already exists' }
-    }
+    if (error.code === '23505') return { error: 'A TAT rule for this airport and aircraft type already exists' }
     return { error: error.message }
   }
 

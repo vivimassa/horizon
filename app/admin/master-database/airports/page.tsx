@@ -1,23 +1,32 @@
-import { getAirports } from '@/app/actions/airports'
-import { AirportsTable } from '@/components/admin/airports-table'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { getAirportsWithCountry } from '@/app/actions/airports'
+import { getCountries } from '@/app/actions/countries'
+import { AirportsMasterDetail } from '@/components/admin/airports-master-detail'
+import { createClient } from '@/lib/supabase/server'
 
 export default async function AirportsPage() {
-  const airports = await getAirports()
+  const [airports, countries, supabase] = await Promise.all([
+    getAirportsWithCountry(),
+    getCountries(),
+    createClient(),
+  ])
+
+  const { data: timezoneZones } = await supabase
+    .from('timezone_zones')
+    .select('*')
+    .order('zone_name')
+
+  const { data: aircraftTypes } = await supabase
+    .from('aircraft_types')
+    .select('*')
+    .eq('is_active', true)
+    .order('icao_type')
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Airports</CardTitle>
-          <CardDescription>
-            Manage airport reference data including ICAO codes, IATA codes, and timezones.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AirportsTable airports={airports} />
-        </CardContent>
-      </Card>
-    </div>
+    <AirportsMasterDetail
+      airports={airports}
+      countries={countries}
+      timezoneZones={timezoneZones || []}
+      aircraftTypes={aircraftTypes || []}
+    />
   )
 }

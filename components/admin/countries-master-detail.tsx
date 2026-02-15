@@ -360,7 +360,7 @@ function CountryDetail({
       {/* Tabs + Content */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <Tabs value={activeTab} onValueChange={onTabChange} className="flex flex-col h-full">
-          <TabsList className="glass shrink-0">
+          <TabsList className="glass shrink-0 justify-start">
             <TabsTrigger value="basic">
               <span className="flex items-center gap-2"><Info className="h-4 w-4" /> Basic Info</span>
             </TabsTrigger>
@@ -395,7 +395,6 @@ function BasicInfoTab({ country, onFieldUpdated }: { country: CountryWithZoneCou
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-0">
         <InlineField label="Country Name" field="name" value={country.name} countryId={country.id} onSaved={onFieldUpdated} />
         <InlineField label="Official Name" field="official_name" value={country.official_name || ''} countryId={country.id} onSaved={onFieldUpdated} />
-        <InlineSelectField label="Region" field="region" value={country.region || ''} countryId={country.id} options={REGIONS} onSaved={onFieldUpdated} />
         <InlineField label="Currency Code" field="currency_code" value={country.currency_code || ''} countryId={country.id} onSaved={onFieldUpdated} mono />
         <InlineField label="Currency Name" field="currency_name" value={country.currency_name || ''} countryId={country.id} onSaved={onFieldUpdated} />
         <InlineField label="Currency Symbol" field="currency_symbol" value={country.currency_symbol || ''} countryId={country.id} onSaved={onFieldUpdated} />
