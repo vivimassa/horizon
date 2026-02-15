@@ -108,10 +108,10 @@ export function AdminSidebar() {
 
   return (
     <aside className={cn(
-      'w-64 shrink-0 rounded-2xl p-4 h-fit sticky top-4',
+      'w-64 shrink-0 rounded-2xl p-4',
       'glass',
-      'max-h-[calc(100vh-8rem)] overflow-y-auto',
-      'scrollbar-thin'
+      'h-full overflow-y-auto',
+      'custom-scrollbar'
     )}>
       <div className="space-y-1">
         {/* Dashboard link */}

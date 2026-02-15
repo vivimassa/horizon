@@ -149,9 +149,18 @@ export interface Database {
           iso_code_2: string
           iso_code_3: string
           name: string
+          official_name: string | null
           region: string | null
+          sub_region: string | null
           icao_prefix: string | null
           currency_code: string | null
+          currency_name: string | null
+          currency_symbol: string | null
+          iso_numeric: string | null
+          phone_code: string | null
+          flag_emoji: string | null
+          latitude: number | null
+          longitude: number | null
           is_active: boolean
           created_at: string
         }
@@ -160,9 +169,18 @@ export interface Database {
           iso_code_2: string
           iso_code_3?: string
           name: string
+          official_name?: string | null
           region?: string | null
+          sub_region?: string | null
           icao_prefix?: string | null
           currency_code?: string | null
+          currency_name?: string | null
+          currency_symbol?: string | null
+          iso_numeric?: string | null
+          phone_code?: string | null
+          flag_emoji?: string | null
+          latitude?: number | null
+          longitude?: number | null
           is_active?: boolean
           created_at?: string
         }
@@ -171,11 +189,58 @@ export interface Database {
           iso_code_2?: string
           iso_code_3?: string
           name?: string
+          official_name?: string | null
           region?: string | null
+          sub_region?: string | null
           icao_prefix?: string | null
           currency_code?: string | null
+          currency_name?: string | null
+          currency_symbol?: string | null
+          iso_numeric?: string | null
+          phone_code?: string | null
+          flag_emoji?: string | null
+          latitude?: number | null
+          longitude?: number | null
           is_active?: boolean
           created_at?: string
+        }
+      }
+      timezone_zones: {
+        Row: {
+          id: string
+          country_id: string
+          zone_code: string
+          zone_name: string
+          iana_timezone: string
+          utc_offset: string
+          dst_observed: boolean
+          is_active: boolean
+          created_at: string
+          notes: string | null
+        }
+        Insert: {
+          id?: string
+          country_id: string
+          zone_code: string
+          zone_name: string
+          iana_timezone: string
+          utc_offset: string
+          dst_observed?: boolean
+          is_active?: boolean
+          created_at?: string
+          notes?: string | null
+        }
+        Update: {
+          id?: string
+          country_id?: string
+          zone_code?: string
+          zone_name?: string
+          iana_timezone?: string
+          utc_offset?: string
+          dst_observed?: boolean
+          is_active?: boolean
+          created_at?: string
+          notes?: string | null
         }
       }
       aircraft_types: {
@@ -768,6 +833,7 @@ export type FlightNumber = Database['public']['Tables']['flight_numbers']['Row']
 export type Flight = Database['public']['Tables']['flights']['Row']
 export type SsimImport = Database['public']['Tables']['ssim_imports']['Row']
 export type MessageLog = Database['public']['Tables']['message_log']['Row']
+export type TimezoneZone = Database['public']['Tables']['timezone_zones']['Row']
 
 export interface UserPreferences {
   id: string

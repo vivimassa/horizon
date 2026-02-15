@@ -4,34 +4,46 @@ import { resolve } from 'path'
 
 config({ path: resolve(__dirname, '../.env.local') })
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const supabase = createClient(supabaseUrl, supabaseServiceKey)
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
-async function checkSchema() {
-  console.log('🔍 Checking database schema...\n')
-
-  const tablesToCheck = ['operators', 'operator_profile', 'airports', 'countries', 'aircraft_types', 'airlines', 'city_pairs']
-
-  for (const table of tablesToCheck) {
-    console.log(`\n📋 Checking table: ${table}`)
-    const { data, error } = await supabase
-      .from(table)
-      .select('*')
-      .limit(1)
-
-    if (error) {
-      console.log(`   ❌ Error: ${error.message}`)
-      console.log(`   Details: ${JSON.stringify(error, null, 2)}`)
-    } else {
-      if (data && data.length > 0) {
-        console.log(`   ✅ Table exists with data`)
-        console.log(`   📝 Columns: ${Object.keys(data[0]).join(', ')}`)
-      } else {
-        console.log(`   ✅ Table exists but is empty`)
-      }
-    }
+async function main() {
+  // Check countries columns
+  const { data: countries } = await supabase.from('countries').select('*').limit(1)
+  console.log('=== COUNTRIES COLUMNS ===')
+  if (countries?.[0]) {
+    console.log(Object.keys(countries[0]).join(', '))
+    console.log('Sample:', JSON.stringify(countries[0], null, 2))
   }
+
+  // Check timezone_zones columns
+  const { data: zones } = await supabase.from('timezone_zones').select('*').limit(1)
+  console.log('\n=== TIMEZONE_ZONES COLUMNS ===')
+  if (zones?.[0]) {
+    console.log(Object.keys(zones[0]).join(', '))
+    console.log('Sample:', JSON.stringify(zones[0], null, 2))
+  } else {
+    console.log('(no rows)')
+  }
+
+  // Check airports columns
+  const { data: airports } = await supabase.from('airports').select('*').limit(1)
+  console.log('\n=== AIRPORTS COLUMNS ===')
+  if (airports?.[0]) {
+    console.log(Object.keys(airports[0]).join(', '))
+  }
+
+  // Count existing data
+  const { count: countryCount } = await supabase.from('countries').select('*', { count: 'exact', head: true })
+  const { count: zoneCount } = await supabase.from('timezone_zones').select('*', { count: 'exact', head: true })
+  const { count: airportCount } = await supabase.from('airports').select('*', { count: 'exact', head: true })
+
+  console.log(`\n=== COUNTS ===`)
+  console.log(`Countries: ${countryCount}`)
+  console.log(`Timezone Zones: ${zoneCount}`)
+  console.log(`Airports: ${airportCount}`)
 }
 
-checkSchema()
+main().catch(console.error)
