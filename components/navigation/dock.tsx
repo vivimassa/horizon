@@ -18,7 +18,6 @@ import {
   Shield,
 } from 'lucide-react'
 import { OperatorWithRole } from '@/lib/operators'
-import { useState } from 'react'
 import { type DockPosition } from '@/hooks/use-user-preferences'
 import { HorizonLogo } from '@/components/horizon-logo'
 
@@ -69,7 +68,7 @@ const modules = [
 
 export function Dock({ accessibleModules, dockPosition = 'bottom' }: DockProps) {
   const pathname = usePathname()
-  const [position] = useState<DockPosition>(dockPosition)
+  const position = dockPosition
 
   // Hide dock on auth pages
   if (pathname === '/login' || pathname === '/register') {

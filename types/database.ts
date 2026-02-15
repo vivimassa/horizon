@@ -37,6 +37,7 @@ export interface Database {
           full_name: string | null
           role: string | null
           status: string | null
+          logo_url: string | null
           created_at: string
           updated_at: string
         }
@@ -56,6 +57,7 @@ export interface Database {
           full_name?: string | null
           role?: string | null
           status?: string | null
+          logo_url?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -75,6 +77,7 @@ export interface Database {
           full_name?: string | null
           role?: string | null
           status?: string | null
+          logo_url?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -380,6 +383,43 @@ export interface Database {
           is_active: boolean
           created_at: string
           updated_at: string | null
+          image_url: string | null
+          iata_type_code: string | null
+          manufacturer: string | null
+          mtow_kg: number | null
+          mlw_kg: number | null
+          mzfw_kg: number | null
+          oew_kg: number | null
+          max_fuel_capacity_kg: number | null
+          fuel_unit: string | null
+          fuel_burn_rate_kg_per_hour: number | null
+          max_range_nm: number | null
+          cruising_speed_kts: number | null
+          cruising_mach: number | null
+          min_runway_length_m: number | null
+          min_runway_width_m: number | null
+          fire_category: number | null
+          wake_turbulence_category: string | null
+          etops_capable: boolean | null
+          etops_max_minutes: number | null
+          noise_category: string | null
+          emissions_class: string | null
+          tat_dom_dom_minutes: number | null
+          tat_dom_int_minutes: number | null
+          tat_int_dom_minutes: number | null
+          tat_int_int_minutes: number | null
+          max_cargo_weight_kg: number | null
+          cargo_positions: number | null
+          uld_types_accepted: Json | null
+          bulk_hold_capacity_kg: number | null
+          cockpit_rest_facility_class: string | null
+          cabin_rest_facility_class: string | null
+          cockpit_rest_positions: number | null
+          cabin_rest_positions: number | null
+          weather_limitations: Json | null
+          ils_category_required: string | null
+          autoland_capable: boolean | null
+          notes: string | null
         }
         Insert: {
           id?: string
@@ -397,6 +437,43 @@ export interface Database {
           is_active?: boolean
           created_at?: string
           updated_at?: string | null
+          image_url?: string | null
+          iata_type_code?: string | null
+          manufacturer?: string | null
+          mtow_kg?: number | null
+          mlw_kg?: number | null
+          mzfw_kg?: number | null
+          oew_kg?: number | null
+          max_fuel_capacity_kg?: number | null
+          fuel_unit?: string | null
+          fuel_burn_rate_kg_per_hour?: number | null
+          max_range_nm?: number | null
+          cruising_speed_kts?: number | null
+          cruising_mach?: number | null
+          min_runway_length_m?: number | null
+          min_runway_width_m?: number | null
+          fire_category?: number | null
+          wake_turbulence_category?: string | null
+          etops_capable?: boolean | null
+          etops_max_minutes?: number | null
+          noise_category?: string | null
+          emissions_class?: string | null
+          tat_dom_dom_minutes?: number | null
+          tat_dom_int_minutes?: number | null
+          tat_int_dom_minutes?: number | null
+          tat_int_int_minutes?: number | null
+          max_cargo_weight_kg?: number | null
+          cargo_positions?: number | null
+          uld_types_accepted?: Json | null
+          bulk_hold_capacity_kg?: number | null
+          cockpit_rest_facility_class?: string | null
+          cabin_rest_facility_class?: string | null
+          cockpit_rest_positions?: number | null
+          cabin_rest_positions?: number | null
+          weather_limitations?: Json | null
+          ils_category_required?: string | null
+          autoland_capable?: boolean | null
+          notes?: string | null
         }
         Update: {
           id?: string
@@ -414,6 +491,72 @@ export interface Database {
           is_active?: boolean
           created_at?: string
           updated_at?: string | null
+          image_url?: string | null
+          iata_type_code?: string | null
+          manufacturer?: string | null
+          mtow_kg?: number | null
+          mlw_kg?: number | null
+          mzfw_kg?: number | null
+          oew_kg?: number | null
+          max_fuel_capacity_kg?: number | null
+          fuel_unit?: string | null
+          fuel_burn_rate_kg_per_hour?: number | null
+          max_range_nm?: number | null
+          cruising_speed_kts?: number | null
+          cruising_mach?: number | null
+          min_runway_length_m?: number | null
+          min_runway_width_m?: number | null
+          fire_category?: number | null
+          wake_turbulence_category?: string | null
+          etops_capable?: boolean | null
+          etops_max_minutes?: number | null
+          noise_category?: string | null
+          emissions_class?: string | null
+          tat_dom_dom_minutes?: number | null
+          tat_dom_int_minutes?: number | null
+          tat_int_dom_minutes?: number | null
+          tat_int_int_minutes?: number | null
+          max_cargo_weight_kg?: number | null
+          cargo_positions?: number | null
+          uld_types_accepted?: Json | null
+          bulk_hold_capacity_kg?: number | null
+          cockpit_rest_facility_class?: string | null
+          cabin_rest_facility_class?: string | null
+          cockpit_rest_positions?: number | null
+          cabin_rest_positions?: number | null
+          weather_limitations?: Json | null
+          ils_category_required?: string | null
+          autoland_capable?: boolean | null
+          notes?: string | null
+        }
+      }
+      aircraft_type_seating_configs: {
+        Row: {
+          id: string
+          aircraft_type_id: string | null
+          config_name: string
+          cabin_config: Json
+          is_default: boolean | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          aircraft_type_id?: string | null
+          config_name: string
+          cabin_config: Json
+          is_default?: boolean | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          aircraft_type_id?: string | null
+          config_name?: string
+          cabin_config?: Json
+          is_default?: boolean | null
+          notes?: string | null
+          created_at?: string
         }
       }
       aircraft: {
@@ -428,6 +571,27 @@ export interface Database {
           is_active: boolean
           created_at: string
           updated_at: string
+          serial_number: string | null
+          sub_operator: string | null
+          date_of_manufacture: string | null
+          date_of_delivery: string | null
+          lease_expiry_date: string | null
+          image_url: string | null
+          notes: string | null
+          current_location_id: string | null
+          current_location_updated_at: string | null
+          flight_hours_total: number | null
+          cycles_total: number | null
+          next_maintenance_due: string | null
+          last_maintenance_date: string | null
+          last_maintenance_description: string | null
+          aircraft_version: string | null
+          mtow_kg_override: number | null
+          max_range_nm_override: number | null
+          cockpit_rest_facility_class_override: string | null
+          cabin_rest_facility_class_override: string | null
+          cockpit_rest_positions_override: number | null
+          cabin_rest_positions_override: number | null
         }
         Insert: {
           id?: string
@@ -440,6 +604,27 @@ export interface Database {
           is_active?: boolean
           created_at?: string
           updated_at?: string
+          serial_number?: string | null
+          sub_operator?: string | null
+          date_of_manufacture?: string | null
+          date_of_delivery?: string | null
+          lease_expiry_date?: string | null
+          image_url?: string | null
+          notes?: string | null
+          current_location_id?: string | null
+          current_location_updated_at?: string | null
+          flight_hours_total?: number | null
+          cycles_total?: number | null
+          next_maintenance_due?: string | null
+          last_maintenance_date?: string | null
+          last_maintenance_description?: string | null
+          aircraft_version?: string | null
+          mtow_kg_override?: number | null
+          max_range_nm_override?: number | null
+          cockpit_rest_facility_class_override?: string | null
+          cabin_rest_facility_class_override?: string | null
+          cockpit_rest_positions_override?: number | null
+          cabin_rest_positions_override?: number | null
         }
         Update: {
           id?: string
@@ -452,6 +637,74 @@ export interface Database {
           is_active?: boolean
           created_at?: string
           updated_at?: string
+          serial_number?: string | null
+          sub_operator?: string | null
+          date_of_manufacture?: string | null
+          date_of_delivery?: string | null
+          lease_expiry_date?: string | null
+          image_url?: string | null
+          notes?: string | null
+          current_location_id?: string | null
+          current_location_updated_at?: string | null
+          flight_hours_total?: number | null
+          cycles_total?: number | null
+          next_maintenance_due?: string | null
+          last_maintenance_date?: string | null
+          last_maintenance_description?: string | null
+          aircraft_version?: string | null
+          mtow_kg_override?: number | null
+          max_range_nm_override?: number | null
+          cockpit_rest_facility_class_override?: string | null
+          cabin_rest_facility_class_override?: string | null
+          cockpit_rest_positions_override?: number | null
+          cabin_rest_positions_override?: number | null
+        }
+      }
+      aircraft_seating_configs: {
+        Row: {
+          id: string
+          aircraft_id: string
+          config_name: string
+          effective_from: string
+          effective_to: string | null
+          cabin_config: Json
+          total_capacity: number
+          cockpit_rest_facility_class: string | null
+          cabin_rest_facility_class: string | null
+          cockpit_rest_positions: number | null
+          cabin_rest_positions: number | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          aircraft_id: string
+          config_name: string
+          effective_from: string
+          effective_to?: string | null
+          cabin_config: Json
+          total_capacity?: number
+          cockpit_rest_facility_class?: string | null
+          cabin_rest_facility_class?: string | null
+          cockpit_rest_positions?: number | null
+          cabin_rest_positions?: number | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          aircraft_id?: string
+          config_name?: string
+          effective_from?: string
+          effective_to?: string | null
+          cabin_config?: Json
+          total_capacity?: number
+          cockpit_rest_facility_class?: string | null
+          cabin_rest_facility_class?: string | null
+          cockpit_rest_positions?: number | null
+          cabin_rest_positions?: number | null
+          notes?: string | null
+          created_at?: string
         }
       }
       airport_tat_rules: {
@@ -690,6 +943,7 @@ export interface Database {
           name: string
           description: string | null
           is_active: boolean
+          is_iata_standard: boolean
           created_at: string
         }
         Insert: {
@@ -700,6 +954,7 @@ export interface Database {
           name: string
           description?: string | null
           is_active?: boolean
+          is_iata_standard?: boolean
           created_at?: string
         }
         Update: {
@@ -709,6 +964,39 @@ export interface Database {
           category?: string
           name?: string
           description?: string | null
+          is_active?: boolean
+          is_iata_standard?: boolean
+          created_at?: string
+        }
+      }
+      cabin_classes: {
+        Row: {
+          id: string
+          operator_id: string | null
+          code: string
+          name: string
+          color: string | null
+          sort_order: number | null
+          is_active: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          operator_id?: string | null
+          code: string
+          name: string
+          color?: string | null
+          sort_order?: number | null
+          is_active?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          operator_id?: string | null
+          code?: string
+          name?: string
+          color?: string | null
+          sort_order?: number | null
           is_active?: boolean
           created_at?: string
         }
@@ -720,8 +1008,13 @@ export interface Database {
           iata_code: string | null
           name: string
           country: string | null
+          country_id: string | null
           alliance: string | null
+          callsign: string | null
+          operator_id: string | null
+          is_own_airline: boolean
           is_active: boolean
+          notes: string | null
           created_at: string
           updated_at: string | null
         }
@@ -731,8 +1024,13 @@ export interface Database {
           iata_code?: string | null
           name: string
           country?: string | null
+          country_id?: string | null
           alliance?: string | null
+          callsign?: string | null
+          operator_id?: string | null
+          is_own_airline?: boolean
           is_active?: boolean
+          notes?: string | null
           created_at?: string
           updated_at?: string | null
         }
@@ -742,8 +1040,13 @@ export interface Database {
           iata_code?: string | null
           name?: string
           country?: string | null
+          country_id?: string | null
           alliance?: string | null
+          callsign?: string | null
+          operator_id?: string | null
+          is_own_airline?: boolean
           is_active?: boolean
+          notes?: string | null
           created_at?: string
           updated_at?: string | null
         }
@@ -751,39 +1054,131 @@ export interface Database {
       city_pairs: {
         Row: {
           id: string
+          departure_airport_id: string | null
+          arrival_airport_id: string | null
           departure_airport: string | null
           arrival_airport: string | null
+          standard_block_minutes: number | null
+          distance_nm: number | null
+          distance_km: number | null
+          great_circle_distance_nm: number | null
           block_time: number | null
           distance: number | null
           route_type: string
+          is_etops: boolean
           etops_required: boolean
+          etops_diversion_time_minutes: number | null
+          is_overwater: boolean
+          requires_special_qualification: boolean
+          status: string
+          notes: string | null
           is_active: boolean
           created_at: string
           updated_at: string | null
         }
         Insert: {
           id?: string
+          departure_airport_id?: string | null
+          arrival_airport_id?: string | null
           departure_airport?: string | null
           arrival_airport?: string | null
+          standard_block_minutes?: number | null
+          distance_nm?: number | null
+          distance_km?: number | null
+          great_circle_distance_nm?: number | null
           block_time?: number | null
           distance?: number | null
           route_type: string
+          is_etops?: boolean
           etops_required?: boolean
+          etops_diversion_time_minutes?: number | null
+          is_overwater?: boolean
+          requires_special_qualification?: boolean
+          status?: string
+          notes?: string | null
           is_active?: boolean
           created_at?: string
           updated_at?: string | null
         }
         Update: {
           id?: string
+          departure_airport_id?: string | null
+          arrival_airport_id?: string | null
           departure_airport?: string | null
           arrival_airport?: string | null
+          standard_block_minutes?: number | null
+          distance_nm?: number | null
+          distance_km?: number | null
+          great_circle_distance_nm?: number | null
           block_time?: number | null
           distance?: number | null
           route_type?: string
+          is_etops?: boolean
           etops_required?: boolean
+          etops_diversion_time_minutes?: number | null
+          is_overwater?: boolean
+          requires_special_qualification?: boolean
+          status?: string
+          notes?: string | null
           is_active?: boolean
           created_at?: string
           updated_at?: string | null
+        }
+      }
+      city_pair_block_hours: {
+        Row: {
+          id: string
+          city_pair_id: string
+          aircraft_type_id: string
+          season_type: string
+          month_applicable: number | null
+          direction1_block_minutes: number
+          direction2_block_minutes: number
+          direction1_flight_minutes: number | null
+          direction2_flight_minutes: number | null
+          direction1_fuel_kg: number | null
+          direction2_fuel_kg: number | null
+          direction1_avg_payload_kg: number | null
+          direction2_avg_payload_kg: number | null
+          cruise_altitude_ft: number | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          city_pair_id: string
+          aircraft_type_id: string
+          season_type: string
+          month_applicable?: number | null
+          direction1_block_minutes: number
+          direction2_block_minutes: number
+          direction1_flight_minutes?: number | null
+          direction2_flight_minutes?: number | null
+          direction1_fuel_kg?: number | null
+          direction2_fuel_kg?: number | null
+          direction1_avg_payload_kg?: number | null
+          direction2_avg_payload_kg?: number | null
+          cruise_altitude_ft?: number | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          city_pair_id?: string
+          aircraft_type_id?: string
+          season_type?: string
+          month_applicable?: number | null
+          direction1_block_minutes?: number
+          direction2_block_minutes?: number
+          direction1_flight_minutes?: number | null
+          direction2_flight_minutes?: number | null
+          direction1_fuel_kg?: number | null
+          direction2_fuel_kg?: number | null
+          direction1_avg_payload_kg?: number | null
+          direction2_avg_payload_kg?: number | null
+          cruise_altitude_ft?: number | null
+          notes?: string | null
+          created_at?: string
         }
       }
       schedule_seasons: {
@@ -1105,13 +1500,16 @@ export type Operator = Database['public']['Tables']['operators']['Row']
 export type Airport = Database['public']['Tables']['airports']['Row']
 export type Country = Database['public']['Tables']['countries']['Row']
 export type AircraftType = Database['public']['Tables']['aircraft_types']['Row']
+export type AircraftTypeSeatingConfig = Database['public']['Tables']['aircraft_type_seating_configs']['Row']
 export type Airline = Database['public']['Tables']['airlines']['Row']
 export type CityPair = Database['public']['Tables']['city_pairs']['Row']
+export type CityPairBlockHours = Database['public']['Tables']['city_pair_block_hours']['Row']
 export type ModuleDefinition = Database['public']['Tables']['module_definitions']['Row']
 export type ScheduleSeason = Database['public']['Tables']['schedule_seasons']['Row']
 export type ServiceType = Database['public']['Tables']['service_types']['Row']
 export type CabinConfiguration = Database['public']['Tables']['cabin_configurations']['Row']
 export type Aircraft = Database['public']['Tables']['aircraft']['Row']
+export type AircraftSeatingConfig = Database['public']['Tables']['aircraft_seating_configs']['Row']
 export type AirportTatRule = Database['public']['Tables']['airport_tat_rules']['Row']
 export type AirportRunway = Database['public']['Tables']['airport_runways']['Row']
 export type AirportTerminal = Database['public']['Tables']['airport_terminals']['Row']
@@ -1120,6 +1518,7 @@ export type AirportFrequency = Database['public']['Tables']['airport_frequencies
 export type AirportWeatherLimit = Database['public']['Tables']['airport_weather_limits']['Row']
 export type FlightServiceType = Database['public']['Tables']['flight_service_types']['Row']
 export type DelayCode = Database['public']['Tables']['delay_codes']['Row']
+export type CabinClass = Database['public']['Tables']['cabin_classes']['Row']
 export type FlightNumber = Database['public']['Tables']['flight_numbers']['Row']
 export type Flight = Database['public']['Tables']['flights']['Row']
 export type SsimImport = Database['public']['Tables']['ssim_imports']['Row']

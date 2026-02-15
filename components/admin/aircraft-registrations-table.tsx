@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import { AircraftType, Airport } from '@/types/database'
-import { AircraftWithType, deleteAircraftRegistration } from '@/app/actions/aircraft-registrations'
+import { AircraftWithRelations, deleteAircraftRegistration } from '@/app/actions/aircraft-registrations'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,7 +15,7 @@ type SortColumn = 'registration' | 'status' | null
 type SortDirection = 'asc' | 'desc'
 
 interface AircraftRegistrationsTableProps {
-  aircraft: AircraftWithType[]
+  aircraft: AircraftWithRelations[]
   aircraftTypes: AircraftType[]
   airports: Airport[]
 }
@@ -39,9 +39,9 @@ export function AircraftRegistrationsTable({ aircraft, aircraftTypes, airports }
   const [sortColumn, setSortColumn] = useState<SortColumn>('registration')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [formOpen, setFormOpen] = useState(false)
-  const [editItem, setEditItem] = useState<AircraftWithType | null>(null)
+  const [editItem, setEditItem] = useState<AircraftWithRelations | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [itemToDelete, setItemToDelete] = useState<AircraftWithType | null>(null)
+  const [itemToDelete, setItemToDelete] = useState<AircraftWithRelations | null>(null)
   const [deleting, setDeleting] = useState(false)
   const router = useRouter()
 
@@ -54,7 +54,7 @@ export function AircraftRegistrationsTable({ aircraft, aircraftTypes, airports }
         a.aircraft_types?.icao_type.toLowerCase().includes(q) ||
         a.aircraft_types?.name.toLowerCase().includes(q) ||
         a.status.toLowerCase().includes(q) ||
-        a.airports?.icao_code.toLowerCase().includes(q)
+        a.home_base?.iata_code?.toLowerCase().includes(q)
       )
     }
     if (sortColumn) {
@@ -126,8 +126,8 @@ export function AircraftRegistrationsTable({ aircraft, aircraftTypes, airports }
                 <TableCell className="font-mono font-semibold">{a.registration}</TableCell>
                 <TableCell className="font-mono">{a.aircraft_types?.icao_type || '—'}</TableCell>
                 <TableCell><StatusBadge status={a.status} /></TableCell>
-                <TableCell className="font-mono">{a.airports?.icao_code || '—'}</TableCell>
-                <TableCell className="font-mono text-sm">{formatSeatingConfig(a.seating_config)}</TableCell>
+                <TableCell className="font-mono">{a.home_base?.iata_code || '—'}</TableCell>
+                <TableCell className="font-mono text-sm">{formatSeatingConfig(a.seating_config as unknown as Record<string, number> | null)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">
                     <Button variant="ghost" size="sm" onClick={() => { setEditItem(a); setFormOpen(true) }}><Pencil className="h-4 w-4" /></Button>

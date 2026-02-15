@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { useBreakpoint } from '@/hooks/use-breakpoint'
 import { Dock } from '@/components/navigation/dock'
 import { OperatorWithRole } from '@/lib/operators'
-import { type DockPosition } from '@/hooks/use-user-preferences'
+import { useUserPreferences } from '@/hooks/use-user-preferences'
 import {
   Tooltip,
   TooltipContent,
@@ -29,7 +29,6 @@ import { HorizonLogo } from '@/components/horizon-logo'
 interface ResponsiveDockProps {
   operator: OperatorWithRole | null
   accessibleModules: string[]
-  dockPosition?: DockPosition
 }
 
 const modules = [
@@ -43,10 +42,12 @@ const modules = [
 
 const MAX_MOBILE_ITEMS = 5
 
-export function ResponsiveDock({ operator, accessibleModules, dockPosition = 'bottom' }: ResponsiveDockProps) {
+export function ResponsiveDock({ operator, accessibleModules }: ResponsiveDockProps) {
   const breakpoint = useBreakpoint()
   const pathname = usePathname()
   const [moreOpen, setMoreOpen] = useState(false)
+  const { preferences } = useUserPreferences()
+  const dockPosition = preferences.dock_position
 
   // Hide on auth pages
   if (pathname === '/login' || pathname === '/register') return null

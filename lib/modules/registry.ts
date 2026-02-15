@@ -116,6 +116,7 @@ export const MODULE_REGISTRY: ModuleEntry[] = [
   { code: '4.2.6', name: 'City Pairs', description: 'City pair connections', icon: 'ArrowLeftRight', route: '/admin/master-database/city-pairs', parent_module: 'Master Database', parent_code: '4.2', required_module: 'admin', level: 2 },
   { code: '4.2.7', name: 'Flight Service Types', description: 'Flight service type codes', icon: 'Tag', route: '/admin/master-database/flight-service-types', parent_module: 'Master Database', parent_code: '4.2', required_module: 'admin', level: 2 },
   { code: '4.2.8', name: 'Delay Codes', description: 'IATA delay code definitions', icon: 'AlertTriangle', route: '/admin/master-database/delay-codes', parent_module: 'Master Database', parent_code: '4.2', required_module: 'admin', level: 2 },
+  { code: '4.2.9', name: 'Cabin Classes', description: 'Cabin class definitions', icon: 'Armchair', route: '/admin/master-database/cabin-classes', parent_module: 'Master Database', parent_code: '4.2', required_module: 'admin', level: 2 },
 
   // 4.3 Network Config
   { code: '4.3', name: 'Network Config', description: 'Network module configuration', icon: 'Network', route: '/admin/network-config', parent_module: 'Admin', parent_code: '4', required_module: 'admin', level: 1 },

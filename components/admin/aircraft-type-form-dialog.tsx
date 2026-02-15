@@ -156,9 +156,9 @@ export function AircraftTypeFormDialog({ open, onOpenChange, aircraftType }: Air
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="default_tat_minutes">Default TAT (minutes)</Label>
+            <Label htmlFor="default_tat_minutes">Default Turn Around Time (minutes)</Label>
             <Input id="default_tat_minutes" name="default_tat_minutes" type="number" defaultValue={aircraftType?.default_tat_minutes ?? ''} placeholder="45" disabled={loading} />
-            <p className="text-xs text-muted-foreground">Default turnaround time in minutes</p>
+            <p className="text-xs text-muted-foreground">Default Turn Around Time in minutes</p>
           </div>
 
           <div className="space-y-3">

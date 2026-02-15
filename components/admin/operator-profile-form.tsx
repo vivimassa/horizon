@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
-import { OperatorProfile, updateOperatorProfile } from '@/app/actions/operator-profile'
+import { useState, useRef } from 'react'
+import { OperatorProfile, updateOperatorProfile, uploadOperatorLogo, removeOperatorLogo } from '@/app/actions/operator-profile'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useRouter } from 'next/navigation'
+import { Building2, Upload, X } from 'lucide-react'
 
 interface OperatorProfileFormProps {
   profile: OperatorProfile
@@ -15,6 +16,9 @@ export function OperatorProfileForm({ profile }: OperatorProfileFormProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const [logoUploading, setLogoUploading] = useState(false)
+  const [currentLogoUrl, setCurrentLogoUrl] = useState<string | null>(profile.logo_url)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const router = useRouter()
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -37,8 +41,106 @@ export function OperatorProfileForm({ profile }: OperatorProfileFormProps) {
     }
   }
 
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setLogoUploading(true)
+    setError(null)
+
+    const formData = new FormData()
+    formData.set('logo', file)
+
+    const result = await uploadOperatorLogo(profile.id, formData)
+
+    if (result?.error) {
+      setError(result.error)
+    } else if (result?.logoUrl) {
+      setCurrentLogoUrl(result.logoUrl)
+    }
+
+    setLogoUploading(false)
+    router.refresh()
+
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  async function handleLogoRemove() {
+    setLogoUploading(true)
+    setError(null)
+
+    const result = await removeOperatorLogo(profile.id)
+
+    if (result?.error) {
+      setError(result.error)
+    } else {
+      setCurrentLogoUrl(null)
+    }
+
+    setLogoUploading(false)
+    router.refresh()
+  }
+
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {/* Logo Upload Section */}
+      <div className="space-y-2">
+        <Label>Airline Logo</Label>
+        <div className="flex items-center gap-4">
+          <div className="w-48 h-16 rounded-lg border-2 border-dashed border-border flex items-center justify-center overflow-hidden bg-muted/30">
+            {currentLogoUrl ? (
+              <img
+                src={currentLogoUrl}
+                alt="Operator logo"
+                className="max-w-full max-h-full object-contain p-1.5"
+              />
+            ) : (
+              <Building2 className="h-8 w-8 text-muted-foreground" />
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={logoUploading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Upload className="h-4 w-4 mr-1.5" />
+                {logoUploading ? 'Uploading...' : 'Upload Logo'}
+              </Button>
+              {currentLogoUrl && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={logoUploading}
+                  onClick={handleLogoRemove}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <X className="h-4 w-4 mr-1" />
+                  Remove
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              JPG, PNG, or SVG. Max 2MB.
+            </p>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".jpg,.jpeg,.png,.svg"
+            className="hidden"
+            onChange={handleLogoUpload}
+          />
+        </div>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="company_name">

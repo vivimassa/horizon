@@ -38,17 +38,36 @@ export function createAdminClient() {
   )
 }
 
+const OPERATOR_COOKIE = 'horizon_operator_id'
+
 /**
- * Get the current user's operator_id from their auth session.
- * Uses the user_roles table (user_id → operator_id mapping).
- * Throws if not authenticated or no operator found.
+ * Get the current user's operator_id.
+ * Reads from the horizon_operator_id cookie first (set during login / operator switch),
+ * falling back to the first entry in user_roles.
  */
 export async function getCurrentOperatorId(): Promise<string> {
   const supabase = await createClient()
   const { data: { user }, error: authError } = await supabase.auth.getUser()
   if (authError || !user) throw new Error('Not authenticated')
 
+  const cookieStore = await cookies()
+  const selectedId = cookieStore.get(OPERATOR_COOKIE)?.value
+
   const admin = createAdminClient()
+
+  // If a cookie is set, verify the user still has access
+  if (selectedId) {
+    const { data } = await admin
+      .from('user_roles')
+      .select('operator_id')
+      .eq('user_id', user.id)
+      .eq('operator_id', selectedId)
+      .maybeSingle()
+
+    if (data) return data.operator_id
+  }
+
+  // Fallback: first operator in user_roles
   const { data, error } = await admin
     .from('user_roles')
     .select('operator_id')

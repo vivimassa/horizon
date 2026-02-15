@@ -101,7 +101,7 @@ export function AircraftTypesTable({ aircraftTypes }: AircraftTypesTableProps) {
               <TableHead><Button variant="ghost" onClick={() => handleSort('name')} className="font-semibold">Name{getSortIcon('name')}</Button></TableHead>
               <TableHead><Button variant="ghost" onClick={() => handleSort('category')} className="font-semibold">Category{getSortIcon('category')}</Button></TableHead>
               <TableHead><Button variant="ghost" onClick={() => handleSort('pax_capacity')} className="font-semibold">Pax{getSortIcon('pax_capacity')}</Button></TableHead>
-              <TableHead><Button variant="ghost" onClick={() => handleSort('default_tat_minutes')} className="font-semibold">TAT{getSortIcon('default_tat_minutes')}</Button></TableHead>
+              <TableHead><Button variant="ghost" onClick={() => handleSort('default_tat_minutes')} className="font-semibold">Turn Around Time{getSortIcon('default_tat_minutes')}</Button></TableHead>
               <TableHead>Cabin Config</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>

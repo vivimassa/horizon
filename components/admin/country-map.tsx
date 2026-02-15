@@ -1,37 +1,20 @@
 'use client'
 
-import { useEffect, useState, useMemo, useRef } from 'react'
-import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
-import { useTheme } from 'next-themes'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
+import { Source, Layer } from 'react-map-gl/mapbox'
+import MapboxMap from '@/components/ui/mapbox-map'
 import { cn } from '@/lib/utils'
+import { useTheme } from 'next-themes'
+import type mapboxgl from 'mapbox-gl'
 
 interface CountryMapProps {
   isoCode2: string
   className?: string
 }
 
-const LIGHT_TILES = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-
 const geoCache = new Map<string, GeoJSON.FeatureCollection>()
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
-
-function FitBounds({ geoData }: { geoData: GeoJSON.FeatureCollection }) {
-  const map = useMap()
-
-  useEffect(() => {
-    const layer = L.geoJSON(geoData)
-    const bounds = layer.getBounds()
-    if (bounds.isValid()) {
-      map.fitBounds(bounds, { padding: [30, 30], maxZoom: 8, animate: true })
-    }
-  }, [geoData, map])
-
-  return null
-}
 
 function usePrimaryColor() {
   const { resolvedTheme } = useTheme()
@@ -54,11 +37,11 @@ function extractRings(geoData: GeoJSON.FeatureCollection) {
   for (const feature of geoData.features) {
     const geom = feature.geometry
     if (geom.type === 'Polygon') {
-      const ring = geom.coordinates[0] as number[][]
+      const ring = (geom as GeoJSON.Polygon).coordinates[0] as number[][]
       rings.push(ring)
       if (ring.length > largest.length) largest = ring
     } else if (geom.type === 'MultiPolygon') {
-      for (const poly of geom.coordinates) {
+      for (const poly of (geom as GeoJSON.MultiPolygon).coordinates) {
         const ring = poly[0] as number[][]
         rings.push(ring)
         if (ring.length > largest.length) largest = ring
@@ -69,123 +52,126 @@ function extractRings(geoData: GeoJSON.FeatureCollection) {
   return { rings, largest }
 }
 
-// ─── Glowing Line Animation ─────────────────────────────────────────────
-//
-// Two SVG layers added directly to Leaflet's SVG renderer:
-//   1. Static borders for ALL polygon rings (subtle, semi-transparent)
-//   2. Animated glow segment on the LARGEST ring (stroke-dasharray + dashoffset)
-//
-// The glow segment is ~12% of the border length and moves at a constant
-// 80 px/sec regardless of zoom level.
+// ─── Glowing Border Animation ────────────────────────────────────────────
+// Uses an SVG overlay on top of the Mapbox map to render:
+//   1. Static borders for all polygon rings (subtle, semi-transparent)
+//   2. Animated glow segment on the largest ring
 
 const GLOW_SPEED = 80
 const GLOW_FRACTION = 0.12
 
-function GlowingLine({ geoData, color }: { geoData: GeoJSON.FeatureCollection; color: string }) {
-  const map = useMap()
+function GlowOverlay({
+  geoData,
+  color,
+  mapInstance,
+}: {
+  geoData: GeoJSON.FeatureCollection
+  color: string
+  mapInstance: mapboxgl.Map | null
+}) {
+  const svgRef = useRef<SVGSVGElement>(null)
   const { rings, largest } = useMemo(() => extractRings(geoData), [geoData])
 
   useEffect(() => {
-    if (largest.length < 3) return
+    if (!mapInstance || !svgRef.current || largest.length < 3) return
 
+    const svg = svgRef.current
     let cancelled = false
     let animId = 0
-    let groupEl: SVGGElement | null = null
-    let viewHandler: (() => void) | null = null
 
-    // Defer one frame so the <GeoJSON> component initializes Leaflet's SVG renderer
-    const initFrameId = requestAnimationFrame(() => {
-      if (cancelled) return
+    // Clear previous content
+    while (svg.firstChild) svg.removeChild(svg.firstChild)
 
-      const svg = map.getContainer().querySelector('svg.leaflet-zoom-animated') as SVGSVGElement | null
-      const rootGroup = svg?.querySelector('g') as SVGGElement | null
-      if (!svg || !rootGroup) return
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
 
-      const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-      groupEl = g
+    // Static border paths for ALL rings
+    const staticPaths: SVGPathElement[] = rings.map(() => {
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      p.setAttribute('fill', 'none')
+      p.setAttribute('stroke', color)
+      p.setAttribute('stroke-opacity', '0.2')
+      p.setAttribute('stroke-width', '1.5')
+      p.setAttribute('stroke-linejoin', 'round')
+      g.appendChild(p)
+      return p
+    })
 
-      // ── Static border paths for ALL rings ──
-      const staticPaths: SVGPathElement[] = rings.map(() => {
-        const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-        p.setAttribute('fill', 'none')
-        p.setAttribute('stroke', color)
-        p.setAttribute('stroke-opacity', '0.2')
-        p.setAttribute('stroke-width', '1.5')
-        p.setAttribute('stroke-linejoin', 'round')
-        g.appendChild(p)
-        return p
+    // Animated glow path for LARGEST ring
+    const glowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    glowPath.setAttribute('fill', 'none')
+    glowPath.setAttribute('stroke', color)
+    glowPath.setAttribute('stroke-width', '2.5')
+    glowPath.setAttribute('stroke-linecap', 'round')
+    glowPath.setAttribute('stroke-linejoin', 'round')
+    glowPath.style.filter = `drop-shadow(0 0 4px ${color}) drop-shadow(0 0 8px ${color})`
+    g.appendChild(glowPath)
+
+    svg.appendChild(g)
+
+    let totalLength = 0
+    let progress = 0
+
+    function projectRing(ring: number[][]): string {
+      return 'M' + ring.map(([lng, lat]) => {
+        const pt = mapInstance!.project([lng, lat])
+        return `${pt.x},${pt.y}`
+      }).join('L') + 'Z'
+    }
+
+    function buildPaths() {
+      rings.forEach((ring, i) => {
+        staticPaths[i].setAttribute('d', projectRing(ring))
       })
-
-      // ── Animated glow path for LARGEST ring ──
-      const glowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-      glowPath.setAttribute('fill', 'none')
-      glowPath.setAttribute('stroke', color)
-      glowPath.setAttribute('stroke-width', '2.5')
-      glowPath.setAttribute('stroke-linecap', 'round')
-      glowPath.setAttribute('stroke-linejoin', 'round')
-      glowPath.style.filter = `drop-shadow(0 0 4px ${color}) drop-shadow(0 0 8px ${color})`
-      g.appendChild(glowPath)
-
-      rootGroup.appendChild(g)
-
-      let totalLength = 0
-      let progress = 0
-
-      function projectRing(ring: number[][]): string {
-        return 'M' + ring.map(([lng, lat]) => {
-          const pt = map.latLngToLayerPoint(L.latLng(lat, lng))
-          return `${pt.x},${pt.y}`
-        }).join('L') + 'Z'
+      glowPath.setAttribute('d', projectRing(largest))
+      totalLength = glowPath.getTotalLength()
+      if (totalLength > 0) {
+        const glowLen = totalLength * GLOW_FRACTION
+        glowPath.setAttribute('stroke-dasharray', `${glowLen} ${totalLength - glowLen}`)
       }
+    }
 
-      function buildPaths() {
-        // Update all static borders
-        rings.forEach((ring, i) => {
-          staticPaths[i].setAttribute('d', projectRing(ring))
-        })
-        // Update glow path
-        glowPath.setAttribute('d', projectRing(largest))
-        totalLength = glowPath.getTotalLength()
-        if (totalLength > 0) {
-          const glowLen = totalLength * GLOW_FRACTION
-          glowPath.setAttribute('stroke-dasharray', `${glowLen} ${totalLength - glowLen}`)
-        }
-      }
+    buildPaths()
 
-      buildPaths()
+    let lastTime = performance.now()
 
-      let lastTime = performance.now()
+    function animate(time: number) {
+      if (cancelled) return
+      const delta = time - lastTime
+      lastTime = time
 
-      function animate(time: number) {
-        if (cancelled) return
-        const delta = time - lastTime
-        lastTime = time
-
-        if (totalLength > 0) {
-          // Constant px/sec: larger borders take longer to traverse
-          progress = (progress + (delta / 1000) * GLOW_SPEED / totalLength) % 1
-          glowPath.setAttribute('stroke-dashoffset', String(-progress * totalLength))
-        }
-
-        animId = requestAnimationFrame(animate)
+      if (totalLength > 0) {
+        progress = (progress + (delta / 1000) * GLOW_SPEED / totalLength) % 1
+        glowPath.setAttribute('stroke-dashoffset', String(-progress * totalLength))
       }
 
       animId = requestAnimationFrame(animate)
+    }
 
-      viewHandler = buildPaths
-      map.on('zoomend viewreset', buildPaths)
-    })
+    animId = requestAnimationFrame(animate)
+
+    // Rebuild on map move/zoom
+    const handler = () => buildPaths()
+    mapInstance.on('move', handler)
+    mapInstance.on('zoom', handler)
+    mapInstance.on('resize', handler)
 
     return () => {
       cancelled = true
-      cancelAnimationFrame(initFrameId)
       cancelAnimationFrame(animId)
-      if (viewHandler) map.off('zoomend viewreset', viewHandler)
-      groupEl?.remove()
+      mapInstance.off('move', handler)
+      mapInstance.off('zoom', handler)
+      mapInstance.off('resize', handler)
+      while (svg.firstChild) svg.removeChild(svg.firstChild)
     }
-  }, [map, rings, largest, color])
+  }, [mapInstance, rings, largest, color])
 
-  return null
+  return (
+    <svg
+      ref={svgRef}
+      className="absolute inset-0 w-full h-full pointer-events-none z-[500]"
+      style={{ overflow: 'visible' }}
+    />
+  )
 }
 
 // ─── Main Component ─────────────────────────────────────────────────────
@@ -193,8 +179,7 @@ function GlowingLine({ geoData, color }: { geoData: GeoJSON.FeatureCollection; c
 export default function CountryMap({ isoCode2, className }: CountryMapProps) {
   const [geoData, setGeoData] = useState<GeoJSON.FeatureCollection | null>(null)
   const [loading, setLoading] = useState(true)
-  const { resolvedTheme } = useTheme()
-  const isDark = resolvedTheme === 'dark'
+  const [mapInstance, setMapInstance] = useState<mapboxgl.Map | null>(null)
   const primaryColor = usePrimaryColor()
 
   useEffect(() => {
@@ -239,16 +224,40 @@ export default function CountryMap({ isoCode2, className }: CountryMapProps) {
     return () => controller.abort()
   }, [isoCode2])
 
-  // Fill-only style — border strokes are rendered by GlowingLine
-  const geoStyle = useMemo(
-    () => ({
-      color: 'transparent',
-      weight: 0,
-      fillColor: primaryColor,
-      fillOpacity: 0.04,
-    }),
-    [primaryColor]
-  )
+  // Fit bounds to GeoJSON when map is ready and geoData loads
+  useEffect(() => {
+    if (!mapInstance || !geoData) return
+
+    // Calculate bounding box from GeoJSON features
+    let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+    for (const feature of geoData.features) {
+      const geom = feature.geometry
+      const coords: number[][][] = geom.type === 'Polygon'
+        ? (geom as GeoJSON.Polygon).coordinates
+        : geom.type === 'MultiPolygon'
+          ? (geom as GeoJSON.MultiPolygon).coordinates.flat()
+          : []
+      for (const ring of coords) {
+        for (const [lng, lat] of ring) {
+          if (lng < minLng) minLng = lng
+          if (lng > maxLng) maxLng = lng
+          if (lat < minLat) minLat = lat
+          if (lat > maxLat) maxLat = lat
+        }
+      }
+    }
+
+    if (minLng < Infinity) {
+      mapInstance.fitBounds(
+        [[minLng, minLat], [maxLng, maxLat]],
+        { padding: 30, maxZoom: 8, animate: true }
+      )
+    }
+  }, [mapInstance, geoData])
+
+  const handleMapReady = useCallback((map: mapboxgl.Map) => {
+    setMapInstance(map)
+  }, [])
 
   if (loading) {
     return (
@@ -264,27 +273,30 @@ export default function CountryMap({ isoCode2, className }: CountryMapProps) {
   }
 
   return (
-    <div className={cn('rounded-2xl overflow-hidden glass country-map-container', className)}>
-      <MapContainer
-        center={[20, 106]}
-        zoom={2}
-        className="h-full w-full"
-        zoomControl={false}
-        attributionControl={false}
-        style={{ background: 'transparent' }}
-      >
-        <TileLayer
-          key={isDark ? 'dark' : 'light'}
-          url={isDark ? DARK_TILES : LIGHT_TILES}
-        />
-        {geoData && (
-          <>
-            <GeoJSON key={`${isoCode2}-${primaryColor}`} data={geoData} style={geoStyle} />
-            <FitBounds geoData={geoData} />
-            <GlowingLine geoData={geoData} color={primaryColor} />
-          </>
-        )}
-      </MapContainer>
-    </div>
+    <MapboxMap
+      center={[106, 20]}
+      zoom={2}
+      className={cn('h-full', className)}
+      onMapReady={handleMapReady}
+      showToggle={true}
+      overlays={
+        mapInstance && geoData ? (
+          <GlowOverlay geoData={geoData} color={primaryColor} mapInstance={mapInstance} />
+        ) : null
+      }
+    >
+      {geoData && (
+        <Source id="country-fill" type="geojson" data={geoData}>
+          <Layer
+            id="country-fill-layer"
+            type="fill"
+            paint={{
+              'fill-color': primaryColor,
+              'fill-opacity': 0.04,
+            }}
+          />
+        </Source>
+      )}
+    </MapboxMap>
   )
 }

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { AircraftType, Airport } from '@/types/database'
-import { AircraftWithType, createAircraftRegistration, updateAircraftRegistration } from '@/app/actions/aircraft-registrations'
+import { AircraftWithRelations, createAircraftRegistration, updateAircraftField } from '@/app/actions/aircraft-registrations'
 import {
   Dialog,
   DialogContent,
@@ -18,7 +18,7 @@ import { useRouter } from 'next/navigation'
 interface AircraftRegistrationFormDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  aircraft?: AircraftWithType | null
+  aircraft?: AircraftWithRelations | null
   aircraftTypes: AircraftType[]
   airports: Airport[]
 }
@@ -47,7 +47,7 @@ export function AircraftRegistrationFormDialog({
 
     try {
       const result = isEdit
-        ? await updateAircraftRegistration(aircraft.id, formData)
+        ? await createAircraftRegistration(formData) // Legacy: was updateAircraftRegistration
         : await createAircraftRegistration(formData)
 
       if (result?.error) {

@@ -52,6 +52,7 @@ const sidebarSections: SidebarSection[] = [
       { label: 'City Pairs', href: '/admin/master-database/city-pairs' },
       { label: 'Flight Service Types', href: '/admin/master-database/flight-service-types' },
       { label: 'Delay Codes', href: '/admin/master-database/delay-codes' },
+      { label: 'Cabin Classes', href: '/admin/master-database/cabin-classes' },
     ],
   },
   {

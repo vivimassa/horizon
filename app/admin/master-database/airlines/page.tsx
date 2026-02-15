@@ -1,14 +1,8 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { getAirlines } from '@/app/actions/airlines'
+import { AirlinesMasterDetail } from '@/components/admin/airlines-master-detail'
 
-export default function AirlinesPage() {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Airlines</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-muted-foreground">This section is coming soon.</p>
-      </CardContent>
-    </Card>
-  )
+export default async function AirlinesPage() {
+  const airlines = await getAirlines()
+
+  return <AirlinesMasterDetail airlines={airlines} />
 }

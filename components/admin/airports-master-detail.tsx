@@ -9,7 +9,8 @@ import { getCurfews, createCurfew, updateCurfew, deleteCurfew } from '@/app/acti
 import { getFrequencies, createFrequency, updateFrequency, deleteFrequency } from '@/app/actions/airport-subtables'
 import { getWeatherLimits, upsertWeatherLimit } from '@/app/actions/airport-subtables'
 import { getTatRulesForAirport, createTatRule, updateTatRule, deleteTatRule, type TatRuleWithType } from '@/app/actions/airport-tat-rules'
-import { inquireAirport, applyInquiryData, type InquiryResult } from '@/app/actions/airport-inquiry'
+import { inquireAirport, applyInquiryData, importNewAirport, type InquiryResult, type InquiryRunway, type InquiryFrequency } from '@/app/actions/airport-inquiry'
+import { createAirport } from '@/app/actions/airports'
 import { MasterDetailLayout } from '@/components/ui/responsive/master-detail-layout'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -24,8 +25,11 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import {
-  Plus, Trash2, Search, Plane, ChevronRight, Info, Clock, Radio, Cloud, Timer, Users, AlertTriangle, Satellite, CheckCircle2,
+  Plus, Trash2, Search, Plane, ChevronRight, Info, Clock, Radio, Cloud, Timer, Users, AlertTriangle, Satellite, CheckCircle2, Loader2,
 } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { Country, TimezoneZone, AircraftType, AirportRunway, AirportTerminal, AirportCurfew, AirportFrequency, AirportWeatherLimit } from '@/types/database'
 
@@ -53,6 +57,7 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
   const [selectedAirport, setSelectedAirport] = useState<AirportWithCountry | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('basic')
+  const [addAirportOpen, setAddAirportOpen] = useState(false)
   const router = useRouter()
 
   // Group airports by country
@@ -118,7 +123,12 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-lg font-semibold">Airports</h2>
-            <Badge variant="secondary" className="text-xs">{airports.length}</Badge>
+            <div className="flex items-center gap-1.5">
+              <Badge variant="secondary" className="text-xs">{airports.length}</Badge>
+              <Button size="sm" className="h-7 text-xs gap-1" onClick={() => setAddAirportOpen(true)}>
+                <Plus className="h-3.5 w-3.5" /> Add
+              </Button>
+            </div>
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -129,6 +139,12 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
               className="pl-9"
             />
           </div>
+          <AddAirportModal
+            open={addAirportOpen}
+            onOpenChange={setAddAirportOpen}
+            existingAirports={airports}
+            onImported={() => router.refresh()}
+          />
         </div>
       )}
       renderListBody={(renderItem) => (
@@ -250,25 +266,28 @@ function AirportDetail({
   const [inquiryOpen, setInquiryOpen] = useState(false)
   const [inquiryLoading, setInquiryLoading] = useState(false)
   const [inquiryData, setInquiryData] = useState<InquiryResult | null>(null)
+  const [existingRunways, setExistingRunways] = useState<AirportRunway[]>([])
+  const [existingFreqs, setExistingFreqs] = useState<AirportFrequency[]>([])
   const [runwayCount, setRunwayCount] = useState<number | null>(null)
   const [freqCount, setFreqCount] = useState<number | null>(null)
 
   // Check completeness for inquiry button status
+  const refreshCounts = useCallback(async () => {
+    const [rwys, freqs] = await Promise.all([
+      getRunways(airport.id),
+      getFrequencies(airport.id),
+    ])
+    setRunwayCount(rwys.length)
+    setFreqCount(freqs.length)
+    setExistingRunways(rwys)
+    setExistingFreqs(freqs)
+  }, [airport.id])
+
   useEffect(() => {
     let cancelled = false
-    async function check() {
-      const [rwys, freqs] = await Promise.all([
-        getRunways(airport.id),
-        getFrequencies(airport.id),
-      ])
-      if (!cancelled) {
-        setRunwayCount(rwys.length)
-        setFreqCount(freqs.length)
-      }
-    }
-    check()
+    refreshCounts().then(() => { if (cancelled) return })
     return () => { cancelled = true }
-  }, [airport.id])
+  }, [refreshCounts])
 
   const isComplete = airport.latitude != null && airport.longitude != null
     && airport.elevation_ft != null && (runwayCount ?? 0) > 0 && (freqCount ?? 0) > 0
@@ -284,8 +303,12 @@ function AirportDetail({
     const data = await inquireAirport(airport.icao_code)
     setInquiryData(data)
     setInquiryLoading(false)
-    if (data.found) setInquiryOpen(true)
-    else alert(`No data found for ${airport.icao_code} in OurAirports database.`)
+    if (data.found) {
+      setInquiryOpen(true)
+    } else {
+      // Show error in modal anyway so user sees the message
+      setInquiryOpen(true)
+    }
   }
 
   return (
@@ -296,21 +319,35 @@ function AirportDetail({
           <div className="flex items-center gap-3">
             <h2 className="text-2xl font-bold truncate">{airport.name}</h2>
             {isComplete ? (
-              <Badge variant="secondary" className="text-[10px] gap-1 shrink-0">
-                <CheckCircle2 className="h-3 w-3 text-green-500" /> Complete
+              <Badge variant="secondary" className="text-[10px] gap-1 shrink-0 bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20">
+                <CheckCircle2 className="h-3 w-3" /> Complete
               </Badge>
             ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0 text-xs h-7 gap-1.5"
-                onClick={handleInquiry}
-                disabled={inquiryLoading}
-                title={missingFields.length > 0 ? `Missing: ${missingFields.join(', ')}` : ''}
-              >
-                <Satellite className="h-3.5 w-3.5" />
-                {inquiryLoading ? 'Fetching...' : 'Inquiry'}
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0 text-xs h-7 gap-1.5"
+                      onClick={handleInquiry}
+                      disabled={inquiryLoading}
+                    >
+                      {inquiryLoading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Satellite className="h-3.5 w-3.5" />
+                      )}
+                      {inquiryLoading ? 'Fetching...' : 'Inquiry'}
+                    </Button>
+                  </TooltipTrigger>
+                  {missingFields.length > 0 && (
+                    <TooltipContent>
+                      <p>Missing: {missingFields.join(', ')}</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
             )}
           </div>
           <p className="text-muted-foreground text-sm">
@@ -335,15 +372,11 @@ function AirportDetail({
         iataCode={airport.iata_code}
         data={inquiryData}
         currentAirport={airport}
+        existingRunways={existingRunways}
+        existingFreqs={existingFreqs}
         onApplied={() => {
           onFieldUpdated()
-          setRunwayCount(null)
-          setFreqCount(null)
-          // Re-check counts
-          Promise.all([getRunways(airport.id), getFrequencies(airport.id)]).then(([r, f]) => {
-            setRunwayCount(r.length)
-            setFreqCount(f.length)
-          })
+          refreshCounts()
         }}
       />
 
@@ -369,7 +402,7 @@ function AirportDetail({
             <TabsTrigger value="runway" className="text-xs"><span className="flex items-center gap-1.5"><Plane className="h-3.5 w-3.5" /> Runway & Facilities</span></TabsTrigger>
             <TabsTrigger value="operations" className="text-xs"><span className="flex items-center gap-1.5"><Radio className="h-3.5 w-3.5" /> Operations</span></TabsTrigger>
             <TabsTrigger value="weather" className="text-xs"><span className="flex items-center gap-1.5"><Cloud className="h-3.5 w-3.5" /> Weather</span></TabsTrigger>
-            <TabsTrigger value="tat" className="text-xs"><span className="flex items-center gap-1.5"><Timer className="h-3.5 w-3.5" /> TAT</span></TabsTrigger>
+            <TabsTrigger value="tat" className="text-xs"><span className="flex items-center gap-1.5"><Timer className="h-3.5 w-3.5" /> Turn Around Time</span></TabsTrigger>
             <TabsTrigger value="crew" className="text-xs"><span className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5" /> Crew</span></TabsTrigger>
             <TabsTrigger value="diversions" className="text-xs"><span className="flex items-center gap-1.5"><AlertTriangle className="h-3.5 w-3.5" /> Diversions</span></TabsTrigger>
           </TabsList>
@@ -1195,23 +1228,23 @@ function TatTab({ airport, aircraftTypes }: { airport: AirportWithCountry; aircr
         <div>
           <h3 className="text-sm font-semibold">Turn Around Times</h3>
           <p className="text-[11px] text-muted-foreground mt-0.5">
-            Airport TAT overrides Aircraft Type default TAT. Leave blank to use aircraft type defaults.
+            Airport Turn Around Time overrides Aircraft Type defaults. Leave blank to use aircraft type defaults.
           </p>
         </div>
-        <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4 mr-1" /> Add TAT Rule</Button>
+        <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4 mr-1" /> Add Rule</Button>
       </div>
 
       {loading ? (
         <div className="text-center py-6 text-muted-foreground text-sm">Loading...</div>
       ) : rules.length === 0 ? (
-        <div className="text-center py-6 text-muted-foreground text-sm">No TAT rules configured. Using aircraft type defaults.</div>
+        <div className="text-center py-6 text-muted-foreground text-sm">No Turn Around Time rules configured. Using aircraft type defaults.</div>
       ) : (
         <div className="overflow-x-auto custom-scrollbar">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/10 text-xs text-muted-foreground">
                 <th className="text-left py-2 px-2 font-medium">A/C Type</th>
-                <th className="text-left py-2 px-2 font-medium">Default TAT</th>
+                <th className="text-left py-2 px-2 font-medium">Default (min)</th>
                 <th className="text-left py-2 px-2 font-medium">Commercial</th>
                 <th className="text-left py-2 px-2 font-medium">DOM→DOM</th>
                 <th className="text-left py-2 px-2 font-medium">DOM→INT</th>
@@ -1246,7 +1279,7 @@ function TatRow({ rule, onUpdated }: { rule: TatRuleWithType; onUpdated: () => v
       <td className="py-2.5 px-2 font-mono text-xs">{rule.tat_int_int_minutes ?? '—'}</td>
       <td className="py-2.5 px-2 text-right">
         <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={async () => {
-          if (!confirm(`Delete TAT rule for ${rule.aircraft_types?.icao_type}?`)) return
+          if (!confirm(`Delete Turn Around Time rule for ${rule.aircraft_types?.icao_type}?`)) return
           const r = await deleteTatRule(rule.id)
           if (r?.error) alert(r.error); else onUpdated()
         }}>
@@ -1286,7 +1319,7 @@ function TatFormDialog({ open, onOpenChange, airportId, aircraftTypes, existingT
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Add TAT Rule</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Add Turn Around Time Rule</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1">
             <label className="text-xs font-medium">Aircraft Type</label>
@@ -1305,7 +1338,7 @@ function TatFormDialog({ open, onOpenChange, airportId, aircraftTypes, existingT
           <div className="space-y-1"><label className="text-xs font-medium">Notes</label><Input name="notes" placeholder="Optional notes..." /></div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>Cancel</Button>
-            <Button type="submit" disabled={loading}>{loading ? 'Saving...' : 'Add TAT Rule'}</Button>
+            <Button type="submit" disabled={loading}>{loading ? 'Saving...' : 'Add Rule'}</Button>
           </div>
         </form>
       </DialogContent>
@@ -1380,8 +1413,16 @@ function DiversionsTab({ airport, onFieldUpdated }: { airport: AirportWithCountr
 // INQUIRY MODAL
 // ═══════════════════════════════════════════════════════════════════════════
 
+interface BasicFieldRow {
+  key: 'latitude' | 'longitude' | 'elevation_ft'
+  label: string
+  current: number | null
+  found: number | null
+  status: 'new' | 'match' | 'differ'
+}
+
 function InquiryModal({
-  open, onOpenChange, airportId, icaoCode, iataCode, data, currentAirport, onApplied,
+  open, onOpenChange, airportId, icaoCode, iataCode, data, currentAirport, existingRunways, existingFreqs, onApplied,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
@@ -1390,94 +1431,257 @@ function InquiryModal({
   iataCode: string | null
   data: InquiryResult | null
   currentAirport: AirportWithCountry
+  existingRunways: AirportRunway[]
+  existingFreqs: AirportFrequency[]
   onApplied: () => void
 }) {
-  const [applyBasic, setApplyBasic] = useState(true)
-  const [applyRunways, setApplyRunways] = useState(true)
-  const [applyFrequencies, setApplyFrequencies] = useState(true)
+  // Per-row selection state for basic info fields
+  const [selectedBasicFields, setSelectedBasicFields] = useState<Set<string>>(new Set())
+  // Per-row selection state for runways (by index)
+  const [selectedRunways, setSelectedRunways] = useState<Set<number>>(new Set())
+  // Per-row selection state for frequencies (by index)
+  const [selectedFrequencies, setSelectedFrequencies] = useState<Set<number>>(new Set())
   const [applying, setApplying] = useState(false)
 
+  // Build basic info comparison rows
+  const basicRows = useMemo((): BasicFieldRow[] => {
+    if (!data?.basicInfo) return []
+    const rows: BasicFieldRow[] = []
+    const fields: { key: 'latitude' | 'longitude' | 'elevation_ft'; label: string }[] = [
+      { key: 'latitude', label: 'Latitude' },
+      { key: 'longitude', label: 'Longitude' },
+      { key: 'elevation_ft', label: 'Elevation (ft)' },
+    ]
+    for (const f of fields) {
+      const found = data.basicInfo![f.key]
+      if (found == null) continue
+      const current = currentAirport[f.key] as number | null
+      let status: BasicFieldRow['status'] = 'new'
+      if (current != null) {
+        // For lat/lon, compare to 4 decimal places; for elevation, exact
+        if (f.key === 'elevation_ft') {
+          status = current === found ? 'match' : 'differ'
+        } else {
+          status = Math.abs(current - found) < 0.0001 ? 'match' : 'differ'
+        }
+      }
+      rows.push({ key: f.key, label: f.label, current, found, status })
+    }
+    return rows
+  }, [data, currentAirport])
+
+  // Build runway status: which ones already exist
+  const runwayStatuses = useMemo(() => {
+    if (!data?.runways) return []
+    const existingIds = new Set(existingRunways.map((r) => r.identifier))
+    return data.runways.map((r) => ({
+      ...r,
+      exists: existingIds.has(r.identifier),
+    }))
+  }, [data, existingRunways])
+
+  // Build frequency status: which ones already exist
+  const freqStatuses = useMemo(() => {
+    if (!data?.frequencies) return []
+    const existingKeys = new Set(existingFreqs.map((f) => `${f.type}::${f.frequency}`))
+    return data.frequencies.map((f) => ({
+      ...f,
+      exists: existingKeys.has(`${f.type}::${f.frequency}`),
+    }))
+  }, [data, existingFreqs])
+
+  // Reset selections when modal opens
   useEffect(() => {
-    setApplyBasic(true)
-    setApplyRunways(true)
-    setApplyFrequencies(true)
-  }, [open])
+    if (!open) return
+    // Auto-select importable items
+    const bf = new Set<string>()
+    basicRows.forEach((r) => { if (r.status === 'new' || r.status === 'differ') bf.add(r.key) })
+    setSelectedBasicFields(bf)
 
-  if (!data || !data.found) return null
+    const sr = new Set<number>()
+    runwayStatuses.forEach((r, i) => { if (!r.exists) sr.add(i) })
+    setSelectedRunways(sr)
 
-  const basicChanges: { field: string; current: string; newVal: string }[] = []
-  if (data.basicInfo) {
-    if (data.basicInfo.latitude != null && currentAirport.latitude == null) {
-      basicChanges.push({ field: 'Latitude', current: '—', newVal: data.basicInfo.latitude.toFixed(6) })
-    }
-    if (data.basicInfo.longitude != null && currentAirport.longitude == null) {
-      basicChanges.push({ field: 'Longitude', current: '—', newVal: data.basicInfo.longitude.toFixed(6) })
-    }
-    if (data.basicInfo.elevation_ft != null && currentAirport.elevation_ft == null) {
-      basicChanges.push({ field: 'Elevation (ft)', current: '—', newVal: String(data.basicInfo.elevation_ft) })
-    }
+    const sf = new Set<number>()
+    freqStatuses.forEach((f, i) => { if (!f.exists) sf.add(i) })
+    setSelectedFrequencies(sf)
+  }, [open, basicRows, runwayStatuses, freqStatuses])
+
+  // Count what will be applied
+  const basicCount = selectedBasicFields.size
+  const rwyCount = Array.from(selectedRunways).filter((i) => !runwayStatuses[i]?.exists).length
+  const freqCount = Array.from(selectedFrequencies).filter((i) => !freqStatuses[i]?.exists).length
+  const totalActions = basicCount + rwyCount + freqCount
+
+  const toggleBasicField = (key: string) => {
+    setSelectedBasicFields((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  const toggleRunway = (idx: number) => {
+    setSelectedRunways((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx); else next.add(idx)
+      return next
+    })
+  }
+
+  const toggleFrequency = (idx: number) => {
+    setSelectedFrequencies((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx); else next.add(idx)
+      return next
+    })
   }
 
   const handleApply = async () => {
     setApplying(true)
-    const result = await applyInquiryData(airportId, {
-      applyBasic,
-      basicInfo: data.basicInfo ? {
-        latitude: currentAirport.latitude == null ? data.basicInfo.latitude : null,
-        longitude: currentAirport.longitude == null ? data.basicInfo.longitude : null,
-        elevation_ft: currentAirport.elevation_ft == null ? data.basicInfo.elevation_ft : null,
-      } : undefined,
-      applyRunways,
-      runways: data.runways,
-      applyFrequencies,
-      frequencies: data.frequencies,
+
+    // Build basic fields to update
+    const basicFields: { latitude?: number | null; longitude?: number | null; elevation_ft?: number | null } = {}
+    for (const row of basicRows) {
+      if (selectedBasicFields.has(row.key) && row.found != null && row.status !== 'match') {
+        basicFields[row.key] = row.found
+      }
+    }
+    const hasBasic = Object.keys(basicFields).length > 0
+
+    // Build runways to import (only non-existing, selected)
+    const runwaysToImport: InquiryRunway[] = []
+    Array.from(selectedRunways).forEach((idx) => {
+      const r = runwayStatuses[idx]
+      if (r && !r.exists) {
+        const { exists, ...runway } = r
+        runwaysToImport.push(runway)
+      }
     })
+
+    // Build frequencies to import (only non-existing, selected)
+    const freqsToImport: InquiryFrequency[] = []
+    Array.from(selectedFrequencies).forEach((idx) => {
+      const f = freqStatuses[idx]
+      if (f && !f.exists) {
+        const { exists, ...freq } = f
+        freqsToImport.push(freq)
+      }
+    })
+
+    const result = await applyInquiryData(airportId, {
+      basicFields: hasBasic ? basicFields : undefined,
+      runways: runwaysToImport.length > 0 ? runwaysToImport : undefined,
+      frequencies: freqsToImport.length > 0 ? freqsToImport : undefined,
+    })
+
     setApplying(false)
+
     if (result && 'error' in result) {
-      alert(result.error)
-    } else {
+      toast.error('Apply failed', { description: result.error })
+    } else if (result && 'success' in result) {
+      const r = result.results
+      const parts: string[] = []
+      if (r.fieldsUpdated > 0) parts.push(`${r.fieldsUpdated} field${r.fieldsUpdated > 1 ? 's' : ''}`)
+      if (r.runwaysImported > 0) parts.push(`${r.runwaysImported} runway${r.runwaysImported > 1 ? 's' : ''}`)
+      if (r.frequenciesImported > 0) parts.push(`${r.frequenciesImported} frequenc${r.frequenciesImported > 1 ? 'ies' : 'y'}`)
+      toast.success(`Updated ${iataCode || icaoCode}`, {
+        description: parts.length > 0 ? parts.join(', ') : 'No changes needed',
+      })
       onOpenChange(false)
       onApplied()
     }
   }
 
+  if (!data) return null
+
+  // Error / not found state
+  if (!data.found) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Satellite className="h-5 w-5" /> Airport Inquiry — {iataCode || icaoCode}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-8 text-center space-y-3">
+            <div className="text-4xl">
+              <AlertTriangle className="h-12 w-12 mx-auto text-amber-500 opacity-60" />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {data.error || `No data found for ${icaoCode}. You can enter data manually.`}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>
-            Found data for {iataCode || icaoCode} — {data.basicInfo?.name || currentAirport.name}
+          <DialogTitle className="flex items-center gap-2">
+            <Satellite className="h-5 w-5" /> Airport Inquiry — {iataCode || icaoCode}
           </DialogTitle>
           <DialogDescription>
-            Preview data from OurAirports. Select which sections to apply.
+            Data found from OurAirports database{data.basicInfo?.name ? ` — ${data.basicInfo.name}` : ''}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Basic Info */}
-          {basicChanges.length > 0 && (
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar space-y-4 pr-1">
+          {/* ─── SECTION 1: BASIC INFO ─── */}
+          {basicRows.length > 0 && (
             <div className="glass rounded-xl p-4 space-y-3">
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked={applyBasic} onChange={(e) => setApplyBasic(e.target.checked)}
-                  className="rounded border-border" />
-                <span className="text-sm font-semibold">Basic Info Updates</span>
-                <Badge variant="secondary" className="text-[10px]">{basicChanges.length} changes</Badge>
-              </label>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-semibold">Basic Info Updates</h4>
+                <Badge variant="secondary" className="text-[10px]">
+                  {basicRows.filter((r) => r.status !== 'match').length} change{basicRows.filter((r) => r.status !== 'match').length !== 1 ? 's' : ''}
+                </Badge>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-white/10 text-muted-foreground">
+                      <th className="text-left py-1.5 px-2 font-medium w-8">Update?</th>
                       <th className="text-left py-1.5 px-2 font-medium">Field</th>
-                      <th className="text-left py-1.5 px-2 font-medium">Current</th>
-                      <th className="text-left py-1.5 px-2 font-medium">New Value</th>
+                      <th className="text-left py-1.5 px-2 font-medium">Current Value</th>
+                      <th className="text-left py-1.5 px-2 font-medium">Found Value</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {basicChanges.map((c) => (
-                      <tr key={c.field} className="border-b border-white/5">
-                        <td className="py-1.5 px-2 font-medium">{c.field}</td>
-                        <td className="py-1.5 px-2 text-muted-foreground font-mono">{c.current}</td>
-                        <td className="py-1.5 px-2 font-mono text-green-500">{c.newVal}</td>
+                    {basicRows.map((row) => (
+                      <tr key={row.key} className={cn(
+                        'border-b border-white/5',
+                        row.status === 'differ' && 'bg-amber-500/5'
+                      )}>
+                        <td className="py-2 px-2">
+                          {row.status === 'match' ? (
+                            <Badge variant="secondary" className="text-[9px] gap-0.5 px-1.5 bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20">
+                              <CheckCircle2 className="h-2.5 w-2.5" /> Match
+                            </Badge>
+                          ) : (
+                            <Checkbox
+                              checked={selectedBasicFields.has(row.key)}
+                              onCheckedChange={() => toggleBasicField(row.key)}
+                            />
+                          )}
+                        </td>
+                        <td className="py-2 px-2 font-medium">{row.label}</td>
+                        <td className="py-2 px-2 font-mono text-muted-foreground">
+                          {row.current != null ? (row.key === 'elevation_ft' ? row.current : row.current.toFixed(6)) : <span className="italic">(empty)</span>}
+                        </td>
+                        <td className={cn(
+                          'py-2 px-2 font-mono',
+                          row.status === 'new' && 'text-green-600 dark:text-green-400',
+                          row.status === 'differ' && 'text-amber-600 dark:text-amber-400',
+                        )}>
+                          {row.found != null ? (row.key === 'elevation_ft' ? `${row.found} ft` : row.found.toFixed(6)) : '—'}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1486,34 +1690,50 @@ function InquiryModal({
             </div>
           )}
 
-          {/* Runways */}
-          {data.runways.length > 0 && (
+          {/* ─── SECTION 2: RUNWAYS ─── */}
+          {runwayStatuses.length > 0 && (
             <div className="glass rounded-xl p-4 space-y-3">
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked={applyRunways} onChange={(e) => setApplyRunways(e.target.checked)}
-                  className="rounded border-border" />
-                <span className="text-sm font-semibold">Runways</span>
-                <Badge variant="secondary" className="text-[10px]">{data.runways.length} found</Badge>
-              </label>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-semibold">Runways Found</h4>
+                <Badge variant="secondary" className="text-[10px]">{runwayStatuses.length} found</Badge>
+                {runwayStatuses.filter((r) => r.exists).length > 0 && (
+                  <Badge variant="secondary" className="text-[10px] bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20">
+                    {runwayStatuses.filter((r) => r.exists).length} already exist
+                  </Badge>
+                )}
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-white/10 text-muted-foreground">
+                      <th className="text-left py-1.5 px-2 font-medium w-8">Import?</th>
                       <th className="text-left py-1.5 px-2 font-medium">Identifier</th>
                       <th className="text-left py-1.5 px-2 font-medium">Length (m)</th>
                       <th className="text-left py-1.5 px-2 font-medium">Width (m)</th>
                       <th className="text-left py-1.5 px-2 font-medium">Surface</th>
-                      <th className="text-left py-1.5 px-2 font-medium">Lighting</th>
+                      <th className="text-left py-1.5 px-2 font-medium">Lighted</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.runways.map((r, i) => (
+                    {runwayStatuses.map((r, i) => (
                       <tr key={i} className="border-b border-white/5">
-                        <td className="py-1.5 px-2 font-mono font-bold">{r.identifier}</td>
-                        <td className="py-1.5 px-2 font-mono">{r.length_m ?? '—'}</td>
-                        <td className="py-1.5 px-2 font-mono">{r.width_m ?? '—'}</td>
-                        <td className="py-1.5 px-2">{r.surface || '—'}</td>
-                        <td className="py-1.5 px-2">{r.lighting ? 'Yes' : 'No'}</td>
+                        <td className="py-2 px-2">
+                          {r.exists ? (
+                            <Badge variant="secondary" className="text-[9px] gap-0.5 px-1.5 bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20">
+                              <CheckCircle2 className="h-2.5 w-2.5" /> Exists
+                            </Badge>
+                          ) : (
+                            <Checkbox
+                              checked={selectedRunways.has(i)}
+                              onCheckedChange={() => toggleRunway(i)}
+                            />
+                          )}
+                        </td>
+                        <td className="py-2 px-2 font-mono font-bold">{r.identifier}</td>
+                        <td className="py-2 px-2 font-mono">{r.length_m ?? '—'}</td>
+                        <td className="py-2 px-2 font-mono">{r.width_m ?? '—'}</td>
+                        <td className="py-2 px-2">{r.surface || '—'}</td>
+                        <td className="py-2 px-2">{r.lighting ? 'Yes' : 'No'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1522,30 +1742,46 @@ function InquiryModal({
             </div>
           )}
 
-          {/* Frequencies */}
-          {data.frequencies.length > 0 && (
+          {/* ─── SECTION 3: FREQUENCIES ─── */}
+          {freqStatuses.length > 0 && (
             <div className="glass rounded-xl p-4 space-y-3">
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked={applyFrequencies} onChange={(e) => setApplyFrequencies(e.target.checked)}
-                  className="rounded border-border" />
-                <span className="text-sm font-semibold">Frequencies</span>
-                <Badge variant="secondary" className="text-[10px]">{data.frequencies.length} found</Badge>
-              </label>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-semibold">Frequencies Found</h4>
+                <Badge variant="secondary" className="text-[10px]">{freqStatuses.length} found</Badge>
+                {freqStatuses.filter((f) => f.exists).length > 0 && (
+                  <Badge variant="secondary" className="text-[10px] bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20">
+                    {freqStatuses.filter((f) => f.exists).length} already exist
+                  </Badge>
+                )}
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-white/10 text-muted-foreground">
+                      <th className="text-left py-1.5 px-2 font-medium w-8">Import?</th>
                       <th className="text-left py-1.5 px-2 font-medium">Type</th>
                       <th className="text-left py-1.5 px-2 font-medium">Frequency</th>
-                      <th className="text-left py-1.5 px-2 font-medium">Notes</th>
+                      <th className="text-left py-1.5 px-2 font-medium">Description</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.frequencies.map((f, i) => (
+                    {freqStatuses.map((f, i) => (
                       <tr key={i} className="border-b border-white/5">
-                        <td className="py-1.5 px-2 font-medium">{f.type}</td>
-                        <td className="py-1.5 px-2 font-mono font-semibold">{f.frequency}</td>
-                        <td className="py-1.5 px-2 text-muted-foreground truncate max-w-[200px]">{f.notes || '—'}</td>
+                        <td className="py-2 px-2">
+                          {f.exists ? (
+                            <Badge variant="secondary" className="text-[9px] gap-0.5 px-1.5 bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20">
+                              <CheckCircle2 className="h-2.5 w-2.5" /> Exists
+                            </Badge>
+                          ) : (
+                            <Checkbox
+                              checked={selectedFrequencies.has(i)}
+                              onCheckedChange={() => toggleFrequency(i)}
+                            />
+                          )}
+                        </td>
+                        <td className="py-2 px-2 font-medium">{f.type}</td>
+                        <td className="py-2 px-2 font-mono font-semibold">{f.frequency}</td>
+                        <td className="py-2 px-2 text-muted-foreground truncate max-w-[200px]">{f.notes || '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1554,19 +1790,386 @@ function InquiryModal({
             </div>
           )}
 
-          {basicChanges.length === 0 && data.runways.length === 0 && data.frequencies.length === 0 && (
-            <div className="text-center py-6 text-muted-foreground text-sm">
+          {/* No data sections */}
+          {basicRows.length === 0 && runwayStatuses.length === 0 && freqStatuses.length === 0 && (
+            <div className="text-center py-8 text-muted-foreground text-sm">
               No new data to apply — airport data is already up to date.
             </div>
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={applying}>Cancel</Button>
-          <Button onClick={handleApply} disabled={applying || (basicChanges.length === 0 && data.runways.length === 0 && data.frequencies.length === 0)}>
-            {applying ? 'Applying...' : 'Apply Selected'}
-          </Button>
-        </DialogFooter>
+        {/* ─── FOOTER WITH SUMMARY ─── */}
+        <div className="shrink-0 pt-3 border-t border-white/10">
+          {totalActions > 0 && (
+            <p className="text-xs text-muted-foreground mb-3">
+              Will {basicCount > 0 ? `update ${basicCount} field${basicCount > 1 ? 's' : ''}` : ''}
+              {basicCount > 0 && rwyCount > 0 ? ', ' : ''}
+              {rwyCount > 0 ? `import ${rwyCount} runway${rwyCount > 1 ? 's' : ''}` : ''}
+              {(basicCount > 0 || rwyCount > 0) && freqCount > 0 ? ', ' : ''}
+              {freqCount > 0 ? `import ${freqCount} frequenc${freqCount > 1 ? 'ies' : 'y'}` : ''}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={applying}>Cancel</Button>
+            <Button onClick={handleApply} disabled={applying || totalActions === 0}>
+              {applying ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                  Applying...
+                </>
+              ) : (
+                'Apply Selected'
+              )}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADD AIRPORT MODAL — Search + Import from OurAirports or Create Manually
+// ═══════════════════════════════════════════════════════════════════════════
+
+type AddStep = 'search' | 'preview' | 'manual'
+
+function AddAirportModal({
+  open, onOpenChange, existingAirports, onImported,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  existingAirports: AirportWithCountry[]
+  onImported: () => void
+}) {
+  const [step, setStep] = useState<AddStep>('search')
+  const [code, setCode] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [inquiryData, setInquiryData] = useState<InquiryResult | null>(null)
+  const [existingMatch, setExistingMatch] = useState<AirportWithCountry | null>(null)
+  const [manualError, setManualError] = useState<string | null>(null)
+  const [manualLoading, setManualLoading] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Reset state when modal opens
+  useEffect(() => {
+    if (open) {
+      setStep('search')
+      setCode('')
+      setSearching(false)
+      setImporting(false)
+      setInquiryData(null)
+      setExistingMatch(null)
+      setManualError(null)
+      setManualLoading(false)
+      setTimeout(() => inputRef.current?.focus(), 100)
+    }
+  }, [open])
+
+  const handleSearch = async () => {
+    const upper = code.toUpperCase().trim()
+    if (!upper || upper.length < 3 || upper.length > 4) return
+
+    // Check existing airports first
+    const match = existingAirports.find((a) =>
+      a.icao_code === upper || a.iata_code === upper
+    )
+    if (match) {
+      setExistingMatch(match)
+      return
+    }
+
+    setSearching(true)
+    setExistingMatch(null)
+    const data = await inquireAirport(upper)
+    setInquiryData(data)
+    setSearching(false)
+    if (data.found) {
+      setStep('preview')
+    }
+    // If not found, stays on search step showing error
+  }
+
+  const handleImport = async () => {
+    if (!inquiryData?.basicInfo) return
+    setImporting(true)
+    const result = await importNewAirport({
+      basicInfo: inquiryData.basicInfo,
+      runways: inquiryData.runways,
+      frequencies: inquiryData.frequencies,
+    })
+    setImporting(false)
+    if ('error' in result) {
+      toast.error('Import failed', { description: result.error })
+    } else {
+      const name = inquiryData.basicInfo.name || inquiryData.basicInfo.icao_code
+      const label = inquiryData.basicInfo.iata_code || inquiryData.basicInfo.icao_code
+      toast.success(`Imported ${label}`, { description: name || undefined })
+      onOpenChange(false)
+      onImported()
+    }
+  }
+
+  const handleManualSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setManualLoading(true)
+    setManualError(null)
+    const fd = new FormData(e.currentTarget)
+    const result = await createAirport(fd)
+    setManualLoading(false)
+    if (result?.error) {
+      setManualError(result.error)
+    } else {
+      toast.success('Airport created')
+      onOpenChange(false)
+      onImported()
+    }
+  }
+
+  const info = inquiryData?.basicInfo
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Add Airport</DialogTitle>
+          <DialogDescription>
+            {step === 'search' && 'Search by IATA or ICAO code to auto-populate from global database'}
+            {step === 'preview' && info && `Found: ${info.name}`}
+            {step === 'manual' && 'Create a new airport manually'}
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* ─── STEP 1: SEARCH ─── */}
+        {step === 'search' && (
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  ref={inputRef}
+                  value={code}
+                  onChange={(e) => {
+                    setCode(e.target.value.toUpperCase())
+                    setExistingMatch(null)
+                    setInquiryData(null)
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
+                  placeholder="Enter IATA (3 letters) or ICAO (4 letters)..."
+                  className="pl-9 font-mono uppercase"
+                  maxLength={4}
+                />
+              </div>
+              <Button onClick={handleSearch} disabled={searching || code.trim().length < 3}>
+                {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Search'}
+              </Button>
+            </div>
+
+            {/* Existing airport match */}
+            {existingMatch && (
+              <div className="glass rounded-xl p-4 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">
+                    {existingMatch.iata_code || existingMatch.icao_code} already exists in your database
+                  </p>
+                  <p className="text-xs text-muted-foreground">{existingMatch.name} — {existingMatch.city}</p>
+                </div>
+                <Badge variant="secondary" className="text-[10px] bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20 shrink-0">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> Exists
+                </Badge>
+              </div>
+            )}
+
+            {/* Not found in OurAirports */}
+            {inquiryData && !inquiryData.found && !existingMatch && (
+              <div className="glass rounded-xl p-6 text-center space-y-3">
+                <AlertTriangle className="h-10 w-10 mx-auto text-amber-500 opacity-60" />
+                <p className="text-sm text-muted-foreground">
+                  {inquiryData.error || `No data found for ${code.toUpperCase()}.`}
+                </p>
+                <Button variant="outline" size="sm" onClick={() => setStep('manual')}>
+                  Create Manually
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ─── STEP 2: PREVIEW ─── */}
+        {step === 'preview' && inquiryData?.found && info && (
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar space-y-4 pr-1">
+            {/* Basic info preview */}
+            <div className="glass rounded-xl p-4 space-y-3">
+              <h4 className="text-sm font-semibold">Airport Info</h4>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                <div>
+                  <span className="text-muted-foreground">ICAO</span>
+                  <p className="font-mono font-bold">{info.icao_code || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">IATA</span>
+                  <p className="font-mono font-bold">{info.iata_code || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Name</span>
+                  <p className="font-medium">{info.name || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">City</span>
+                  <p>{info.city || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Country</span>
+                  <p>{info.iso_country || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Type</span>
+                  <p className="capitalize">{info.type?.replace(/_/g, ' ') || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Latitude</span>
+                  <p className="font-mono">{info.latitude?.toFixed(6) ?? '—'}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Longitude</span>
+                  <p className="font-mono">{info.longitude?.toFixed(6) ?? '—'}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Elevation</span>
+                  <p className="font-mono">{info.elevation_ft != null ? `${info.elevation_ft} ft` : '—'}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Runways */}
+            {inquiryData.runways.length > 0 && (
+              <div className="glass rounded-xl p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-semibold">Runways</h4>
+                  <Badge variant="secondary" className="text-[10px]">{inquiryData.runways.length}</Badge>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-white/10 text-muted-foreground">
+                        <th className="text-left py-1.5 px-2 font-medium">Identifier</th>
+                        <th className="text-left py-1.5 px-2 font-medium">Length (m)</th>
+                        <th className="text-left py-1.5 px-2 font-medium">Width (m)</th>
+                        <th className="text-left py-1.5 px-2 font-medium">Surface</th>
+                        <th className="text-left py-1.5 px-2 font-medium">Lighted</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inquiryData.runways.map((r, i) => (
+                        <tr key={i} className="border-b border-white/5">
+                          <td className="py-2 px-2 font-mono font-bold">{r.identifier}</td>
+                          <td className="py-2 px-2 font-mono">{r.length_m ?? '—'}</td>
+                          <td className="py-2 px-2 font-mono">{r.width_m ?? '—'}</td>
+                          <td className="py-2 px-2">{r.surface || '—'}</td>
+                          <td className="py-2 px-2">{r.lighting ? 'Yes' : 'No'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Frequencies */}
+            {inquiryData.frequencies.length > 0 && (
+              <div className="glass rounded-xl p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-semibold">Frequencies</h4>
+                  <Badge variant="secondary" className="text-[10px]">{inquiryData.frequencies.length}</Badge>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-white/10 text-muted-foreground">
+                        <th className="text-left py-1.5 px-2 font-medium">Type</th>
+                        <th className="text-left py-1.5 px-2 font-medium">Frequency</th>
+                        <th className="text-left py-1.5 px-2 font-medium">Description</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inquiryData.frequencies.map((f, i) => (
+                        <tr key={i} className="border-b border-white/5">
+                          <td className="py-2 px-2 font-medium">{f.type}</td>
+                          <td className="py-2 px-2 font-mono font-semibold">{f.frequency}</td>
+                          <td className="py-2 px-2 text-muted-foreground truncate max-w-[200px]">{f.notes || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ─── STEP 3: MANUAL CREATE ─── */}
+        {step === 'manual' && (
+          <form onSubmit={handleManualSubmit} className="space-y-3" id="manual-airport-form">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium">ICAO Code *</label>
+                <Input name="icao_code" defaultValue={code.length === 4 ? code : ''} placeholder="RJTT" required maxLength={4} className="font-mono uppercase" onChange={(e) => { e.target.value = e.target.value.toUpperCase() }} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">IATA Code</label>
+                <Input name="iata_code" defaultValue={code.length === 3 ? code : ''} placeholder="HND" maxLength={3} className="font-mono uppercase" onChange={(e) => { e.target.value = e.target.value.toUpperCase() }} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Airport Name *</label>
+              <Input name="airport_name" placeholder="Tokyo Haneda Airport" required />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium">City *</label>
+                <Input name="city" placeholder="Tokyo" required />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Timezone (IANA) *</label>
+                <Input name="timezone" placeholder="Asia/Tokyo" required />
+              </div>
+            </div>
+            {manualError && (
+              <div className="text-sm text-destructive bg-destructive/10 p-3 rounded">{manualError}</div>
+            )}
+          </form>
+        )}
+
+        {/* ─── FOOTER ─── */}
+        <div className="shrink-0 pt-3 border-t border-white/10">
+          <div className="flex justify-between">
+            <div>
+              {step !== 'search' && (
+                <Button variant="ghost" size="sm" onClick={() => setStep('search')}>
+                  Back to Search
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              {step === 'preview' && (
+                <Button onClick={handleImport} disabled={importing}>
+                  {importing ? (
+                    <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Importing...</>
+                  ) : (
+                    'Import Airport'
+                  )}
+                </Button>
+              )}
+              {step === 'manual' && (
+                <Button type="submit" form="manual-airport-form" disabled={manualLoading}>
+                  {manualLoading ? 'Creating...' : 'Create Airport'}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   )

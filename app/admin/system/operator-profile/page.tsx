@@ -40,7 +40,18 @@ export default async function OperatorProfilePage() {
             <CardTitle className="text-base">Company Name</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{profile.name}</p>
+            <div className="flex items-center gap-3">
+              {profile.logo_url ? (
+                <img
+                  src={profile.logo_url}
+                  alt={`${profile.name} logo`}
+                  className="h-10 w-10 object-contain rounded"
+                />
+              ) : (
+                <Building2 className="h-10 w-10 text-muted-foreground/50" />
+              )}
+              <p className="text-2xl font-bold">{profile.name}</p>
+            </div>
           </CardContent>
         </Card>
 

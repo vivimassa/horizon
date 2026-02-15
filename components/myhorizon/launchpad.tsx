@@ -30,6 +30,8 @@ interface LaunchpadProps {
   userRole: string
   isAdmin: boolean
   enabledModules: string[]
+  currentOperatorId?: string
+  operatorLogoUrl?: string | null
 }
 
 function formatDate(date: Date): string {
@@ -40,7 +42,7 @@ function formatDate(date: Date): string {
   return `${day}-${month}-${year}`
 }
 
-export function Launchpad({ userName, userRole, isAdmin, enabledModules }: LaunchpadProps) {
+export function Launchpad({ userName, userRole, isAdmin, enabledModules, currentOperatorId, operatorLogoUrl }: LaunchpadProps) {
   const { preferences, updatePreferences, isLoaded } = useUserPreferences()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const router = useRouter()
@@ -104,11 +106,21 @@ export function Launchpad({ userName, userRole, isAdmin, enabledModules }: Launc
               <span className="text-lg font-mono">{formattedDate}</span>
             </div>
           </div>
-          <UserMenu
-            userName={userName}
-            userRole={userRole}
-            isAdmin={isAdmin}
-          />
+          <div className="flex items-center gap-3">
+            {operatorLogoUrl && (
+              <img
+                src={operatorLogoUrl}
+                alt="Operator logo"
+                className="h-10 w-auto object-contain"
+              />
+            )}
+            <UserMenu
+              userName={userName}
+              userRole={userRole}
+              isAdmin={isAdmin}
+              currentOperatorId={currentOperatorId}
+            />
+          </div>
         </div>
       </div>
 

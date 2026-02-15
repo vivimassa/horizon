@@ -11,7 +11,7 @@ export function MainContent({ children }: { children: React.ReactNode }) {
     <main
       className={cn(
         'flex-1 overflow-hidden px-3 py-2',
-        dockPos === 'left' && 'pl-[88px]',
+        dockPos === 'left' && 'pl-[112px]',
         dockPos === 'bottom' && 'pb-[72px]',
         dockPos === 'top' && 'pt-[72px]',
       )}

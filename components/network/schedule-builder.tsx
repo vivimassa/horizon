@@ -4,12 +4,14 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { ScheduleSeason, AircraftType, Airport, CityPair, FlightServiceType, AirportTatRule } from '@/types/database'
 import { getFlightNumbers } from '@/app/actions/flight-numbers'
 import { saveFlightNumber, deleteFlightNumbers, bulkUpdateFlightNumbers } from '@/app/actions/flight-numbers'
+import { type ScheduleBlockLookup, type CityPairWithAirports, createCityPairFromIata } from '@/app/actions/city-pairs'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
-import { Plus, Download, Upload, RotateCcw, Trash2, AlertTriangle, Copy, Clock } from 'lucide-react'
+import { Plus, Download, Upload, RotateCcw, Trash2, AlertTriangle, Copy, Clock, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 // ─── Types ────────────────────────────────────────────────────
 interface FlightRow {
@@ -39,7 +41,8 @@ interface ScheduleBuilderProps {
   aircraftTypes: AircraftType[]
   airports: Airport[]
   flightServiceTypes: FlightServiceType[]
-  cityPairs: CityPair[]
+  cityPairs: CityPairWithAirports[]
+  blockLookup?: ScheduleBlockLookup[]
   tatRules: AirportTatRule[]
   operatorIataCode: string
   operatorTimezone?: string
@@ -277,8 +280,8 @@ function ImportDialog({ open, onClose, onImport, prefix }: {
 
 // ─── Main Component ───────────────────────────────────────────
 export function ScheduleBuilder({
-  seasons, aircraftTypes, airports, flightServiceTypes, cityPairs, tatRules,
-  operatorIataCode, operatorTimezone,
+  seasons, aircraftTypes, airports, flightServiceTypes, cityPairs, blockLookup,
+  tatRules, operatorIataCode, operatorTimezone,
 }: ScheduleBuilderProps) {
   const prefix = operatorIataCode || 'HZ'
 
@@ -320,11 +323,43 @@ export function ScheduleBuilder({
 
   const blockTimeMap = useMemo(() => {
     const m = new Map<string, { block_time: number; distance: number }>()
-    cityPairs.forEach(cp => {
-      m.set(`${cp.departure_airport}-${cp.arrival_airport}`, { block_time: cp.block_time || 0, distance: cp.distance || 0 })
-    })
+    // Use blockLookup from city_pair_block_hours (IATA-based)
+    if (blockLookup) {
+      for (const bl of blockLookup) {
+        const key = `${bl.dep_iata}-${bl.arr_iata}`
+        // Keep the first (or longest) block time per direction
+        if (!m.has(key) || m.get(key)!.block_time < bl.block_minutes) {
+          m.set(key, { block_time: bl.block_minutes, distance: bl.distance_nm })
+        }
+      }
+    }
+    // Fallback: build from city pairs with airport IATA codes
+    if (m.size === 0) {
+      for (const cp of cityPairs) {
+        const dep = cp.airport1?.iata_code
+        const arr = cp.airport2?.iata_code
+        if (dep && arr && cp.great_circle_distance_nm) {
+          m.set(`${dep}-${arr}`, { block_time: cp.standard_block_minutes || 0, distance: cp.great_circle_distance_nm || 0 })
+          m.set(`${arr}-${dep}`, { block_time: cp.standard_block_minutes || 0, distance: cp.great_circle_distance_nm || 0 })
+        }
+      }
+    }
     return m
+  }, [cityPairs, blockLookup])
+
+  // Track city pairs that exist (IATA pair set, both directions)
+  const existingPairSet = useMemo(() => {
+    const s = new Set<string>()
+    for (const cp of cityPairs) {
+      const a1 = cp.airport1?.iata_code
+      const a2 = cp.airport2?.iata_code
+      if (a1 && a2) { s.add(`${a1}-${a2}`); s.add(`${a2}-${a1}`) }
+    }
+    return s
   }, [cityPairs])
+
+  // Missing city pair banners state
+  const [missingPairBanners, setMissingPairBanners] = useState<Map<string, { dep: string; arr: string; creating: boolean }>>(new Map())
 
   const tatMap = useMemo(() => {
     const m = new Map<string, number>()
@@ -365,9 +400,33 @@ export function ScheduleBuilder({
 
   // ── Lookup functions ──
   function lookupBlock(dep: string, arr: string) {
+    // First try direct IATA lookup
+    const direct = blockTimeMap.get(`${dep}-${arr}`)
+    if (direct) return direct
+    // Try reverse
+    const reverse = blockTimeMap.get(`${arr}-${dep}`)
+    if (reverse) return reverse
+    // Fallback to ICAO lookup
     const dIcao = iataToIcao.get(dep), aIcao = iataToIcao.get(arr)
     if (!dIcao || !aIcao) return null
     return blockTimeMap.get(`${dIcao}-${aIcao}`) || blockTimeMap.get(`${aIcao}-${dIcao}`) || null
+  }
+
+  function checkCityPairExists(dep: string, arr: string): boolean {
+    return existingPairSet.has(`${dep}-${arr}`)
+  }
+
+  function fuzzyMatchIata(input: string): string | null {
+    if (!input || input.length < 2) return null
+    const u = input.toUpperCase()
+    // Exact match
+    if (iataToIcao.has(u)) return u
+    // Fuzzy: find closest IATA code
+    const entries = Array.from(iataToIcao.keys())
+    for (const iata of entries) {
+      if (iata.startsWith(u)) return iata
+    }
+    return null
   }
 
   function lookupTat(arrIata: string, acTypeId: string): { minutes: number; source: string } {
@@ -501,7 +560,26 @@ export function ScheduleBuilder({
       if (field === 'departure_iata' || field === 'arrival_iata') {
         const dep = field === 'departure_iata' ? value as string : row.departure_iata
         const arr = field === 'arrival_iata' ? value as string : row.arrival_iata
-        if (dep && arr && dep !== arr) {
+
+        // Fuzzy match validation
+        if (field === 'departure_iata' && dep && dep.length >= 2 && !iataToIcao.has(dep)) {
+          const match = fuzzyMatchIata(dep)
+          if (match && match !== dep) {
+            row._errors = { ...row._errors, departure_iata: `Did you mean ${match}?` }
+          } else if (!match) {
+            row._errors = { ...row._errors, departure_iata: `Airport '${dep}' not found` }
+          }
+        }
+        if (field === 'arrival_iata' && arr && arr.length >= 2 && !iataToIcao.has(arr)) {
+          const match = fuzzyMatchIata(arr)
+          if (match && match !== arr) {
+            row._errors = { ...row._errors, arrival_iata: `Did you mean ${match}?` }
+          } else if (!match) {
+            row._errors = { ...row._errors, arrival_iata: `Airport '${arr}' not found` }
+          }
+        }
+
+        if (dep && arr && dep !== arr && dep.length === 3 && arr.length === 3) {
           const pair = lookupBlock(dep, arr)
           if (pair && !row.block_minutes) {
             row.block_minutes = pair.block_time
@@ -511,6 +589,14 @@ export function ScheduleBuilder({
               row.sta = sta
               row.arrival_day_offset = calcArrivalDayOffset(row.std, sta)
             }
+          }
+          // Check if city pair exists
+          if (iataToIcao.has(dep) && iataToIcao.has(arr) && !checkCityPairExists(dep, arr)) {
+            setMissingPairBanners(prev => {
+              const next = new Map(prev)
+              next.set(`${dep}-${arr}`, { dep, arr, creating: false })
+              return next
+            })
           }
         }
       }
@@ -972,6 +1058,67 @@ export function ScheduleBuilder({
         </div>
       )}
 
+      {/* Missing City Pair Banners */}
+      {missingPairBanners.size > 0 && (
+        <div className="space-y-1.5">
+          {Array.from(missingPairBanners.entries()).map(([key, { dep, arr, creating }]) => (
+            <div key={key} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm">
+              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+              <span className="text-amber-200">
+                City pair <span className="font-mono font-bold">{dep} ↔ {arr}</span> does not exist.
+              </span>
+              <div className="ml-auto flex items-center gap-2">
+                <Button
+                  size="sm" variant="outline"
+                  className="h-7 text-xs border-amber-500/30 hover:bg-amber-500/20"
+                  disabled={creating}
+                  onClick={async () => {
+                    setMissingPairBanners(prev => {
+                      const next = new Map(prev)
+                      next.set(key, { dep, arr, creating: true })
+                      return next
+                    })
+                    const result = await createCityPairFromIata(dep, arr)
+                    if (result.error) {
+                      toast.error(result.error)
+                      setMissingPairBanners(prev => {
+                        const next = new Map(prev)
+                        next.set(key, { dep, arr, creating: false })
+                        return next
+                      })
+                    } else {
+                      const rt = result.route_type ? result.route_type.charAt(0).toUpperCase() + result.route_type.slice(1) : ''
+                      toast.success(`Created city pair ${dep} ↔ ${arr} (${Math.round(result.distance_nm || 0)} NM, ${rt})`)
+                      setMissingPairBanners(prev => {
+                        const next = new Map(prev)
+                        next.delete(key)
+                        return next
+                      })
+                    }
+                  }}
+                >
+                  {creating ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                  Create & Continue
+                </Button>
+                <Button
+                  size="sm" variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setMissingPairBanners(prev => {
+                      const next = new Map(prev)
+                      next.delete(key)
+                      return next
+                    })
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Grid */}
       {loading ? (
         <div className="text-center py-12 text-muted-foreground">Loading flights...</div>
@@ -1034,7 +1181,7 @@ export function ScheduleBuilder({
                         <div className="flex justify-end gap-0.5">
                           <button onClick={() => handleReturn(gIdx)}
                             className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                            title={row.aircraft_type_id ? `Return flight (TAT: ${lookupTat(row.arrival_iata, row.aircraft_type_id).minutes}m — ${lookupTat(row.arrival_iata, row.aircraft_type_id).source})` : 'Create return flight'}>
+                            title={row.aircraft_type_id ? `Return flight (Turn Around Time: ${lookupTat(row.arrival_iata, row.aircraft_type_id).minutes}m — ${lookupTat(row.arrival_iata, row.aircraft_type_id).source})` : 'Create return flight'}>
                             <RotateCcw className="h-3.5 w-3.5" />
                           </button>
                           <button onClick={() => handleDuplicateRow(gIdx)}

@@ -1,6 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { cookies } from 'next/headers'
 import { ModuleName } from '@/types/database'
+
+const OPERATOR_COOKIE = 'horizon_operator_id'
 
 /**
  * Extended operator type with user role information
@@ -14,6 +17,7 @@ export interface OperatorWithRole {
   regulatory_authority: string
   timezone: string
   enabled_modules: string[]
+  logo_url: string | null
   created_at: string
   updated_at: string
   // User-specific role from user_roles table
@@ -32,31 +36,42 @@ export async function getCurrentOperator(): Promise<OperatorWithRole | null> {
     return null
   }
 
-  // Get operator profile (company-wide data)
+  const cookieStore = await cookies()
+  const selectedId = cookieStore.get(OPERATOR_COOKIE)?.value
+
   const adminClient = createAdminClient()
+
+  // Get all roles for this user
+  const { data: userRoles } = await adminClient
+    .from('user_roles')
+    .select('id, operator_id, role')
+    .eq('user_id', user.id)
+
+  if (!userRoles || userRoles.length === 0) return null
+
+  // Pick the role matching the cookie, or fall back to first
+  let targetRole = userRoles[0]
+  if (selectedId) {
+    const found = userRoles.find(r => r.operator_id === selectedId)
+    if (found) targetRole = found
+  }
+
+  // Get operator profile for the selected operator
   const { data: operator, error: opError } = await adminClient
     .from('operators')
     .select('*')
-    .limit(1)
-    .maybeSingle()
+    .eq('id', targetRole.operator_id)
+    .single()
 
   if (opError || !operator) {
     console.error('Error fetching operator:', opError)
     return null
   }
 
-  // Get user's role from user_roles table
-  const { data: userRole } = await adminClient
-    .from('user_roles')
-    .select('id, role, operator_id')
-    .eq('user_id', user.id)
-    .eq('operator_id', operator.id)
-    .maybeSingle()
-
   return {
     ...operator,
-    user_role: userRole?.role || null,
-    user_role_id: userRole?.id || null
+    user_role: targetRole.role || null,
+    user_role_id: targetRole.id || null
   }
 }
 

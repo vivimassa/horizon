@@ -10,6 +10,7 @@ import { ThemeProvider } from '@/components/theme-provider'
 import { SchemeProvider } from '@/components/scheme-provider'
 import { CommandPalette } from '@/components/search/command-palette'
 import { StatusBar } from '@/components/status-bar'
+import { Toaster } from 'sonner'
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -60,6 +61,13 @@ export default async function RootLayout({
             <ResponsiveDock operator={operator} accessibleModules={accessibleModules} />
             <StatusBar operatorName={operatorName} userName={userName} userRole={userRole} />
             <CommandPalette />
+            <Toaster
+              position="top-right"
+              toastOptions={{
+                className: 'glass-heavy',
+                style: { backdropFilter: 'blur(16px)' },
+              }}
+            />
           </SchemeProvider>
         </ThemeProvider>
       </body>

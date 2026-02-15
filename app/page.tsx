@@ -26,6 +26,8 @@ export default async function Home() {
       userRole={userRole}
       isAdmin={admin}
       enabledModules={enabledModules}
+      currentOperatorId={operator?.id}
+      operatorLogoUrl={operator?.logo_url}
     />
   )
 }

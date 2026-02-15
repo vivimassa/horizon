@@ -315,11 +315,7 @@
   overflow: hidden;
 }
 
-/* ===== Leaflet overrides for glass style ===== */
-.country-map-container .leaflet-container {
-  background: transparent !important;
-}
-
-.country-map-container .leaflet-control-attribution {
-  display: none;
+/* ===== Mapbox overrides ===== */
+.mapboxgl-ctrl-attrib {
+  display: none !important;
 }
