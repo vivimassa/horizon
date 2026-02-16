@@ -4,15 +4,16 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { ScheduleSeason, AircraftType, Airport } from '@/types/database'
 import {
   AircraftRoute, AircraftRouteLeg,
-  getAircraftRoutes, getUnassignedFlightCount, createAircraftRoute,
+  getAircraftRoutes, getUnassignedFlightCount,
   checkDuplicateFlight, saveRoute, deleteRoute as deleteRouteAction,
-  publishRoute as publishRouteAction, getRecentRoutes,
-  type RecentRoute, type SaveRouteInput,
+  publishRoute as publishRouteAction, getRouteTemplates,
+  type RouteTemplate, type SaveRouteInput,
 } from '@/app/actions/aircraft-routes'
+import { type ScheduleBlockLookup } from '@/app/actions/city-pairs'
 import { cn, minutesToHHMM } from '@/lib/utils'
 import {
   Plus, Search, RefreshCw, Plane, ChevronDown, ChevronRight,
-  GripVertical, Trash2, Save, RotateCcw, AlertTriangle,
+  Trash2, Save, RotateCcw, AlertTriangle,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StatusGreen, StatusYellow, StatusRed, StatusGray } from '@/components/ui/validation-icons'
@@ -27,7 +28,8 @@ interface Props {
   initialRoutes: AircraftRoute[]
   initialUnassignedCount: number
   operatorIataCode: string
-  initialRecentRoutes: RecentRoute[]
+  initialTemplates: RouteTemplate[]
+  blockLookup?: ScheduleBlockLookup[]
 }
 
 // ─── DOW Helpers ──────────────────────────────────────────────
@@ -45,23 +47,6 @@ function toggleDow(value: string, pos: number): string {
   return chars.join('')
 }
 
-function DowCirclesSmall({ value }: { value: string }) {
-  return (
-    <div className="flex items-center gap-[2px]">
-      {DOW_LABELS.map((label, i) => (
-        <div
-          key={i}
-          className={cn(
-            'w-[16px] h-[16px] rounded-full text-[8px] font-semibold leading-none flex items-center justify-center',
-            isDayActive(value, i)
-              ? 'bg-[#991b1b] text-white'
-              : 'bg-transparent text-[#d1d5db] dark:text-[#4b5563] border border-[#e5e7eb] dark:border-[#374151]'
-          )}
-        >{label}</div>
-      ))}
-    </div>
-  )
-}
 
 function DowCirclesInteractive({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -83,21 +68,6 @@ function DowCirclesInteractive({ value, onChange }: { value: string; onChange: (
   )
 }
 
-function DowDotsTiny({ value }: { value: string }) {
-  return (
-    <div className="flex items-center gap-[2px]">
-      {DOW_LABELS.map((_, i) => (
-        <div
-          key={i}
-          className={cn(
-            'w-[4px] h-[4px] rounded-full',
-            isDayActive(value, i) ? 'bg-[#991b1b]' : 'bg-gray-300 dark:bg-gray-600'
-          )}
-        />
-      ))}
-    </div>
-  )
-}
 
 // ─── Time / Input Helpers ─────────────────────────────────────
 
@@ -259,6 +229,95 @@ function groupRoutesByAircraftType(routes: AircraftRoute[], aircraftTypes: Aircr
   })
 }
 
+// ─── Date formatting (DD/MM/YYYY text input) ─────────────────
+
+function formatDateInput(raw: string): string {
+  const digits = raw.replace(/\D/g, '').slice(0, 8)
+  let out = ''
+  if (digits.length > 0) out += digits.slice(0, 2)
+  if (digits.length > 2) out += '/' + digits.slice(2, 4)
+  if (digits.length > 4) out += '/' + digits.slice(4, 8)
+  return out
+}
+
+/** Convert DD/MM/YYYY display → YYYY-MM-DD storage */
+function displayToIso(display: string): string {
+  const m = display.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+  if (!m) return ''
+  return `${m[3]}-${m[2]}-${m[1]}`
+}
+
+/** Convert YYYY-MM-DD storage → DD/MM/YYYY display */
+function isoToDisplay(iso: string): string {
+  if (!iso) return ''
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return iso
+  return `${m[3]}/${m[2]}/${m[1]}`
+}
+
+// ─── Tab index calculator ─────────────────────────────────────
+
+const TAB_ROUTE_NO = 1
+const TAB_AC_TYPE = 2
+const TAB_FROM = 3
+const TAB_TO = 4
+const TAB_LEG_BASE = 5
+const FIELDS_PER_ROW = 7
+
+function legTabIndex(rowIdx: number, fieldIdx: number): number {
+  return TAB_LEG_BASE + (rowIdx * FIELDS_PER_ROW) + fieldIdx
+}
+
+/** Focus a grid cell by row/col. Works across LegRow, GridEntryRow, and FocusableEmptyRow. */
+function focusGridCell(row: number, col: number) {
+  if (row < 0 || col < 0 || col > 6) return
+  const el = document.querySelector<HTMLElement>(`[data-grid-row="${row}"][data-grid-col="${col}"]`)
+  if (!el) return
+  if (el.tagName === 'INPUT') {
+    ;(el as HTMLInputElement).focus()
+    ;(el as HTMLInputElement).select()
+  } else {
+    el.click()
+  }
+}
+
+// ─── AC Type matching (ranked) ─────────────────────────────────
+
+function rankAcTypeMatch(icao: string, name: string, query: string): number {
+  const q = query.toUpperCase()
+  const ic = icao.toUpperCase()
+  const nm = name.toUpperCase()
+  if (ic === q) return 0                  // exact ICAO
+  if (ic.startsWith(q)) return 1          // ICAO starts with
+  if (ic.endsWith(q)) return 2            // ICAO ends with (e.g. "321" → "A321")
+  if (ic.includes(q)) return 3            // ICAO contains
+  if (nm.includes(q)) return 4            // name contains
+  return -1                               // no match
+}
+
+function findBestAcType(types: AircraftType[], query: string): AircraftType | undefined {
+  if (!query) return undefined
+  let best: AircraftType | undefined
+  let bestRank = 99
+  for (const t of types) {
+    if (!t.is_active) continue
+    const r = rankAcTypeMatch(t.icao_type, t.name, query)
+    if (r >= 0 && r < bestRank) { best = t; bestRank = r }
+    if (bestRank === 0) break // exact match, stop early
+  }
+  return best
+}
+
+function filterAndSortAcTypes(types: AircraftType[], query: string): AircraftType[] {
+  const q = query.toUpperCase()
+  return types
+    .filter(t => t.is_active)
+    .map(t => ({ type: t, rank: rankAcTypeMatch(t.icao_type, t.name, q) }))
+    .filter(x => x.rank >= 0)
+    .sort((a, b) => a.rank - b.rank)
+    .map(x => x.type)
+}
+
 // ─── Form types ───────────────────────────────────────────────
 
 interface RouteFormState {
@@ -279,15 +338,17 @@ interface NewLegDraft {
   arrStation: string
   stdLocal: string
   staLocal: string
+  serviceType: string
   _autoFilledDep: boolean
   _autoFilledStd: boolean
+  _autoFilledSta: boolean
   _errors: Record<string, boolean>
   _duplicateError: string | null
   _checking: boolean
 }
 
 function emptyDraft(): NewLegDraft {
-  return { flightNumber: '', depStation: '', arrStation: '', stdLocal: '', staLocal: '', _autoFilledDep: false, _autoFilledStd: false, _errors: {}, _duplicateError: null, _checking: false }
+  return { flightNumber: '', depStation: '', arrStation: '', stdLocal: '', staLocal: '', serviceType: 'J', _autoFilledDep: false, _autoFilledStd: false, _autoFilledSta: false, _errors: {}, _duplicateError: null, _checking: false }
 }
 
 function makeLegId(): string {
@@ -299,7 +360,7 @@ function makeLegId(): string {
 // ═══════════════════════════════════════════════════════════════
 
 export function AircraftRoutesBuilder({
-  seasons, aircraftTypes, airports, initialRoutes, initialUnassignedCount, operatorIataCode, initialRecentRoutes,
+  seasons, aircraftTypes, airports, initialRoutes, initialUnassignedCount, operatorIataCode, initialTemplates, blockLookup,
 }: Props) {
   const [selectedSeason, setSelectedSeason] = useState(seasons[0]?.id || '')
   const [routes, setRoutes] = useState<AircraftRoute[]>(initialRoutes)
@@ -308,20 +369,40 @@ export function AircraftRoutesBuilder({
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const [acTypeFilter, setAcTypeFilter] = useState<Set<string>>(new Set())
+  const [filterOpen, setFilterOpen] = useState(false)
+  const filterRef = useRef<HTMLDivElement>(null!)
 
   // ── Route detail state ──
   const [form, setForm] = useState<RouteFormState | null>(null)
   const [legs, setLegs] = useState<LegWithOffsets[]>([])
   const [isDirty, setIsDirty] = useState(false)
+  const [isNewRoute, setIsNewRoute] = useState(false)
   const [isAdding, setIsAdding] = useState(false)
   const [draft, setDraft] = useState<NewLegDraft>(emptyDraft())
   const [editingCell, setEditingCell] = useState<{ legId: string; field: string } | null>(null)
   const [editValue, setEditValue] = useState('')
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [dropIdx, setDropIdx] = useState<number | null>(null)
+  const [activeEmptyRow, setActiveEmptyRow] = useState<number | null>(null)
+  const [focusField, setFocusField] = useState<string | null>(null)
+  const [selectedLegIdx, setSelectedLegIdx] = useState<number | null>(null)
+
+  // ── Undo/Redo history ──
+  const [legsHistory, setLegsHistory] = useState<LegWithOffsets[][]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+
+  // ── AC Type combo state ──
+  const [acTypeSearch, setAcTypeSearch] = useState('')
+  const [acTypeOpen, setAcTypeOpen] = useState(false)
+  const acTypeInputRef = useRef<HTMLInputElement>(null!)
+  const acTypeDropRef = useRef<HTMLDivElement>(null!)
+
+  // ── Date display state (DD/MM/YYYY text) ──
+  const [fromDisplay, setFromDisplay] = useState('')
+  const [toDisplay, setToDisplay] = useState('')
 
   // ── Dialogs ──
-  const [pendingRouteId, setPendingRouteId] = useState<string | null>(null)
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false)
   const [showWarningDialog, setShowWarningDialog] = useState(false)
   const [saveWarnings, setSaveWarnings] = useState<string[]>([])
@@ -331,9 +412,13 @@ export function AircraftRoutesBuilder({
 
   // ── Save / action state ──
   const [saving, setSaving] = useState(false)
-  const [recentRoutes, setRecentRoutes] = useState<RecentRoute[]>(initialRecentRoutes)
+  const [templates, setTemplates] = useState<RouteTemplate[]>(initialTemplates)
 
   const snapshotRef = useRef<{ form: RouteFormState; legs: LegWithOffsets[] } | null>(null)
+  const isNewRouteRef = useRef(false)
+  isNewRouteRef.current = isNewRoute
+  const pendingActionRef = useRef<(() => void) | null>(null)
+  const hasManualRouteNameRef = useRef(false)
 
   // ── Browser navigation guard ──
   useEffect(() => {
@@ -343,6 +428,13 @@ export function AircraftRoutesBuilder({
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [isDirty])
+
+  // ── Keyboard shortcuts ref (to avoid stale closures) ──
+  const shortcutRefs = useRef<{
+    save: () => void; undo: () => void; redo: () => void
+    newRoute: () => void; duplicate: () => void; cancel: () => void
+    deleteSelectedLeg: () => void
+  }>({ save: () => {}, undo: () => {}, redo: () => {}, newRoute: () => {}, duplicate: () => {}, cancel: () => {}, deleteSelectedLeg: () => {} })
 
   // ── Lookup maps ──
   const acTypeMap = useMemo(() => {
@@ -362,6 +454,17 @@ export function AircraftRoutesBuilder({
     airports.forEach(a => { if (a.iata_code && a.country) m.set(a.iata_code, a.country) })
     return m
   }, [airports])
+
+  const blockTimeMap = useMemo(() => {
+    const m = new Map<string, number>()
+    if (blockLookup) {
+      for (const bl of blockLookup) {
+        const key = `${bl.dep_iata}-${bl.arr_iata}`
+        if (!m.has(key)) m.set(key, bl.block_minutes)
+      }
+    }
+    return m
+  }, [blockLookup])
 
   const operatorCountry = useMemo(() => {
     const countryCount = new Map<string, number>()
@@ -383,11 +486,44 @@ export function AircraftRoutesBuilder({
     return copy
   }, [])
 
+  // ── Undo/Redo helpers (use refs to avoid stale closures) ──
+  const historyRef = useRef({ history: legsHistory, index: historyIndex })
+  historyRef.current = { history: legsHistory, index: historyIndex }
+
+  const pushHistory = useCallback((newLegs: LegWithOffsets[]) => {
+    const { history, index } = historyRef.current
+    const trimmed = history.slice(0, index + 1)
+    const next = [...trimmed, newLegs.map(l => ({ ...l }))]
+    setLegsHistory(next)
+    setHistoryIndex(next.length - 1)
+  }, [])
+
+  const handleUndo = useCallback(() => {
+    const { history, index } = historyRef.current
+    if (index <= 0) return
+    const prevIdx = index - 1
+    setHistoryIndex(prevIdx)
+    setLegs(history[prevIdx].map(l => ({ ...l })))
+    setIsDirty(true)
+  }, [])
+
+  const handleRedo = useCallback(() => {
+    const { history, index } = historyRef.current
+    if (index >= history.length - 1) return
+    const nextIdx = index + 1
+    setHistoryIndex(nextIdx)
+    setLegs(history[nextIdx].map(l => ({ ...l })))
+    setIsDirty(true)
+  }, [])
+
   // ── Load route ──
   const loadRoute = useCallback((routeId: string | null) => {
+    // Don't clear form when we're on a new (unsaved) route
+    if (!routeId && isNewRouteRef.current) return
+
     const route = routes.find(r => r.id === routeId)
     if (!route) {
-      setForm(null); setLegs([]); setIsDirty(false); setIsAdding(false); setEditingCell(null)
+      setForm(null); setLegs([]); setIsDirty(false); setIsAdding(false); setEditingCell(null); setSelectedLegIdx(null)
       snapshotRef.current = null
       return
     }
@@ -406,16 +542,36 @@ export function AircraftRoutesBuilder({
       ...l, _dayOffset: l.day_offset || 0, _arrivesNextDay: l.arrives_next_day || false,
     }))
     calculateDayOffsets(legsWithOffsets)
-    setForm(f); setLegs(legsWithOffsets); setIsDirty(false); setIsAdding(false); setEditingCell(null)
+    setForm(f); setLegs(legsWithOffsets); setIsDirty(false); setIsAdding(false); setEditingCell(null); setSelectedLegIdx(null)
+    hasManualRouteNameRef.current = true
     snapshotRef.current = { form: { ...f }, legs: legsWithOffsets.map(l => ({ ...l })) }
-  }, [routes, selectedSeason])
+    // Sync AC type search display
+    const at = aircraftTypes.find(t => t.id === f.aircraftTypeId)
+    setAcTypeSearch(at ? at.icao_type : '')
+    // Sync date display
+    setFromDisplay(isoToDisplay(f.periodStart))
+    setToDisplay(isoToDisplay(f.periodEnd))
+    // Initialize undo history
+    setLegsHistory([legsWithOffsets.map(l => ({ ...l }))])
+    setHistoryIndex(0)
+  }, [routes, selectedSeason, aircraftTypes])
 
   useEffect(() => { loadRoute(selectedRouteId) }, [selectedRouteId, routes, loadRoute])
+
+  // ── Auto-fill route name from first flight number ──
+  useEffect(() => {
+    if (hasManualRouteNameRef.current) return
+    if (!form || !isAdding || legs.length > 0) return
+    const newName = draft.flightNumber || ''
+    if (form.routeName !== newName) {
+      setForm(prev => prev ? { ...prev, routeName: newName } : null)
+    }
+  }, [draft.flightNumber, isAdding, legs.length, form])
 
   // ── Computed values ──
   const chain = useMemo(() => {
     if (legs.length === 0) return ''
-    return legs.map(l => l.dep_station).concat(legs[legs.length - 1].arr_station).join(' \u2192 ')
+    return legs.map(l => l.dep_station).concat(legs[legs.length - 1].arr_station).join('-')
   }, [legs])
 
   const isRoundTrip = useMemo(() => legs.length >= 2 && legs[0].dep_station === legs[legs.length - 1].arr_station, [legs])
@@ -481,13 +637,27 @@ export function AircraftRoutesBuilder({
     if (!isAdding) return null
 
     const dep = draft.depStation.toUpperCase()
+    const arr = draft.arrStation.toUpperCase()
     const stdNorm = normalizeTime(draft.stdLocal)
     const staNorm = normalizeTime(draft.staLocal)
+    const hasFlt = draft.flightNumber.length > 0
     const hasDep = dep.length === 3
+    const hasArr = arr.length === 3
     const hasStd = stdNorm !== '' && isValidTime(stdNorm)
     const hasSta = staNorm !== '' && isValidTime(staNorm)
 
-    if (!hasDep && !hasStd && !hasSta && !draft._duplicateError) return null
+    // Show duplicate error even if incomplete
+    if (draft._duplicateError) {
+      return {
+        sequence: { status: 'pass', message: 'Pending' },
+        tat: { status: 'pass', message: 'Pending' },
+        block: { status: 'pass', message: 'Pending' },
+        overall: 'red',
+      }
+    }
+
+    // Only validate when ALL required fields are filled
+    if (!hasFlt || !hasDep || !hasArr || !hasStd || !hasSta) return null
 
     const v: LegValidation = {
       sequence: { status: 'pass', message: legs.length === 0 ? 'First leg' : 'Pending' },
@@ -574,8 +744,8 @@ export function AircraftRoutesBuilder({
     finally { setLoading(false) }
   }, [selectedSeason])
 
-  const refreshRecent = useCallback(async () => {
-    try { setRecentRoutes(await getRecentRoutes()) } catch { /* silent */ }
+  const refreshTemplates = useCallback(async () => {
+    try { setTemplates(await getRouteTemplates()) } catch { /* silent */ }
   }, [])
 
   // ── Season / new route ──
@@ -588,46 +758,183 @@ export function AircraftRoutesBuilder({
     finally { setLoading(false) }
   }, [])
 
-  const handleNewRoute = useCallback(async () => {
+  // ── Init new route (purely local, no DB) ──
+  const initNewRoute = useCallback((template?: RouteTemplate) => {
+    const defaultAcType = template?.aircraft_type_id
+      ? aircraftTypes.find(t => t.id === template.aircraft_type_id)
+      : aircraftTypes.find(t => t.is_active)
+
+    setSelectedRouteId(null)
+    setIsNewRoute(true)
+    isNewRouteRef.current = true
+    setForm({
+      routeName: template?.legs[0]?.flight_number ? String(template.legs[0].flight_number) : '',
+      aircraftTypeId: defaultAcType?.id || '',
+      aircraftTypeIcao: defaultAcType?.icao_type || '',
+      seasonId: selectedSeason,
+      periodStart: '',
+      periodEnd: '',
+      daysOfOperation: template?.days_of_operation || '1234567',
+      status: 'new',
+      notes: '',
+    })
+    setAcTypeSearch(defaultAcType?.icao_type || '')
+    setFromDisplay('')
+    setToDisplay('')
+
+    let initialLegs: LegWithOffsets[] = []
+    if (template) {
+      initialLegs = template.legs.map((tl, i) => ({
+        id: crypto.randomUUID(),
+        route_id: '',
+        leg_sequence: i + 1,
+        flight_id: null,
+        airline_code: tl.airline_code,
+        flight_number: tl.flight_number,
+        dep_station: tl.dep_station,
+        arr_station: tl.arr_station,
+        std_local: tl.std_local,
+        sta_local: tl.sta_local,
+        dep_utc_offset: null,
+        arr_utc_offset: null,
+        block_minutes: tl.block_minutes,
+        day_offset: 0,
+        arrives_next_day: false,
+        service_type: tl.service_type,
+        _dayOffset: 0,
+        _arrivesNextDay: false,
+      }))
+      calculateDayOffsets(initialLegs)
+    }
+
+    setLegs(initialLegs)
+    setIsDirty(!!template)
+    setEditingCell(null)
+    setSelectedLegIdx(null)
+    setDraft(emptyDraft())
+    hasManualRouteNameRef.current = false
+    setLegsHistory([initialLegs.map(l => ({ ...l }))])
+    setHistoryIndex(0)
+    snapshotRef.current = null
+
+    if (template) {
+      // Template: legs pre-filled, focus first leg's flight number
+      setIsAdding(false)
+      setActiveEmptyRow(null)
+      setFocusField(null)
+      setTimeout(() => {
+        const el = document.querySelector<HTMLElement>('[data-grid-row="0"][data-grid-col="0"]')
+        if (el) el.click()
+      }, 100)
+    } else {
+      // New route: activate first empty row with flight number focus
+      setIsAdding(true)
+      setActiveEmptyRow(0)
+      setFocusField('flightNumber')
+    }
+  }, [aircraftTypes, selectedSeason])
+
+  const handleNewRoute = useCallback(() => {
     if (!selectedSeason) { toast.error('Select a season first'); return }
-    setLoading(true)
-    try {
-      const res = await createAircraftRoute({ season_id: selectedSeason })
-      if (res.error) { toast.error(res.error); return }
-      toast.success('Route created')
-      await refresh()
-      if (res.id) setSelectedRouteId(res.id)
-    } catch { toast.error('Failed to create route') }
-    finally { setLoading(false) }
-  }, [selectedSeason, refresh])
+    if (isDirty) {
+      pendingActionRef.current = () => initNewRoute()
+      setShowUnsavedDialog(true)
+      return
+    }
+    initNewRoute()
+  }, [selectedSeason, isDirty, initNewRoute])
+
+  const handleUseTemplate = useCallback((template: RouteTemplate) => {
+    if (!selectedSeason) { toast.error('Select a season first'); return }
+    if (isDirty) {
+      pendingActionRef.current = () => initNewRoute(template)
+      setShowUnsavedDialog(true)
+      return
+    }
+    initNewRoute(template)
+  }, [selectedSeason, isDirty, initNewRoute])
 
   // ── Route selection (with dirty guard) ──
   const handleSelectRoute = useCallback((routeId: string) => {
-    if (routeId === selectedRouteId) return
+    if (routeId === selectedRouteId && !isNewRoute) return
     if (isDirty) {
-      setPendingRouteId(routeId)
+      pendingActionRef.current = () => { setIsNewRoute(false); isNewRouteRef.current = false; setSelectedRouteId(routeId) }
       setShowUnsavedDialog(true)
     } else {
+      setIsNewRoute(false)
+      isNewRouteRef.current = false
       setSelectedRouteId(routeId)
     }
-  }, [selectedRouteId, isDirty])
+  }, [selectedRouteId, isDirty, isNewRoute])
 
   const handleDiscardAndSwitch = useCallback(() => {
     setShowUnsavedDialog(false)
-    if (pendingRouteId) setSelectedRouteId(pendingRouteId)
-    setPendingRouteId(null)
-  }, [pendingRouteId])
+    setIsDirty(false)
+    setIsNewRoute(false)
+    isNewRouteRef.current = false
+    if (pendingActionRef.current) {
+      pendingActionRef.current()
+      pendingActionRef.current = null
+    }
+  }, [])
 
   // ── Group & filter ──
+  const usedAcTypes = useMemo(() => {
+    const types = new Map<string, string>()
+    for (const r of routes) {
+      if (r.aircraft_type_icao) {
+        const at = aircraftTypes.find(t => t.icao_type === r.aircraft_type_icao)
+        types.set(r.aircraft_type_icao, at?.name || r.aircraft_type_icao)
+      }
+    }
+    return Array.from(types.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [routes, aircraftTypes])
+
+  const toggleAcTypeFilter = useCallback((icao: string) => {
+    setAcTypeFilter(prev => {
+      const allIcaos = usedAcTypes.map(([ic]) => ic)
+      if (prev.size === 0) {
+        // All shown → uncheck this one = select all others
+        const next = new Set(allIcaos.filter(ic => ic !== icao))
+        return next.size === 0 || next.size === allIcaos.length ? new Set() : next
+      }
+      const next = new Set(prev)
+      if (next.has(icao)) next.delete(icao); else next.add(icao)
+      if (next.size === 0 || next.size === allIcaos.length) return new Set()
+      return next
+    })
+  }, [usedAcTypes])
+
+  const acFilterLabel = useMemo(() => {
+    if (acTypeFilter.size === 0) return 'All'
+    return Array.from(acTypeFilter).sort().join(', ')
+  }, [acTypeFilter])
+
+  // Close filter dropdown on outside click
+  useEffect(() => {
+    if (!filterOpen) return
+    const handleClick = (e: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) setFilterOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [filterOpen])
+
   const filteredRoutes = useMemo(() => {
-    if (!search.trim()) return routes
-    const q = search.toLowerCase()
-    return routes.filter(r =>
-      (r.route_name || '').toLowerCase().includes(q) ||
-      r.chain.toLowerCase().includes(q) ||
-      (r.aircraft_type_icao || '').toLowerCase().includes(q)
-    )
-  }, [routes, search])
+    let result = routes
+    if (acTypeFilter.size > 0) {
+      result = result.filter(r => r.aircraft_type_icao && acTypeFilter.has(r.aircraft_type_icao))
+    }
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      result = result.filter(r =>
+        (r.route_name || '').toLowerCase().includes(q) ||
+        r.chain.toLowerCase().includes(q) ||
+        (r.aircraft_type_icao || '').toLowerCase().includes(q)
+      )
+    }
+    return result
+  }, [routes, search, acTypeFilter])
 
   const groups = useMemo(() => groupRoutesByAircraftType(filteredRoutes, aircraftTypes), [filteredRoutes, aircraftTypes])
 
@@ -643,11 +950,29 @@ export function AircraftRoutesBuilder({
     setIsDirty(true)
   }, [])
 
+  // ── Duplicate leg ──
+  const duplicateLeg = useCallback(() => {
+    if (legs.length === 0) return
+    // Duplicate the last leg
+    const last = legs[legs.length - 1]
+    const dup: LegWithOffsets = { ...last, id: makeLegId(), flight_id: null }
+    setLegs(prev => {
+      const newLegs = recalcLegs([...prev, dup])
+      pushHistory(newLegs)
+      return newLegs
+    })
+    setIsDirty(true)
+  }, [legs, recalcLegs, pushHistory])
+
   // ── Delete leg ──
   const deleteLeg = useCallback((legId: string) => {
-    setLegs(prev => recalcLegs(prev.filter(l => l.id !== legId)))
+    setLegs(prev => {
+      const newLegs = recalcLegs(prev.filter(l => l.id !== legId))
+      pushHistory(newLegs)
+      return newLegs
+    })
     setIsDirty(true)
-  }, [recalcLegs])
+  }, [recalcLegs, pushHistory])
 
   // ── Confirm add leg ──
   const confirmAddLeg = useCallback(async () => {
@@ -743,28 +1068,51 @@ export function AircraftRoutesBuilder({
       block_minutes: block,
       day_offset: 0,
       arrives_next_day: false,
-      service_type: 'J',
+      service_type: draft.serviceType || 'J',
       _dayOffset: 0,
       _arrivesNextDay: false,
     }
 
-    setLegs(prev => recalcLegs([...prev, newLeg]))
-    setDraft(emptyDraft())
-    setIsAdding(false)
-    setIsDirty(true)
-  }, [draft, draftValidation, legs, operatorIataCode, selectedRouteId, recalcLegs, form?.periodStart, form?.periodEnd])
+    console.log('Leg confirmed, adding to array. Legs count:', legs.length + 1)
+    const nextRowIdx = legs.length + 1 // index of next empty row after this leg is added
+    setLegs(prev => {
+      const newLegs = recalcLegs([...prev, newLeg])
+      pushHistory(newLegs)
+      return newLegs
+    })
 
-  // ── Start adding with auto-populate ──
-  const startAddLeg = useCallback(() => {
+    // Auto-populate next empty row draft
+    const nextDraft = emptyDraft()
+    nextDraft.depStation = arr
+    nextDraft._autoFilledDep = true
+    if (normalizeTime(draft.staLocal)) {
+      const acType = form?.aircraftTypeId ? acTypeMap.get(form.aircraftTypeId) : undefined
+      const rType = getRouteType(dep, arr, airportCountryMap, operatorCountry)
+      const minTat = getMinTat(acType, rType)
+      const staMin = timeToMinutes(normalizeTime(draft.staLocal))
+      nextDraft.stdLocal = minutesToTimeStr((staMin + minTat) % 1440)
+      nextDraft._autoFilledStd = true
+    }
+    setDraft(nextDraft)
+    setActiveEmptyRow(nextRowIdx)
+    setFocusField('flightNumber')
+    setIsAdding(true)
+    console.log('Clearing entry row, activating next empty row:', nextRowIdx)
+    setIsDirty(true)
+  }, [draft, draftValidation, legs, operatorIataCode, selectedRouteId, recalcLegs, pushHistory, form?.periodStart, form?.periodEnd, form?.aircraftTypeId, acTypeMap, airportCountryMap, operatorCountry])
+
+  // ── Activate an empty grid row ──
+  const activateEmptyRow = useCallback((rowIdx: number, clickedField?: string) => {
+    console.log('Activating empty row:', rowIdx, 'clicked field:', clickedField)
     const d = emptyDraft()
     if (legs.length > 0) {
       const lastLeg = legs[legs.length - 1]
       d.depStation = lastLeg.arr_station
       d._autoFilledDep = true
 
-      if (lastLeg.sta_local && form?.aircraftTypeId) {
-        const acType = acTypeMap.get(form.aircraftTypeId)
-        const rType = getRouteType(lastLeg.arr_station, lastLeg.arr_station, airportCountryMap, operatorCountry)
+      if (lastLeg.sta_local) {
+        const acType = form?.aircraftTypeId ? acTypeMap.get(form.aircraftTypeId) : undefined
+        const rType = getRouteType(lastLeg.dep_station, lastLeg.arr_station, airportCountryMap, operatorCountry)
         const minTat = getMinTat(acType, rType)
         const prevStaMin = timeToMinutes(lastLeg.sta_local)
         const absStaMin = (lastLeg._dayOffset + (lastLeg._arrivesNextDay ? 1 : 0)) * 1440 + prevStaMin
@@ -774,13 +1122,23 @@ export function AircraftRoutesBuilder({
       }
     }
     setDraft(d)
+    setActiveEmptyRow(rowIdx)
+    setFocusField(clickedField && clickedField !== 'row' ? clickedField : 'flightNumber')
     setIsAdding(true)
   }, [legs, form?.aircraftTypeId, acTypeMap, airportCountryMap, operatorCountry])
+
+  const deactivateEmptyRow = useCallback(() => {
+    setActiveEmptyRow(null)
+    setFocusField(null)
+    setIsAdding(false)
+    setDraft(emptyDraft())
+  }, [])
 
   // ── Inline cell editing ──
   const startEdit = useCallback((legId: string, field: string, currentValue: string) => {
     setEditingCell({ legId, field })
     setEditValue(currentValue)
+    setSelectedLegIdx(null)
   }, [])
 
   const commitEdit = useCallback(() => {
@@ -810,14 +1168,17 @@ export function AircraftRoutesBuilder({
           if (isValidTime(t)) { leg.sta_local = t; leg.block_minutes = computeBlockMinutes(leg.std_local, t) }
           break
         }
+        case 'service_type': leg.service_type = editValue.toUpperCase().slice(0, 1) || 'J'; break
       }
 
       updated[idx] = leg
-      return recalcLegs(updated)
+      const result = recalcLegs(updated)
+      pushHistory(result)
+      return result
     })
     setEditingCell(null)
     setIsDirty(true)
-  }, [editingCell, editValue, operatorIataCode, recalcLegs])
+  }, [editingCell, editValue, operatorIataCode, recalcLegs, pushHistory])
 
   const cancelEdit = useCallback(() => { setEditingCell(null) }, [])
 
@@ -830,10 +1191,12 @@ export function AircraftRoutesBuilder({
       const items = [...prev]
       const [moved] = items.splice(dragIdx, 1)
       items.splice(targetIdx, 0, moved)
-      return recalcLegs(items)
+      const result = recalcLegs(items)
+      pushHistory(result)
+      return result
     })
     setDragIdx(null); setDropIdx(null); setIsDirty(true)
-  }, [dragIdx, recalcLegs])
+  }, [dragIdx, recalcLegs, pushHistory])
 
   // ═══════════════════════════════════════════════════════════════
   // SAVE / DISCARD / DELETE / PUBLISH
@@ -867,7 +1230,7 @@ export function AircraftRoutesBuilder({
 
     try {
       const input: SaveRouteInput = {
-        id: selectedRouteId,
+        id: isNewRoute ? null : selectedRouteId,
         season_id: form.seasonId,
         route_name: form.routeName || null,
         aircraft_type_id: form.aircraftTypeId || null,
@@ -876,7 +1239,7 @@ export function AircraftRoutesBuilder({
         period_start: form.periodStart || null,
         period_end: form.periodEnd || null,
         duration_days: routeDuration,
-        status: form.status,
+        status: form.status === 'new' ? 'draft' : form.status,
         notes: form.notes || null,
         legs: legs.map(l => ({
           flight_id: l.flight_id,
@@ -898,12 +1261,15 @@ export function AircraftRoutesBuilder({
 
       toast.success(`Route ${form.routeName || 'Untitled'} saved (${legs.length} leg${legs.length !== 1 ? 's' : ''})`)
       setIsDirty(false)
+      setForm(prev => prev ? { ...prev, status: 'draft' } : null)
       const newRouteId = res.id!
-      await Promise.all([refresh(), refreshRecent()])
+      await Promise.all([refresh(), refreshTemplates()])
+      setIsNewRoute(false)
+      isNewRouteRef.current = false
       setSelectedRouteId(newRouteId)
     } catch { toast.error('Failed to save route') }
     finally { setSaving(false) }
-  }, [form, selectedRouteId, legs, routeDuration, refresh, refreshRecent])
+  }, [form, selectedRouteId, isNewRoute, legs, routeDuration, refresh, refreshTemplates])
 
   const handleSaveRoute = useCallback(() => {
     if (!form) return
@@ -916,13 +1282,20 @@ export function AircraftRoutesBuilder({
   }, [form, hasRedErrors, isAdding, draft._duplicateError, computeWarnings, executeSave])
 
   const discardChanges = useCallback(() => {
-    if (snapshotRef.current) {
+    if (isNewRoute) {
+      // Discard new route → go back to empty state
+      setIsNewRoute(false)
+      isNewRouteRef.current = false
+      setForm(null)
+      setLegs([])
+      setSelectedRouteId(null)
+    } else if (snapshotRef.current) {
       setForm({ ...snapshotRef.current.form })
       setLegs(snapshotRef.current.legs.map(l => ({ ...l })))
     }
-    setIsDirty(false); setIsAdding(false); setEditingCell(null); setDraft(emptyDraft())
+    setIsDirty(false); setIsAdding(false); setActiveEmptyRow(null); setFocusField(null); setEditingCell(null); setSelectedLegIdx(null); setDraft(emptyDraft())
     setShowDiscardDialog(false)
-  }, [])
+  }, [isNewRoute])
 
   const handleDeleteRoute = useCallback(async () => {
     if (!selectedRouteId) return
@@ -932,10 +1305,10 @@ export function AircraftRoutesBuilder({
       if (res.error) { toast.error(res.error); return }
       toast.success(`Route ${form?.routeName || 'Untitled'} deleted`)
       setSelectedRouteId(null); setIsDirty(false)
-      await Promise.all([refresh(), refreshRecent()])
+      await Promise.all([refresh(), refreshTemplates()])
     } catch { toast.error('Failed to delete route') }
     finally { setSaving(false) }
-  }, [selectedRouteId, form?.routeName, refresh, refreshRecent])
+  }, [selectedRouteId, form?.routeName, refresh, refreshTemplates])
 
   const handlePublishRoute = useCallback(async () => {
     if (!selectedRouteId) return
@@ -946,10 +1319,61 @@ export function AircraftRoutesBuilder({
       if (res.error) { toast.error(res.error); return }
       toast.success(`Route ${isPublished ? 'unpublished' : 'published'}`)
       setForm(prev => prev ? { ...prev, status: isPublished ? 'draft' : 'published' } : null)
-      await Promise.all([refresh(), refreshRecent()])
+      await Promise.all([refresh(), refreshTemplates()])
     } catch { toast.error('Failed to update route status') }
     finally { setSaving(false) }
-  }, [selectedRouteId, form?.status, refresh, refreshRecent])
+  }, [selectedRouteId, form?.status, refresh, refreshTemplates])
+
+  // ── Keyboard shortcuts ──
+  useEffect(() => {
+    shortcutRefs.current = {
+      save: handleSaveRoute,
+      undo: handleUndo,
+      redo: handleRedo,
+      newRoute: handleNewRoute,
+      duplicate: duplicateLeg,
+      cancel: () => {
+        if (isAdding) { deactivateEmptyRow() }
+        else if (editingCell) { cancelEdit() }
+        else if (selectedLegIdx !== null) { setSelectedLegIdx(null) }
+      },
+      deleteSelectedLeg: () => {
+        if (selectedLegIdx !== null && selectedLegIdx < legs.length) {
+          deleteLeg(legs[selectedLegIdx].id)
+          setSelectedLegIdx(null)
+        }
+      },
+    }
+  })
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey
+      // Ctrl+S: Save
+      if (mod && e.key === 's') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.save(); return }
+      // Ctrl+Z: Undo
+      if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.undo(); return }
+      // Ctrl+Shift+Z / Ctrl+Y: Redo
+      if (mod && e.key === 'z' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.redo(); return }
+      if (mod && e.key === 'y') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.redo(); return }
+      // Ctrl+N: New Route
+      if (mod && e.key === 'n') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.newRoute(); return }
+      // Ctrl+D: Duplicate Leg
+      if (mod && e.key === 'd') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.duplicate(); return }
+      // Ctrl+F: Focus search
+      if (mod && e.key === 'f') { e.preventDefault(); e.stopPropagation(); document.getElementById('route-search')?.focus(); return }
+      // Delete: Remove selected leg (only when not typing in an input)
+      if (e.key === 'Delete') {
+        const el = document.activeElement
+        const isTyping = el?.tagName === 'INPUT' || el?.tagName === 'SELECT' || el?.tagName === 'TEXTAREA'
+        if (!isTyping) { e.preventDefault(); shortcutRefs.current.deleteSelectedLeg(); return }
+      }
+      // Escape: Cancel edit / deselect row
+      if (e.key === 'Escape') { shortcutRefs.current.cancel(); return }
+    }
+    window.addEventListener('keydown', handleKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
+  }, [])
 
   // ── Styles ──
   const inputClass = 'h-8 rounded-lg bg-white/50 dark:bg-white/5 border border-black/[0.06] dark:border-white/[0.06] px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/30'
@@ -971,15 +1395,40 @@ export function AircraftRoutesBuilder({
               <button onClick={refresh} disabled={loading} className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors" title="Refresh">
                 <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
               </button>
-              <button onClick={handleNewRoute} disabled={loading} className="h-7 px-2.5 flex items-center gap-1 rounded-lg bg-[#991b1b] text-white text-xs font-medium hover:bg-[#7f1d1d] transition-colors">
-                <Plus className="h-3 w-3" /> New
-              </button>
+              <div className="relative" ref={filterRef}>
+                <button onClick={() => setFilterOpen(p => !p)}
+                  className="h-7 px-2.5 flex items-center gap-1 rounded-lg border border-black/[0.06] dark:border-white/[0.06] hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-xs">
+                  <span className="max-w-[80px] truncate">{acFilterLabel}</span>
+                  <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                </button>
+                {filterOpen && usedAcTypes.length > 0 && (
+                  <div className="absolute right-0 top-full mt-1 z-50 glass-heavy rounded-lg shadow-lg py-1 min-w-[200px] max-h-[200px] overflow-y-auto">
+                    {usedAcTypes.map(([icao, name]) => {
+                      const checked = acTypeFilter.size === 0 || acTypeFilter.has(icao)
+                      return (
+                        <button key={icao} type="button"
+                          onClick={() => toggleAcTypeFilter(icao)}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-left">
+                          <div className={cn(
+                            'w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0',
+                            checked ? 'bg-[#991b1b] border-[#991b1b]' : 'border-black/20 dark:border-white/20'
+                          )}>
+                            {checked && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                          </div>
+                          <span className="font-mono font-semibold">{icao}</span>
+                          <span className="text-muted-foreground truncate">{name}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <input type="text" placeholder="Search routes..." value={search} onChange={e => setSearch(e.target.value)}
+            <input id="route-search" type="text" placeholder="Search routes..." value={search} onChange={e => setSearch(e.target.value)}
               className={cn(inputClass, 'w-full pl-8')} />
           </div>
         </div>
@@ -1025,121 +1474,185 @@ export function AircraftRoutesBuilder({
 
       {/* ═══ RIGHT PANEL ═══ */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 gap-4">
-        {selectedRoute && form ? (
+        {(selectedRoute || isNewRoute) && form ? (
           <>
             {/* ── ROUTE HEADER ── */}
-            <div className="shrink-0 glass rounded-2xl p-5 space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="flex-1">
-                  <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1 block">Route</label>
-                  <input type="text" value={form.routeName} onChange={e => updateForm({ routeName: e.target.value })}
-                    placeholder="RT-SGN-HAN-01" className={cn(inputClass, 'w-full max-w-[260px] font-mono font-semibold')} />
+            <div className="shrink-0 glass rounded-2xl px-4 py-2 group/header">
+              <div className="flex items-end gap-3">
+                <div>
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">Route No.</span>
+                  <input type="text" value={form.routeName} tabIndex={TAB_ROUTE_NO}
+                    onChange={e => { hasManualRouteNameRef.current = true; updateForm({ routeName: e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase() }) }}
+                    onFocus={e => e.target.select()}
+                    placeholder="SGNHAN01" maxLength={8}
+                    className={cn(inputClass, 'w-[90px] font-mono text-xs font-semibold h-[30px]')} />
                 </div>
-                <div className="shrink-0 flex items-center gap-3">
-                  <div className="text-right">
-                    <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1 block">Status</label>
-                    <div className="flex items-center gap-1.5 h-8 px-2">
-                      <div className={cn('w-2 h-2 rounded-full', form.status === 'published' ? 'bg-emerald-500' : 'bg-gray-400')} />
-                      <span className="text-sm font-medium capitalize">{form.status}</span>
-                      {!isDirty && selectedRouteId && (
-                        <button onClick={() => setShowPublishDialog(true)} disabled={saving}
-                          className="ml-1 text-[11px] text-primary/70 hover:text-primary underline underline-offset-2 transition-colors disabled:opacity-50">
-                          {form.status === 'published' ? 'Unpublish' : 'Publish'}
-                        </button>
-                      )}
-                    </div>
+
+                <div className="relative">
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">AC Type</span>
+                  <input ref={acTypeInputRef} type="text" value={acTypeSearch} tabIndex={TAB_AC_TYPE}
+                    onChange={e => {
+                      const v = e.target.value.toUpperCase()
+                      setAcTypeSearch(v)
+                      setAcTypeOpen(true)
+                      // Only auto-select on exact ICAO match while typing
+                      const exact = aircraftTypes.find(t => t.is_active && t.icao_type === v)
+                      if (exact) {
+                        updateForm({ aircraftTypeId: exact.id, aircraftTypeIcao: exact.icao_type })
+                      } else if (!v) {
+                        updateForm({ aircraftTypeId: '', aircraftTypeIcao: '' })
+                      }
+                    }}
+                    onFocus={e => { e.target.select(); setAcTypeOpen(true) }}
+                    onBlur={() => {
+                      // Delay to allow click on dropdown
+                      setTimeout(() => {
+                        setAcTypeOpen(false)
+                        // Ensure display matches selected
+                        if (form.aircraftTypeId) {
+                          const at = aircraftTypes.find(t => t.id === form.aircraftTypeId)
+                          if (at) setAcTypeSearch(at.icao_type)
+                        } else {
+                          setAcTypeSearch('')
+                        }
+                      }, 150)
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === 'Tab') {
+                        // Accept best ranked match
+                        const match = findBestAcType(aircraftTypes, acTypeSearch)
+                        if (match) {
+                          updateForm({ aircraftTypeId: match.id, aircraftTypeIcao: match.icao_type })
+                          setAcTypeSearch(match.icao_type)
+                        }
+                        setAcTypeOpen(false)
+                      }
+                    }}
+                    placeholder="A321" maxLength={8}
+                    className={cn(inputClass, 'w-[80px] text-xs font-mono h-[30px]')} autoComplete="off" />
+                  {acTypeOpen && acTypeSearch && (() => {
+                    const filtered = filterAndSortAcTypes(aircraftTypes, acTypeSearch)
+                    return (
+                      <div ref={acTypeDropRef} className="absolute top-full left-0 mt-1 z-50 glass-heavy rounded-lg shadow-lg py-1 min-w-[180px] max-h-[160px] overflow-y-auto">
+                        {filtered.length > 0 ? filtered.map(t => (
+                          <button key={t.id} type="button"
+                            onMouseDown={e => {
+                              e.preventDefault()
+                              updateForm({ aircraftTypeId: t.id, aircraftTypeIcao: t.icao_type })
+                              setAcTypeSearch(t.icao_type)
+                              setAcTypeOpen(false)
+                              acTypeInputRef.current?.blur()
+                            }}
+                            className={cn('w-full text-left px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10 transition-colors',
+                              form.aircraftTypeId === t.id && 'bg-[#991b1b]/10 font-semibold')}>
+                            <span className="font-mono font-semibold">{t.icao_type}</span>
+                            <span className="text-muted-foreground ml-1.5">{t.name}</span>
+                          </button>
+                        )) : (
+                          <div className="px-3 py-1.5 text-xs text-muted-foreground">No match</div>
+                        )}
+                      </div>
+                    )
+                  })()}
+                </div>
+
+                <div>
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">From</span>
+                  <input type="text" value={fromDisplay} tabIndex={TAB_FROM}
+                    onChange={e => {
+                      const formatted = formatDateInput(e.target.value)
+                      setFromDisplay(formatted)
+                      const iso = displayToIso(formatted)
+                      if (iso) updateForm({ periodStart: iso })
+                    }}
+                    onBlur={() => {
+                      const iso = displayToIso(fromDisplay)
+                      if (iso) { updateForm({ periodStart: iso }); setFromDisplay(isoToDisplay(iso)) }
+                      else if (!fromDisplay) updateForm({ periodStart: '' })
+                    }}
+                    onFocus={e => e.target.select()}
+                    placeholder="DD/MM/YYYY" maxLength={10}
+                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]')} />
+                </div>
+
+                <span className="text-xs text-muted-foreground pb-[7px]">&mdash;</span>
+
+                <div>
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">To</span>
+                  <input type="text" value={toDisplay} tabIndex={TAB_TO}
+                    onChange={e => {
+                      const formatted = formatDateInput(e.target.value)
+                      setToDisplay(formatted)
+                      const iso = displayToIso(formatted)
+                      if (iso) updateForm({ periodEnd: iso })
+                    }}
+                    onBlur={() => {
+                      const iso = displayToIso(toDisplay)
+                      if (iso) { updateForm({ periodEnd: iso }); setToDisplay(isoToDisplay(iso)) }
+                      else if (!toDisplay) updateForm({ periodEnd: '' })
+                    }}
+                    onFocus={e => e.target.select()}
+                    placeholder="DD/MM/YYYY" maxLength={10}
+                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]')} />
+                </div>
+
+                <div>
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">Day of Week</span>
+                  <div className="h-[30px] flex items-center">
+                    <DowCirclesInteractive value={form.daysOfOperation} onChange={v => updateForm({ daysOfOperation: v })} />
                   </div>
-                  {selectedRouteId && (
-                    <button onClick={() => setShowDeleteDialog(true)} disabled={saving}
-                      className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground/30 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
-                      title="Delete route">
-                      <Trash2 className="h-4 w-4" />
+                </div>
+
+                <div className="flex items-center gap-1.5 ml-auto pb-[5px]">
+                  <div className={cn('w-2 h-2 rounded-full',
+                    form.status === 'published' ? 'bg-emerald-500'
+                    : isNewRoute ? 'bg-blue-500'
+                    : 'bg-gray-400'
+                  )} />
+                  <span className="text-xs font-medium capitalize">{isNewRoute ? 'New' : form.status}</span>
+                  {!isDirty && selectedRouteId && !isNewRoute && (
+                    <button onClick={() => setShowPublishDialog(true)} disabled={saving} tabIndex={-1}
+                      className="ml-1 text-[11px] text-primary/70 hover:text-primary underline underline-offset-2 transition-colors disabled:opacity-50">
+                      {form.status === 'published' ? 'Unpublish' : 'Publish'}
                     </button>
                   )}
                 </div>
-              </div>
 
-              <div className="flex items-center gap-4">
-                <div className="flex-1">
-                  <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1 block">Aircraft Type</label>
-                  <select value={form.aircraftTypeId} onChange={e => {
-                    const at = aircraftTypes.find(t => t.id === e.target.value)
-                    updateForm({ aircraftTypeId: e.target.value, aircraftTypeIcao: at?.icao_type || '' })
-                  }} className={cn(inputClass, 'w-full max-w-[260px]')}>
-                    <option value="">&mdash; Select &mdash;</option>
-                    {aircraftTypes.filter(t => t.is_active).map(t => <option key={t.id} value={t.id}>{t.icao_type} — {t.name}</option>)}
-                  </select>
-                </div>
-                <div className="flex-1">
-                  <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1 block">Season</label>
-                  <select value={form.seasonId} onChange={e => updateForm({ seasonId: e.target.value })} className={cn(inputClass, 'w-full max-w-[260px]')}>
-                    {seasons.map(s => <option key={s.id} value={s.id}>{s.code} — {s.name}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-4">
-                <div>
-                  <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1 block">Period</label>
-                  <div className="flex items-center gap-2">
-                    <input type="date" value={form.periodStart} onChange={e => updateForm({ periodStart: e.target.value })} className={cn(inputClass, 'w-[145px]')} />
-                    <span className="text-xs text-muted-foreground">&mdash;</span>
-                    <input type="date" value={form.periodEnd} onChange={e => updateForm({ periodEnd: e.target.value })} className={cn(inputClass, 'w-[145px]')} />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1 block">Days</label>
-                  <DowCirclesInteractive value={form.daysOfOperation} onChange={v => updateForm({ daysOfOperation: v })} />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-6 pt-1 border-t border-black/[0.04] dark:border-white/[0.04]">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground">Chain:</span>
-                  <span className="text-[13px] font-mono font-medium">{chain || 'No legs'}{isRoundTrip && ' \ud83d\udd04'}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground">Duration:</span>
-                  <span className="text-[13px] font-medium">{durationLabel(routeDuration)}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground">Total Block:</span>
-                  <span className="text-[13px] font-mono font-medium">{minutesToHHMM(totalBlock) || '\u2014'}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground">Legs:</span>
-                  <span className="text-[13px] font-mono font-medium">{legs.length}</span>
-                </div>
+                {selectedRouteId && !isNewRoute && (
+                  <button onClick={() => setShowDeleteDialog(true)} disabled={saving} tabIndex={-1}
+                    className="h-7 w-7 flex items-center justify-center rounded-lg text-muted-foreground/30 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50 opacity-0 group-hover/header:opacity-100 mb-[3px]"
+                    title="Delete route">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* ── LEGS TABLE ── */}
+            {/* ── LEGS GRID ── */}
             <div className="flex-1 glass rounded-2xl flex flex-col overflow-hidden min-h-0">
-              <div className="shrink-0 px-5 pt-4 pb-2">
-                <h3 className="text-sm font-semibold">Route Legs</h3>
+              <div className="shrink-0 px-4 pt-3 pb-1.5">
+                <h3 className="text-sm font-semibold">Flight Legs Information</h3>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-5 pb-4 custom-scrollbar">
-                <table className="w-full">
+              <div className="flex-1 overflow-y-auto px-4 pb-3 custom-scrollbar">
+                <table className="w-full border-collapse border border-black/[0.08] dark:border-white/[0.08] text-[13px]">
                   <thead>
-                    <tr className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider border-b border-black/[0.06] dark:border-white/[0.06]">
-                      <th className="w-[20px] py-2"></th>
-                      <th className="w-[30px] py-2 text-center">#</th>
-                      <th className="w-[40px] py-2 text-center">Day</th>
-                      <th className="w-[80px] py-2 text-left pl-2">Flt No</th>
-                      <th className="w-[50px] py-2 text-center">DEP</th>
-                      <th className="w-[50px] py-2 text-center">ARR</th>
-                      <th className="w-[55px] py-2 text-center">STD</th>
-                      <th className="w-[65px] py-2 text-center">STA</th>
-                      <th className="w-[55px] py-2 text-center">Block</th>
-                      <th className="w-[50px] py-2 text-center">Status</th>
-                      <th className="w-[20px] py-2"></th>
+                    <tr className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-[#f8f9fa] dark:bg-white/[0.03] sticky top-0 z-10">
+                      <th className="w-[30px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">#</th>
+                      <th className="w-[35px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">Day</th>
+                      <th className="w-[70px] py-1.5 text-left pl-2 border border-black/[0.08] dark:border-white/[0.08]">Flt No</th>
+                      <th className="w-[50px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">DEP</th>
+                      <th className="w-[50px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">ARR</th>
+                      <th className="w-[60px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">STD</th>
+                      <th className="w-[60px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">STA</th>
+                      <th className="w-[55px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">Block</th>
+                      <th className="w-[35px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">Svc</th>
+                      <th className="w-[40px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]"></th>
+                      <th className="w-[30px] py-1.5 border border-black/[0.08] dark:border-white/[0.08]"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {legs.length === 0 && !isAdding && (
-                      <tr><td colSpan={11} className="text-center py-8 text-sm text-muted-foreground">No legs in this route</td></tr>
-                    )}
+                    {/* Filled leg rows */}
                     {legs.map((leg, idx) => {
                       const fltLabel = leg.airline_code && leg.flight_number != null
                         ? `${leg.airline_code}${leg.flight_number}` : '\u2014'
@@ -1166,42 +1679,57 @@ export function AircraftRoutesBuilder({
                           onDragOver={(e) => handleDragOver(e, idx)}
                           onDrop={() => handleDrop(idx)}
                           isDropTarget={isDropTarget}
+                          isSelected={selectedLegIdx === idx}
+                          onSelect={() => setSelectedLegIdx(idx)}
                         />
                       )
                     })}
 
-                    {isAdding && (
-                      <AddLegRow
-                        draft={draft}
-                        setDraft={setDraft}
-                        index={legs.length}
-                        operatorIataCode={operatorIataCode}
-                        airportIataSet={airportIataSet}
-                        onConfirm={confirmAddLeg}
-                        onCancel={() => { setIsAdding(false); setDraft(emptyDraft()) }}
-                        cellInputClass={cellInputClass}
-                        validation={draftValidation}
-                      />
-                    )}
+                    {/* Empty grid rows (8 always visible below last filled) */}
+                    {Array.from({ length: 8 }, (_, i) => {
+                      const rowIdx = legs.length + i
+                      const isActive = isAdding && activeEmptyRow === rowIdx
+                      const isDisabled = hasRedErrors || (isAdding && activeEmptyRow !== rowIdx)
+
+                      if (isActive) {
+                        return (
+                          <GridEntryRow
+                            key={`empty-${rowIdx}`}
+                            draft={draft}
+                            setDraft={setDraft}
+                            index={rowIdx}
+                            operatorIataCode={operatorIataCode}
+                            airportIataSet={airportIataSet}
+                            onConfirm={confirmAddLeg}
+                            onCancel={deactivateEmptyRow}
+                            cellInputClass={cellInputClass}
+                            validation={draftValidation}
+                            focusField={focusField}
+                            blockTimeMap={blockTimeMap}
+                          />
+                        )
+                      }
+
+                      return (
+                        <FocusableEmptyRow
+                          key={`empty-${rowIdx}`}
+                          index={rowIdx}
+                          onActivate={(field) => activateEmptyRow(rowIdx, field)}
+                          disabled={isDisabled}
+                        />
+                      )
+                    })}
                   </tbody>
                 </table>
 
-                {!isAdding && (
-                  <div className="mt-3">
-                    <button onClick={startAddLeg} disabled={hasRedErrors}
-                      className={cn(
-                        'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-dashed transition-colors',
-                        hasRedErrors
-                          ? 'text-muted-foreground/30 border-black/[0.04] dark:border-white/[0.04] cursor-not-allowed'
-                          : 'text-muted-foreground hover:text-foreground border-black/[0.08] dark:border-white/[0.08] hover:border-black/[0.15] dark:hover:border-white/[0.15]'
-                      )}>
-                      <Plus className="h-3.5 w-3.5" /> Add Leg
-                    </button>
-                  </div>
-                )}
-
                 {hasRedErrors && (
                   <p className="mt-2 text-xs text-red-500">Resolve errors before adding more legs or saving</p>
+                )}
+
+                {legs.length > 0 && (
+                  <div className="mt-3 text-xs text-muted-foreground font-mono">
+                    {chain}  |  {legs.length} leg{legs.length !== 1 ? 's' : ''}  |  {minutesToHHMM(totalBlock)} total  |  {durationLabel(routeDuration)}
+                  </div>
                 )}
               </div>
 
@@ -1209,10 +1737,11 @@ export function AircraftRoutesBuilder({
               <div className="shrink-0 px-5 py-3 border-t border-black/[0.06] dark:border-white/[0.06] flex items-center gap-2">
                 <button
                   onClick={handleSaveRoute}
-                  disabled={!isDirty || saving || hasRedErrors}
+                  disabled={!isDirty || saving || hasRedErrors || legs.length === 0}
+                  title={legs.length === 0 ? 'Add at least one leg before saving' : undefined}
                   className={cn(
                     'h-8 px-4 flex items-center gap-1.5 rounded-lg text-sm font-medium transition-colors',
-                    isDirty && !saving && !hasRedErrors
+                    isDirty && !saving && !hasRedErrors && legs.length > 0
                       ? 'bg-[#991b1b] text-white hover:bg-[#7f1d1d] cursor-pointer'
                       : 'bg-[#991b1b]/50 text-white/70 cursor-not-allowed'
                   )}>
@@ -1234,8 +1763,8 @@ export function AircraftRoutesBuilder({
               </div>
             </div>
 
-            {/* ── RECENT ROUTES ── */}
-            <RecentRoutesSection recentRoutes={recentRoutes} selectedRouteId={selectedRouteId} onSelectRoute={handleSelectRoute} />
+            {/* ── ROUTE TEMPLATES ── */}
+            <RouteTemplatesSection templates={templates} onUseTemplate={handleUseTemplate} />
           </>
         ) : (
           <>
@@ -1250,7 +1779,7 @@ export function AircraftRoutesBuilder({
                 <Plus className="h-3.5 w-3.5" /> Create New Route
               </button>
             </div>
-            <RecentRoutesSection recentRoutes={recentRoutes} selectedRouteId={selectedRouteId} onSelectRoute={handleSelectRoute} />
+            <RouteTemplatesSection templates={templates} onUseTemplate={handleUseTemplate} />
           </>
         )}
       </div>
@@ -1259,10 +1788,14 @@ export function AircraftRoutesBuilder({
 
       <Dialog open={showUnsavedDialog} onOpenChange={setShowUnsavedDialog}>
         <DialogContent className="glass-heavy max-w-sm">
-          <DialogHeader><DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" />Unsaved Changes</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">You have unsaved changes to <span className="font-mono font-semibold">{form?.routeName || 'this route'}</span>.</p>
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" />{isNewRoute ? 'Discard New Route?' : 'Unsaved Changes'}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {isNewRoute
+              ? 'You have an unsaved new route. Discard it?'
+              : <>You have unsaved changes to <span className="font-mono font-semibold">{form?.routeName || 'this route'}</span>.</>}
+          </p>
           <DialogFooter className="gap-2 sm:gap-2">
-            <button onClick={() => setShowUnsavedDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
+            <button onClick={() => { setShowUnsavedDialog(false); pendingActionRef.current = null }} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
             <button onClick={handleDiscardAndSwitch} className="h-8 px-4 rounded-lg bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 transition-colors">Discard</button>
           </DialogFooter>
         </DialogContent>
@@ -1388,6 +1921,7 @@ function LegRow({
   editingCell, editValue, onStartEdit, onEditChange, onCommitEdit, onCancelEdit,
   operatorIataCode, airportIataSet, cellInputClass,
   onDragStart, onDragOver, onDrop, isDropTarget,
+  isSelected, onSelect,
 }: {
   leg: LegWithOffsets
   index: number
@@ -1407,25 +1941,36 @@ function LegRow({
   onDragOver: (e: React.DragEvent) => void
   onDrop: () => void
   isDropTarget: boolean
+  isSelected: boolean
+  onSelect: () => void
 }) {
   const isEditing = (field: string) => editingCell?.legId === leg.id && editingCell?.field === field
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') onCommitEdit()
-    if (e.key === 'Escape') onCancelEdit()
-  }
 
-  function renderEditableCell(field: string, displayValue: string, rawValue: string, width: string, extraClass?: string) {
+  function renderEditableCell(field: string, displayValue: string, rawValue: string, width: string, colIdx: number, extraClass?: string) {
     if (isEditing(field)) {
       return (
         <input autoFocus value={editValue}
+          data-grid-row={index} data-grid-col={colIdx}
           onChange={e => onEditChange(field === 'dep_station' || field === 'arr_station' ? e.target.value.toUpperCase() : e.target.value)}
-          onBlur={onCommitEdit} onKeyDown={handleKeyDown}
+          onBlur={onCommitEdit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { onCommitEdit(); return }
+            if (e.key === 'Escape') { onCancelEdit(); return }
+            const input = e.target as HTMLInputElement
+            const atStart = input.selectionStart === 0
+            const atEnd = input.selectionStart === input.value.length
+            if (e.key === 'ArrowDown') { e.preventDefault(); onCommitEdit(); setTimeout(() => focusGridCell(index + 1, colIdx), 0); return }
+            if (e.key === 'ArrowUp' && index > 0) { e.preventDefault(); onCommitEdit(); setTimeout(() => focusGridCell(index - 1, colIdx), 0); return }
+            if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); onCommitEdit(); setTimeout(() => focusGridCell(index, colIdx - 1), 0); return }
+            if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); onCommitEdit(); setTimeout(() => focusGridCell(index, colIdx + 1), 0); return }
+          }}
           className={cn(cellInputClass, 'text-[13px] text-center', width, extraClass)} style={{ width }} />
       )
     }
     const invalid = (field === 'dep_station' || field === 'arr_station') && displayValue.length === 3 && !airportIataSet.has(displayValue)
     return (
-      <span onClick={() => onStartEdit(leg.id, field, rawValue)}
+      <span data-grid-row={index} data-grid-col={colIdx}
+        onClick={() => onStartEdit(leg.id, field, rawValue)}
         className={cn('cursor-text hover:bg-black/[0.04] dark:hover:bg-white/[0.06] rounded px-0.5 -mx-0.5 transition-colors',
           invalid && 'text-red-500 underline decoration-red-300 decoration-wavy underline-offset-2')}>
         {displayValue || '\u2014'}
@@ -1433,57 +1978,129 @@ function LegRow({
     )
   }
 
+  const bdr = 'border border-black/[0.08] dark:border-white/[0.08]'
   return (
     <tr
-      className={cn('group hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors', isDropTarget && 'border-t-2 border-t-primary')}
+      className={cn('group hover:bg-blue-50/50 dark:hover:bg-white/[0.02] transition-colors h-[36px]',
+        isDropTarget && 'ring-2 ring-primary',
+        isSelected && 'bg-[#f3f4f6] dark:bg-white/[0.05]'
+      )}
+      onClick={onSelect}
       draggable onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop}
     >
-      <td className="py-2 text-center">
-        <GripVertical className="h-3.5 w-3.5 text-muted-foreground/0 group-hover:text-muted-foreground/40 transition-colors cursor-grab mx-auto" />
+      <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground tabular-nums')}>{index + 1}</td>
+      <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground/60 tabular-nums')}>D+{leg._dayOffset}</td>
+      <td className={cn(bdr, 'py-1 pl-2 font-mono font-bold tabular-nums')}>
+        {renderEditableCell('flight_number', flightLabel, leg.flight_number != null ? String(leg.flight_number) : '', '70px', 0, 'font-bold text-left')}
       </td>
-      <td className="py-2 text-center text-[12px] font-mono text-muted-foreground tabular-nums">{index + 1}</td>
-      <td className="py-2 text-center text-[12px] font-mono text-muted-foreground/60 tabular-nums">D+{leg._dayOffset}</td>
-      <td className="py-2 pl-2 text-[13px] font-mono font-bold tabular-nums">
-        {renderEditableCell('flight_number', flightLabel, leg.flight_number != null ? String(leg.flight_number) : '', '70px', 'font-bold text-left')}
+      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums')}>
+        {renderEditableCell('dep_station', leg.dep_station, leg.dep_station, '45px', 1)}
       </td>
-      <td className="py-2 text-center text-[13px] font-mono tabular-nums">
-        {renderEditableCell('dep_station', leg.dep_station, leg.dep_station, '45px')}
+      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums')}>
+        {renderEditableCell('arr_station', leg.arr_station, leg.arr_station, '45px', 2)}
       </td>
-      <td className="py-2 text-center text-[13px] font-mono tabular-nums">
-        {renderEditableCell('arr_station', leg.arr_station, leg.arr_station, '45px')}
+      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums')}>
+        {renderEditableCell('std_local', leg.std_local, leg.std_local, '50px', 3)}
       </td>
-      <td className="py-2 text-center text-[13px] font-mono tabular-nums">
-        {renderEditableCell('std_local', leg.std_local, leg.std_local, '50px')}
-      </td>
-      <td className="py-2 text-center text-[13px] font-mono tabular-nums">
-        {renderEditableCell('sta_local', leg.sta_local, leg.sta_local, '50px')}
+      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums')}>
+        {renderEditableCell('sta_local', leg.sta_local, leg.sta_local, '50px', 4)}
         {!isEditing('sta_local') && leg._arrivesNextDay && (
           <sup className="text-[9px] font-semibold text-amber-600 dark:text-amber-400 ml-0.5">+1</sup>
         )}
       </td>
-      <td className="py-2 text-center text-[13px] font-mono tabular-nums text-muted-foreground">
+      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums text-muted-foreground')}>
         {minutesToHHMM(leg.block_minutes || 0)}
       </td>
-      <td className="py-2 text-center">
-        {validation && (
-          <ValidationTooltip legIndex={index} flightLabel={flightLabel} validation={validation}>
-            <StatusIconForOverall overall={validation.overall} />
-          </ValidationTooltip>
-        )}
+      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums text-muted-foreground/70 text-[12px]')}>
+        {renderEditableCell('service_type', leg.service_type || 'J', leg.service_type || 'J', '30px', 6)}
       </td>
-      <td className="py-2 text-center">
-        <button onClick={onDelete} className="opacity-0 group-hover:opacity-100 transition-opacity" title="Delete leg">
-          <Trash2 className="h-3.5 w-3.5 text-muted-foreground/40 hover:text-red-500 transition-colors mx-auto" />
-        </button>
+      <td className={cn(bdr, 'py-1')}>
+        <div className="flex items-center justify-center">
+          {validation && (
+            <ValidationTooltip legIndex={index} flightLabel={flightLabel} validation={validation}>
+              <StatusIconForOverall overall={validation.overall} />
+            </ValidationTooltip>
+          )}
+        </div>
+      </td>
+      <td className={cn(bdr, 'py-1')}>
+        <div className="flex items-center justify-center">
+          <button onClick={onDelete} className="opacity-0 group-hover:opacity-100 transition-opacity" title="Delete leg">
+            <Trash2 className="h-3.5 w-3.5 text-muted-foreground/40 hover:text-red-500 transition-colors" />
+          </button>
+        </div>
       </td>
     </tr>
   )
 }
 
-// ─── Add Leg Entry Row ────────────────────────────────────────
+// ─── Focusable Empty Grid Row ─────────────────────────────────
 
-function AddLegRow({
-  draft, setDraft, index, operatorIataCode, airportIataSet, onConfirm, onCancel, cellInputClass, validation,
+function FocusableEmptyRow({ index, onActivate, disabled }: {
+  index: number
+  onActivate: (field?: string) => void
+  disabled: boolean
+}) {
+  const bdr = 'border border-black/[0.08] dark:border-white/[0.08]'
+  const ghostInput = 'bg-transparent outline-none font-mono tabular-nums text-transparent placeholder:text-[#d1d5db] dark:placeholder:text-[#4b5563] cursor-text w-full text-center'
+
+  const handleFocus = (field: string) => {
+    if (!disabled) onActivate(field)
+  }
+
+  return (
+    <tr
+      className={cn('h-[36px]', disabled ? 'opacity-30' : 'cursor-text hover:bg-blue-50/30 dark:hover:bg-white/[0.01]')}
+    >
+      <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-[#d1d5db] dark:text-[#4b5563] tabular-nums')}>{index + 1}</td>
+      <td className={cn(bdr, 'py-1 text-center font-mono text-[#d1d5db] dark:text-[#4b5563] select-none')}>&middot;&middot;&middot;</td>
+      <td className={cn(bdr, 'py-1 pl-2')}>
+        <input type="text" readOnly tabIndex={disabled ? -1 : legTabIndex(index, 0)}
+          data-grid-row={index} data-grid-col={0}
+          onFocus={() => handleFocus('flightNumber')}
+          placeholder="&middot;&middot;&middot;&middot;&middot;&middot;&middot;"
+          className={cn(ghostInput, 'text-left w-[60px]')} />
+      </td>
+      <td className={cn(bdr, 'py-1 text-center')}>
+        <input type="text" readOnly tabIndex={-1}
+          data-grid-row={index} data-grid-col={1}
+          onFocus={() => handleFocus('depStation')}
+          placeholder="&middot;&middot;&middot;"
+          className={cn(ghostInput, 'w-[40px]')} />
+      </td>
+      <td className={cn(bdr, 'py-1 text-center')}>
+        <input type="text" readOnly tabIndex={-1}
+          data-grid-row={index} data-grid-col={2}
+          onFocus={() => handleFocus('arrStation')}
+          placeholder="&middot;&middot;&middot;"
+          className={cn(ghostInput, 'w-[40px]')} />
+      </td>
+      <td className={cn(bdr, 'py-1 text-center')}>
+        <input type="text" readOnly tabIndex={-1}
+          data-grid-row={index} data-grid-col={3}
+          onFocus={() => handleFocus('stdLocal')}
+          placeholder="&middot;&middot;:&middot;&middot;"
+          className={cn(ghostInput, 'w-[45px]')} />
+      </td>
+      <td className={cn(bdr, 'py-1 text-center')}>
+        <input type="text" readOnly tabIndex={-1}
+          data-grid-row={index} data-grid-col={4}
+          onFocus={() => handleFocus('staLocal')}
+          placeholder="&middot;&middot;:&middot;&middot;"
+          className={cn(ghostInput, 'w-[45px]')} />
+      </td>
+      <td className={cn(bdr, 'py-1 text-center font-mono text-[#d1d5db] dark:text-[#4b5563] select-none')}>&middot;&middot;:&middot;&middot;</td>
+      <td className={cn(bdr, 'py-1 text-center font-mono text-[#d1d5db] dark:text-[#4b5563] select-none')}>&middot;</td>
+      <td className={cn(bdr, 'py-1')}><div className="flex items-center justify-center"><StatusGray /></div></td>
+      <td className={cn(bdr, 'py-1')}></td>
+    </tr>
+  )
+}
+
+// ─── Grid Entry Row (active editing) ──────────────────────────
+
+function GridEntryRow({
+  draft, setDraft, index, operatorIataCode, airportIataSet, onConfirm, onCancel, cellInputClass, validation, focusField, blockTimeMap,
 }: {
   draft: NewLegDraft
   setDraft: React.Dispatch<React.SetStateAction<NewLegDraft>>
@@ -1494,11 +2111,96 @@ function AddLegRow({
   onCancel: () => void
   cellInputClass: string
   validation: LegValidation | null
+  focusField: string | null
+  blockTimeMap: Map<string, number>
 }) {
   const fltRef = useRef<HTMLInputElement>(null!)
-  useEffect(() => { fltRef.current?.focus() }, [])
+  const depRef = useRef<HTMLInputElement>(null!)
+  const arrRef = useRef<HTMLInputElement>(null!)
+  const stdRef = useRef<HTMLInputElement>(null!)
+  const staRef = useRef<HTMLInputElement>(null!)
+  const blockRef = useRef<HTMLInputElement>(null!)
+  const svcRef = useRef<HTMLInputElement>(null!)
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      switch (focusField) {
+        case 'depStation': depRef.current?.focus(); break
+        case 'arrStation': arrRef.current?.focus(); break
+        case 'stdLocal': stdRef.current?.focus(); break
+        case 'staLocal': staRef.current?.focus(); break
+        default: fltRef.current?.focus(); break
+      }
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [focusField])
+
+  // Auto-suggest STA from block time lookup when DEP+ARR+STD are filled
+  useEffect(() => {
+    const dep = draft.depStation.toUpperCase()
+    const arr = draft.arrStation.toUpperCase()
+    const stdNorm = normalizeTime(draft.stdLocal)
+    if (dep.length === 3 && arr.length === 3 && isValidTime(stdNorm) && (!draft.staLocal || draft._autoFilledSta)) {
+      const blockMin = blockTimeMap.get(`${dep}-${arr}`)
+      if (blockMin && blockMin > 0) {
+        const stdMin = timeToMinutes(stdNorm)
+        const staMin = (stdMin + blockMin) % 1440
+        setDraft(d => ({ ...d, staLocal: minutesToTimeStr(staMin), _autoFilledSta: true }))
+      }
+    }
+  }, [draft.depStation, draft.arrStation, draft.stdLocal, draft._autoFilledSta, blockTimeMap, setDraft])
+
+  const arrowNav = (e: React.KeyboardEvent, col: number): boolean => {
+    const input = e.target as HTMLInputElement
+    const atStart = input.selectionStart === 0
+    const atEnd = input.selectionStart === input.value.length
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusGridCell(index + 1, col); return true }
+    if (e.key === 'ArrowUp' && index > 0) { e.preventDefault(); focusGridCell(index - 1, col); return true }
+    if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); focusGridCell(index, col - 1); return true }
+    if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); focusGridCell(index, col + 1); return true }
+    return false
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent, col: number) => {
+    if (arrowNav(e, col)) return
+    if (e.key === 'Enter') { e.preventDefault(); onConfirm() }
+    if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+  }
+
+  // Tab from STA → move to Block field (which then confirms on Tab)
+  const handleStaKeyDown = (e: React.KeyboardEvent) => {
+    if (arrowNav(e, 4)) return
+    if (e.key === 'Tab' && !e.shiftKey) {
+      e.preventDefault()
+      if (draft.staLocal) {
+        setDraft(d => ({ ...d, staLocal: normalizeTime(d.staLocal) }))
+      }
+      blockRef.current?.focus()
+    }
+    if (e.key === 'Enter') { e.preventDefault(); onConfirm() }
+    if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+  }
+
+  // Tab from Block → move to Svc
+  const handleBlockKeyDown = (e: React.KeyboardEvent) => {
+    if (arrowNav(e, 5)) return
+    if (e.key === 'Tab' && !e.shiftKey) {
+      e.preventDefault()
+      svcRef.current?.focus()
+    }
+    if (e.key === 'Enter') { e.preventDefault(); onConfirm() }
+    if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+  }
+
+  // Tab from Svc → confirm leg and activate next row
+  const handleSvcKeyDown = (e: React.KeyboardEvent) => {
+    if (arrowNav(e, 6)) return
+    if (e.key === 'Tab' && !e.shiftKey) {
+      e.preventDefault()
+      if (draft.flightNumber || draft.arrStation) {
+        onConfirm()
+      }
+    }
     if (e.key === 'Enter') { e.preventDefault(); onConfirm() }
     if (e.key === 'Escape') { e.preventDefault(); onCancel() }
   }
@@ -1517,79 +2219,107 @@ function AddLegRow({
     ? `\u274c ${draft._duplicateError.replace(/^\u274c\s*/, '')}`
     : undefined
 
+  const bdr = 'border border-black/[0.08] dark:border-white/[0.08]'
   return (
     <>
-      <tr className="bg-primary/[0.03]">
-        <td className="py-2 text-center"><Plus className="h-3 w-3 text-primary/40 mx-auto" /></td>
-        <td className="py-2 text-center text-[12px] font-mono text-muted-foreground/50 tabular-nums">{index + 1}</td>
-        <td className="py-2 text-center text-[12px] font-mono text-muted-foreground/40 tabular-nums">D+?</td>
+      <tr className="h-[36px] bg-blue-50 dark:bg-blue-950/20 border-l-[3px] border-l-[#991b1b]">
+        <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground/50 tabular-nums')}>{index + 1}</td>
+        <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground/40 tabular-nums')}>D+?</td>
 
-        <td className="py-2 pl-2">
+        <td className={cn(bdr, 'py-1 pl-2')}>
           <div className="flex items-center gap-0.5">
             <span className="text-[11px] text-muted-foreground/50 font-mono">{operatorIataCode}</span>
-            <input ref={fltRef} type="text" value={draft.flightNumber}
+            <input ref={fltRef} type="text" value={draft.flightNumber} tabIndex={legTabIndex(index, 0)}
+              data-grid-row={index} data-grid-col={0}
               onChange={e => update({ flightNumber: e.target.value.replace(/\D/g, '') })}
-              onKeyDown={handleKeyDown} placeholder="121"
-              className={cn(cellInputClass, 'text-[13px] w-[50px] font-bold', errBorder('flightNumber'))} />
+              onFocus={e => e.target.select()}
+              onKeyDown={e => handleKeyDown(e, 0)} placeholder="121"
+              className={cn(cellInputClass, 'w-[50px] font-bold', errBorder('flightNumber'))} />
           </div>
         </td>
 
-        <td className="py-2 text-center">
-          <input type="text" value={draft.depStation}
+        <td className={cn(bdr, 'py-1 text-center')}>
+          <input ref={depRef} type="text" value={draft.depStation} tabIndex={legTabIndex(index, 1)}
+            data-grid-row={index} data-grid-col={1}
             onChange={e => update({ depStation: e.target.value.toUpperCase().slice(0, 3), _autoFilledDep: false })}
-            onKeyDown={handleKeyDown} placeholder="DEP" maxLength={3}
-            className={cn(cellInputClass, 'text-[13px] w-[45px] text-center', errBorder('depStation'),
+            onFocus={e => { if (draft._autoFilledDep) e.target.select() }}
+            onKeyDown={e => handleKeyDown(e, 1)} placeholder="DEP" maxLength={3}
+            className={cn(cellInputClass, 'w-[45px] text-center', errBorder('depStation'),
               draft._autoFilledDep && 'italic text-[#9ca3af]', depInvalid && 'text-red-500')} />
         </td>
 
-        <td className="py-2 text-center">
-          <input type="text" value={draft.arrStation}
+        <td className={cn(bdr, 'py-1 text-center')}>
+          <input ref={arrRef} type="text" value={draft.arrStation} tabIndex={legTabIndex(index, 2)}
+            data-grid-row={index} data-grid-col={2}
             onChange={e => update({ arrStation: e.target.value.toUpperCase().slice(0, 3) })}
-            onKeyDown={handleKeyDown} placeholder="ARR" maxLength={3}
-            className={cn(cellInputClass, 'text-[13px] w-[45px] text-center', errBorder('arrStation'), arrInvalid && 'text-red-500')} />
+            onFocus={e => e.target.select()}
+            onKeyDown={e => handleKeyDown(e, 2)} placeholder="ARR" maxLength={3}
+            className={cn(cellInputClass, 'w-[45px] text-center', errBorder('arrStation'), arrInvalid && 'text-red-500')} />
         </td>
 
-        <td className="py-2 text-center">
-          <input type="text" value={draft.stdLocal}
+        <td className={cn(bdr, 'py-1 text-center')}>
+          <input ref={stdRef} type="text" value={draft.stdLocal} tabIndex={legTabIndex(index, 3)}
+            data-grid-row={index} data-grid-col={3}
             onChange={e => update({ stdLocal: e.target.value, _autoFilledStd: false })}
+            onFocus={e => { if (draft._autoFilledStd) e.target.select() }}
             onBlur={() => { if (draft.stdLocal) update({ stdLocal: normalizeTime(draft.stdLocal) }) }}
-            onKeyDown={handleKeyDown} placeholder="HH:MM"
-            className={cn(cellInputClass, 'text-[13px] w-[50px] text-center', errBorder('stdLocal'),
+            onKeyDown={e => handleKeyDown(e, 3)} placeholder="HH:MM"
+            className={cn(cellInputClass, 'w-[50px] text-center', errBorder('stdLocal'),
               draft._autoFilledStd && 'italic text-[#9ca3af]')} />
         </td>
 
-        <td className="py-2 text-center">
-          <input type="text" value={draft.staLocal}
-            onChange={e => update({ staLocal: e.target.value })}
+        <td className={cn(bdr, 'py-1 text-center')}>
+          <input ref={staRef} type="text" value={draft.staLocal} tabIndex={legTabIndex(index, 4)}
+            data-grid-row={index} data-grid-col={4}
+            onChange={e => update({ staLocal: e.target.value, _autoFilledSta: false })}
+            onFocus={e => { if (draft._autoFilledSta) e.target.select() }}
             onBlur={() => { if (draft.staLocal) update({ staLocal: normalizeTime(draft.staLocal) }) }}
-            onKeyDown={handleKeyDown} placeholder="HH:MM"
-            className={cn(cellInputClass, 'text-[13px] w-[50px] text-center', errBorder('staLocal'))} />
+            onKeyDown={handleStaKeyDown} placeholder="HH:MM"
+            className={cn(cellInputClass, 'w-[50px] text-center', errBorder('staLocal'),
+              draft._autoFilledSta && 'italic text-[#9ca3af]')} />
         </td>
 
-        <td className="py-2 text-center text-[13px] font-mono tabular-nums text-muted-foreground/50">
-          {blockMin > 0 ? minutesToHHMM(blockMin) : '--:--'}
+        <td className={cn(bdr, 'py-1 text-center')}>
+          <input ref={blockRef} type="text" readOnly tabIndex={legTabIndex(index, 5)}
+            data-grid-row={index} data-grid-col={5}
+            value={blockMin > 0 ? minutesToHHMM(blockMin) : '--:--'}
+            onKeyDown={handleBlockKeyDown}
+            className="bg-transparent outline-none font-mono tabular-nums text-muted-foreground/50 w-[45px] text-center cursor-default focus:ring-1 focus:ring-primary/30 rounded" />
         </td>
 
-        <td className="py-2 text-center">
-          {validation ? (
-            <ValidationTooltip legIndex={index} flightLabel={fltLabel} validation={validation} duplicateLine={dupLine}>
-              <StatusIconForOverall overall={validation.overall} />
-            </ValidationTooltip>
-          ) : (
-            <StatusGray />
-          )}
+        <td className={cn(bdr, 'py-1 text-center')}>
+          <input ref={svcRef} type="text" value={draft.serviceType} tabIndex={legTabIndex(index, 6)}
+            data-grid-row={index} data-grid-col={6}
+            onChange={e => update({ serviceType: e.target.value.toUpperCase().slice(0, 1) })}
+            onFocus={e => e.target.select()}
+            onKeyDown={handleSvcKeyDown} placeholder="J" maxLength={1}
+            className={cn(cellInputClass, 'w-[25px] text-center text-[12px]')} />
         </td>
 
-        <td className="py-2 text-center">
-          <button onClick={onCancel} disabled={draft._checking} className="text-muted-foreground/40 hover:text-red-500 transition-colors disabled:opacity-30" title="Cancel">
-            <Trash2 className="h-3.5 w-3.5 mx-auto" />
-          </button>
+        <td className={cn(bdr, 'py-1')}>
+          <div className="flex items-center justify-center">
+            {validation ? (
+              <ValidationTooltip legIndex={index} flightLabel={fltLabel} validation={validation} duplicateLine={dupLine}>
+                <StatusIconForOverall overall={validation.overall} />
+              </ValidationTooltip>
+            ) : (
+              <StatusGray />
+            )}
+          </div>
+        </td>
+
+        <td className={cn(bdr, 'py-1')}>
+          <div className="flex items-center justify-center">
+            <button onClick={onCancel} disabled={draft._checking} tabIndex={-1} className="text-muted-foreground/40 hover:text-red-500 transition-colors disabled:opacity-30" title="Cancel">
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </td>
       </tr>
 
       {(draft._duplicateError || draft._checking) && (
-        <tr className="bg-primary/[0.03]">
-          <td colSpan={11} className="py-0 pb-2">
+        <tr className="bg-blue-50 dark:bg-blue-950/20">
+          <td colSpan={11} className={cn(bdr, 'py-0 pb-1.5')}>
             <div className="pl-[60px] pr-4">
               {draft._checking ? (
                 <span className="text-[11px] text-muted-foreground flex items-center gap-1.5">
@@ -1606,26 +2336,36 @@ function AddLegRow({
   )
 }
 
-// ─── Recent Routes Section ───────────────────────────────────
+// ─── Route Templates Section ─────────────────────────────────
 
-function RecentRoutesSection({
-  recentRoutes, selectedRouteId, onSelectRoute,
+function RouteTemplatesSection({
+  templates, onUseTemplate,
 }: {
-  recentRoutes: RecentRoute[]
-  selectedRouteId: string | null
-  onSelectRoute: (id: string) => void
+  templates: RouteTemplate[]
+  onUseTemplate: (tmpl: RouteTemplate) => void
 }) {
   return (
     <div className="shrink-0 glass rounded-2xl px-5 py-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-[13px] font-medium text-muted-foreground">Recent Routes</h3>
+        <h3 className="text-[13px] font-medium text-muted-foreground">Route Templates</h3>
       </div>
-      {recentRoutes.length === 0 ? (
-        <p className="text-xs text-muted-foreground/50 py-2">Routes you create will appear here for quick access</p>
+      {templates.length === 0 ? (
+        <p className="text-xs text-muted-foreground/50 py-2">Saved routes will appear here as templates</p>
       ) : (
-        <div className="flex gap-3 overflow-x-auto pb-1 custom-scrollbar">
-          {recentRoutes.map(route => (
-            <RecentRouteCard key={route.id} route={route} isActive={route.id === selectedRouteId} onClick={() => onSelectRoute(route.id)} />
+        <div className="grid gap-2 overflow-hidden" style={{ gridTemplateColumns: 'repeat(4, 220px)', maxHeight: '124px' }}>
+          {templates.slice(0, 8).map(tmpl => (
+            <button
+              key={`${tmpl.chain}-${tmpl.aircraft_type_icao || ''}`}
+              onClick={() => onUseTemplate(tmpl)}
+              className="w-[220px] rounded-xl px-3 py-2.5 text-left transition-all duration-150 bg-white/40 dark:bg-white/[0.04] border border-black/[0.06] dark:border-white/[0.06] hover:border-black/[0.12] dark:hover:border-white/[0.12] hover:shadow-sm"
+            >
+              <div className="text-[12px] font-mono font-medium truncate mb-0.5">{tmpl.chain}</div>
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 tabular-nums">
+                <span>{tmpl.leg_count} leg{tmpl.leg_count !== 1 ? 's' : ''}</span>
+                {tmpl.aircraft_type_icao && <span className="font-mono">{tmpl.aircraft_type_icao}</span>}
+                <span>{minutesToHHMM(tmpl.total_block_minutes)}</span>
+              </div>
+            </button>
           ))}
         </div>
       )}
@@ -1633,59 +2373,38 @@ function RecentRoutesSection({
   )
 }
 
-function RecentRouteCard({ route, isActive, onClick }: { route: RecentRoute; isActive: boolean; onClick: () => void }) {
-  const chainCompact = route.chain
-    ? (route.is_round_trip
-        ? route.chain.split(' \u2192 ')[0] + ' \u2194 ' + (route.chain.split(' \u2192 ')[1] || '')
-        : route.chain.replace(/ \u2192 /g, '\u2192'))
-    : 'No legs'
-
-  return (
-    <button onClick={onClick}
-      className={cn(
-        'shrink-0 min-w-[150px] rounded-xl p-3 text-left transition-all duration-150 hover:shadow-md',
-        'bg-white/40 dark:bg-white/[0.04] border',
-        isActive ? 'border-[#991b1b]/40 shadow-sm' : 'border-black/[0.06] dark:border-white/[0.06] hover:border-black/[0.12] dark:hover:border-white/[0.12]'
-      )}>
-      <div className="text-[12px] font-semibold font-mono truncate mb-1">{route.route_name || 'Untitled'}</div>
-      <div className="text-[11px] text-muted-foreground font-mono truncate mb-1.5">{chainCompact} {route.is_round_trip ? '\ud83d\udd04' : ''}</div>
-      <div className="text-[10px] text-muted-foreground/70 tabular-nums mb-1.5">{route.leg_count} leg{route.leg_count !== 1 ? 's' : ''} {minutesToHHMM(route.total_block_minutes)}</div>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          {route.aircraft_type_icao && <span className="text-[10px] font-mono text-muted-foreground/60">{route.aircraft_type_icao}</span>}
-          <DowDotsTiny value={route.days_of_operation} />
-        </div>
-        <div className="flex items-center gap-1">
-          <div className={cn('w-[5px] h-[5px] rounded-full', route.status === 'published' ? 'bg-emerald-500' : 'bg-gray-400')} />
-          <span className="text-[9px] text-muted-foreground/60 capitalize">{route.status}</span>
-        </div>
-      </div>
-    </button>
-  )
-}
-
 // ─── Route Item (left panel) ──────────────────────────────────
 
 function RouteItem({ route, isSelected, onClick }: { route: AircraftRoute; isSelected: boolean; onClick: () => void }) {
+  const chainDash = route.chain ? route.chain.replace(/ \u2192 /g, '-') : 'No legs'
   return (
     <button onClick={onClick}
-      className={cn('w-full text-left rounded-xl px-3 py-2 transition-all duration-150 group',
+      className={cn('w-full text-left rounded-xl px-2 py-2 transition-all duration-150',
         isSelected ? 'bg-[#991b1b]/10 dark:bg-[#991b1b]/20 border-l-[3px] border-l-[#991b1b]'
           : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.05] border-l-[3px] border-l-transparent')}>
-      <div className="flex items-center gap-1.5 mb-0.5">
-        <span className={cn('text-[13px] font-semibold font-mono', isSelected ? 'text-[#991b1b]' : 'text-foreground')}>
-          {route.route_name || `Route ${route.route_number}`}
-        </span>
-        {route.is_round_trip && <span className="text-[10px] text-muted-foreground" title="Round trip">{'\ud83d\udd04'}</span>}
-        {route.status === 'published' && <div className="w-[5px] h-[5px] rounded-full bg-emerald-500 shrink-0" title="Published" />}
-      </div>
-      <div className="text-[11px] text-muted-foreground mb-1.5 truncate font-mono">{route.chain || 'No legs'}</div>
-      <div className="flex items-center justify-between gap-2">
-        <DowCirclesSmall value={route.days_of_operation} />
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/70 tabular-nums">
-          <span>{route.legs.length} leg{route.legs.length !== 1 ? 's' : ''}</span>
-          <span>{minutesToHHMM(route.total_block_minutes)}</span>
+      <div className="flex items-center justify-between mb-0.5">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className={cn('text-[13px] font-semibold font-mono truncate', isSelected ? 'text-[#991b1b]' : 'text-[#111827] dark:text-foreground')}>
+            {route.route_name || `Route ${route.route_number}`}
+          </span>
+          {route.status === 'published' && <div className="w-[5px] h-[5px] rounded-full bg-emerald-500 shrink-0" title="Published" />}
         </div>
+        <div className="flex items-center gap-[2px] shrink-0 ml-2">
+          {DOW_LABELS.map((label, i) => (
+            <div key={i} className={cn(
+              'w-[16px] h-[16px] rounded-full text-[8px] font-semibold leading-none flex items-center justify-center',
+              isDayActive(route.days_of_operation, i)
+                ? 'bg-[#991b1b] text-white'
+                : 'text-[#d1d5db] dark:text-[#4b5563]'
+            )}>{label}</div>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-[12px] text-[#6b7280] font-mono truncate">{chainDash}</span>
+        <span className="text-[12px] text-[#6b7280] tabular-nums whitespace-nowrap ml-2 shrink-0">
+          {route.legs.length} leg{route.legs.length !== 1 ? 's' : ''} {minutesToHHMM(route.total_block_minutes)}
+        </span>
       </div>
     </button>
   )

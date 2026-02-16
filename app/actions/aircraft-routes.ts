@@ -277,6 +277,8 @@ export interface SaveRouteInput {
  * a flight_id, and updates existing flights whose fields changed.
  */
 export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; error?: string }> {
+  if (input.legs.length === 0) return { error: 'Cannot save route with no legs' }
+
   const operatorId = await getCurrentOperatorId()
   const client = await pool.connect()
 
@@ -370,8 +372,8 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7::time, $8::time, $9, $10,
             $11::date, $12::date, $13, $14, $15, $16, 'builder', 'draft',
-            (SELECT id FROM airports WHERE iata_code = $5 LIMIT 1),
-            (SELECT id FROM airports WHERE iata_code = $6 LIMIT 1)
+            (SELECT id FROM airports WHERE iata_code = $5::varchar LIMIT 1),
+            (SELECT id FROM airports WHERE iata_code = $6::varchar LIMIT 1)
           )
           RETURNING id
         `, [
@@ -563,4 +565,110 @@ export async function getRecentRoutes(): Promise<RecentRoute[]> {
       updated_at: r.updated_at?.toISOString?.() || r.updated_at,
     } as RecentRoute
   })
+}
+
+// ─── Route Templates ─────────────────────────────────────────
+
+export interface RouteTemplateLeg {
+  airline_code: string | null
+  flight_number: number | null
+  dep_station: string
+  arr_station: string
+  std_local: string
+  sta_local: string
+  block_minutes: number | null
+  service_type: string
+}
+
+export interface RouteTemplate {
+  id: string
+  chain: string
+  aircraft_type_icao: string | null
+  aircraft_type_id: string | null
+  days_of_operation: string
+  leg_count: number
+  total_block_minutes: number
+  legs: RouteTemplateLeg[]
+  usage_count: number
+}
+
+/**
+ * Get distinct route templates (unique chain + AC type patterns).
+ * Uses the most recent route per pattern as the representative.
+ */
+export async function getRouteTemplates(): Promise<RouteTemplate[]> {
+  const operatorId = await getCurrentOperatorId()
+
+  const routeRes = await pool.query(`
+    SELECT ar.id, ar.aircraft_type_icao, ar.aircraft_type_id, ar.days_of_operation, ar.updated_at
+    FROM aircraft_routes ar
+    WHERE ar.operator_id = $1
+    ORDER BY ar.updated_at DESC
+  `, [operatorId])
+
+  if (!routeRes.rows.length) return []
+
+  const routeIds = routeRes.rows.map(r => r.id)
+  const legRes = await pool.query(`
+    SELECT route_id, airline_code, flight_number, dep_station, arr_station,
+           to_char(std_local, 'HH24:MI') AS std_local,
+           to_char(sta_local, 'HH24:MI') AS sta_local,
+           block_minutes, service_type, leg_sequence
+    FROM aircraft_route_legs
+    WHERE route_id = ANY($1)
+    ORDER BY route_id, leg_sequence
+  `, [routeIds])
+
+  const legsByRoute = new Map<string, typeof legRes.rows>()
+  for (const leg of legRes.rows) {
+    const arr = legsByRoute.get(leg.route_id) || []
+    arr.push(leg)
+    legsByRoute.set(leg.route_id, arr)
+  }
+
+  // Deduplicate by chain + aircraft_type_icao (first seen = most recent)
+  const seen = new Map<string, RouteTemplate>()
+  const countMap = new Map<string, number>()
+
+  for (const r of routeRes.rows) {
+    const legs = legsByRoute.get(r.id) || []
+    if (legs.length === 0) continue
+
+    const chain = legs.map((l: { dep_station: string }) => l.dep_station)
+      .concat(legs[legs.length - 1].arr_station).join('-')
+    const key = `${chain}|${r.aircraft_type_icao || ''}`
+
+    countMap.set(key, (countMap.get(key) || 0) + 1)
+
+    if (!seen.has(key)) {
+      const totalBlock = legs.reduce((sum: number, l: { block_minutes: number | null }) => sum + (l.block_minutes || 0), 0)
+      seen.set(key, {
+        id: r.id,
+        chain,
+        aircraft_type_icao: r.aircraft_type_icao,
+        aircraft_type_id: r.aircraft_type_id,
+        days_of_operation: r.days_of_operation,
+        leg_count: legs.length,
+        total_block_minutes: totalBlock,
+        legs: legs.map((l: { airline_code: string | null; flight_number: number | null; dep_station: string; arr_station: string; std_local: string; sta_local: string; block_minutes: number | null; service_type: string }) => ({
+          airline_code: l.airline_code,
+          flight_number: l.flight_number,
+          dep_station: l.dep_station,
+          arr_station: l.arr_station,
+          std_local: l.std_local,
+          sta_local: l.sta_local,
+          block_minutes: l.block_minutes,
+          service_type: l.service_type || 'J',
+        })),
+        usage_count: 0,
+      })
+    }
+  }
+
+  const templates = Array.from(seen.values()).map(tmpl => ({
+    ...tmpl,
+    usage_count: countMap.get(`${tmpl.chain}|${tmpl.aircraft_type_icao || ''}`) || 1,
+  }))
+
+  return templates.slice(0, 12)
 }

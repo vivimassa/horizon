@@ -70,7 +70,7 @@ export async function getCityPairsForScheduleBuilder(): Promise<{
   }
 
   // Get all raw city pair data for mapping
-  const { data: rawPairs } = await supabase.from('city_pairs').select('id, departure_airport_id, arrival_airport_id, great_circle_distance_nm')
+  const { data: rawPairs } = await supabase.from('city_pairs').select('id, departure_airport_id, arrival_airport_id, great_circle_distance_nm, standard_block_minutes')
   const pairMap = new Map<string, { dep_id: string; arr_id: string; dist: number }>()
   for (const rp of rawPairs || []) {
     if (rp.departure_airport_id && rp.arrival_airport_id) {
@@ -79,6 +79,7 @@ export async function getCityPairsForScheduleBuilder(): Promise<{
   }
 
   const blockLookup: ScheduleBlockLookup[] = []
+  const coveredPairIds = new Set<string>()
   for (const bh of blockHours || []) {
     const pm = pairMap.get(bh.city_pair_id)
     if (!pm) continue
@@ -86,10 +87,25 @@ export async function getCityPairsForScheduleBuilder(): Promise<{
     const arrIata = idToIata.get(pm.arr_id)
     if (!depIata || !arrIata) continue
 
+    coveredPairIds.add(bh.city_pair_id)
     // Direction 1: dep -> arr
     blockLookup.push({ dep_iata: depIata, arr_iata: arrIata, block_minutes: bh.direction1_block_minutes, flight_minutes: bh.direction1_flight_minutes ?? null, distance_nm: pm.dist })
     // Direction 2: arr -> dep
     blockLookup.push({ dep_iata: arrIata, arr_iata: depIata, block_minutes: bh.direction2_block_minutes, flight_minutes: bh.direction2_flight_minutes ?? null, distance_nm: pm.dist })
+  }
+
+  // Fallback: for city pairs with no block_hours entry, use standard_block_minutes
+  for (const rp of rawPairs || []) {
+    if (coveredPairIds.has(rp.id)) continue
+    const sbm = rp.standard_block_minutes as number | null
+    if (!sbm || sbm <= 0) continue
+    const depIata = idToIata.get(rp.departure_airport_id)
+    const arrIata = idToIata.get(rp.arrival_airport_id)
+    if (!depIata || !arrIata) continue
+    const dist = rp.great_circle_distance_nm || 0
+    // Use same block time for both directions as a fallback
+    blockLookup.push({ dep_iata: depIata, arr_iata: arrIata, block_minutes: sbm, flight_minutes: null, distance_nm: dist })
+    blockLookup.push({ dep_iata: arrIata, arr_iata: depIata, block_minutes: sbm, flight_minutes: null, distance_nm: dist })
   }
 
   return { pairs, blockLookup }
