@@ -98,6 +98,18 @@ export default function MapboxMap({
     }
   }, [onMapReady, bounds, fitBoundsOptions])
 
+  // Fly to new center when it changes
+  const prevCenter = useRef(center)
+  useEffect(() => {
+    if (!center || !mapRef.current) return
+    if (prevCenter.current[0] === center[0] && prevCenter.current[1] === center[1]) return
+    prevCenter.current = center
+    const map = mapRef.current.getMap()
+    if (map) {
+      map.flyTo({ center: [center[0], center[1]], zoom, duration: 800 })
+    }
+  }, [center, zoom])
+
   // Re-fit bounds when they change
   useEffect(() => {
     if (!bounds) return

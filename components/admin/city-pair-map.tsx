@@ -56,13 +56,36 @@ function PingPongGlowOverlay({
       .getPropertyValue('--primary').trim()
     const color = primaryColor ? `hsl(${primaryColor})` : '#3b82f6'
 
+    // SVG defs for gradients
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
+
+    // Fade gradient for static line (fade at both ends)
+    const fadeGrad = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient')
+    fadeGrad.setAttribute('id', 'routeLineFade')
+    fadeGrad.setAttribute('gradientUnits', 'userSpaceOnUse')
+    const fadeStops = [
+      { offset: '0%', opacity: '0' },
+      { offset: '12%', opacity: '1' },
+      { offset: '88%', opacity: '1' },
+      { offset: '100%', opacity: '0' },
+    ]
+    for (const s of fadeStops) {
+      const stop = document.createElementNS('http://www.w3.org/2000/svg', 'stop')
+      stop.setAttribute('offset', s.offset)
+      stop.setAttribute('stop-color', color)
+      stop.setAttribute('stop-opacity', s.opacity)
+      fadeGrad.appendChild(stop)
+    }
+    defs.appendChild(fadeGrad)
+    svg.appendChild(defs)
+
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
 
-    // Static route path (subtle)
+    // Static route path (faded at ends)
     const staticPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
     staticPath.setAttribute('fill', 'none')
-    staticPath.setAttribute('stroke', color)
-    staticPath.setAttribute('stroke-opacity', '0.2')
+    staticPath.setAttribute('stroke', 'url(#routeLineFade)')
+    staticPath.setAttribute('stroke-opacity', '0.25')
     staticPath.setAttribute('stroke-width', '1.5')
     staticPath.setAttribute('stroke-linejoin', 'round')
     g.appendChild(staticPath)
@@ -83,13 +106,24 @@ function PingPongGlowOverlay({
     let glowLen = 0
 
     function buildPath() {
-      const d = 'M' + points.map(([lat, lng]) => {
+      const projected = points.map(([lat, lng]) => {
         const pt = mapInstance!.project([lng, lat])
-        return `${pt.x},${pt.y}`
-      }).join('L')
+        return [pt.x, pt.y] as [number, number]
+      })
+      const d = 'M' + projected.map(([x, y]) => `${x},${y}`).join('L')
 
       staticPath.setAttribute('d', d)
       glowPath.setAttribute('d', d)
+
+      // Update gradient coords to follow the line endpoints
+      if (projected.length >= 2) {
+        const first = projected[0]
+        const last = projected[projected.length - 1]
+        fadeGrad.setAttribute('x1', String(first[0]))
+        fadeGrad.setAttribute('y1', String(first[1]))
+        fadeGrad.setAttribute('x2', String(last[0]))
+        fadeGrad.setAttribute('y2', String(last[1]))
+      }
 
       totalLength = glowPath.getTotalLength()
       if (totalLength > 0) {
@@ -182,7 +216,8 @@ function PingPongGlowOverlay({
 
 function AirportPin({ iata }: { iata: string }) {
   return (
-    <div className="flex flex-col items-center">
+    <div className="relative flex flex-col items-center">
+      {/* Dot — positioned at the marker anchor point (center) */}
       <div
         style={{
           width: 20,
@@ -193,9 +228,10 @@ function AirportPin({ iata }: { iata: string }) {
           boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
         }}
       />
+      {/* Label — positioned below the dot, doesn't affect anchor alignment */}
       <span
-        className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white mt-1"
-        style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+        className="absolute px-2 py-0.5 rounded-full text-[10px] font-bold text-white whitespace-nowrap"
+        style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', top: 24 }}
       >
         {iata}
       </span>

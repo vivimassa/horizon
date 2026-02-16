@@ -81,10 +81,21 @@ function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function fmtDateDisplay(iso: string): string {
+function fmtDateDisplay(iso: any): string {
   if (!iso) return ''
-  const [y, m, d] = iso.split('-')
-  return `${d}/${m}/${y}`
+  if (iso instanceof Date) {
+    const d = iso.getDate().toString().padStart(2, '0')
+    const m = (iso.getMonth() + 1).toString().padStart(2, '0')
+    const y = iso.getFullYear()
+    return `${d}/${m}/${y}`
+  }
+  const str = String(iso)
+  if (str.includes('-')) {
+    const [y, m, d] = str.split('-')
+    return `${d}/${m}/${y}`
+  }
+  if (str.includes('/')) return str
+  return str
 }
 
 function parseDateDisplay(display: string): string {
@@ -704,8 +715,24 @@ export function AircraftRoutesBuilder({
       }
 
       // Block time
-      if ((leg.block_minutes || 0) <= 0) {
+      const actual = leg.block_minutes || 0
+      if (actual <= 0) {
         v.block = { status: 'error', message: 'Invalid block time' }
+      } else {
+        // Check against city pair reference
+        const refKey = `${leg.dep_station}-${leg.arr_station}`
+        const refBlock = blockTimeMap.get(refKey)
+        if (refBlock && refBlock > 0) {
+          const diff = Math.abs(actual - refBlock)
+          const tolerance = Math.max(15, refBlock * 0.15)
+          if (diff > tolerance) {
+            v.block = { status: 'warn', message: `Block: ${minutesToHHMM(actual)} — differs from city pair ref ${minutesToHHMM(refBlock)} by ${diff} min` }
+          } else {
+            v.block = { status: 'pass', message: `Block: ${minutesToHHMM(actual)} (ref: ${minutesToHHMM(refBlock)})` }
+          }
+        } else {
+          v.block = { status: 'pass', message: `Block: ${minutesToHHMM(actual)}` }
+        }
       }
 
       // Overall
@@ -715,7 +742,7 @@ export function AircraftRoutesBuilder({
 
       return v
     })
-  }, [legs, form?.aircraftTypeId, acTypeMap, airportCountryMap, operatorCountry])
+  }, [legs, form?.aircraftTypeId, acTypeMap, airportCountryMap, operatorCountry, blockTimeMap])
 
   // ── Draft (entry row) validation ──
   const draftValidation = useMemo((): LegValidation | null => {
@@ -2109,13 +2136,18 @@ export function AircraftRoutesBuilder({
 
             {/* ── LEGS GRID ── */}
             <div className="flex-1 glass rounded-2xl flex flex-col overflow-hidden min-h-0">
-              <div className="shrink-0 px-4 pt-3 pb-1.5">
-                <h3 className="text-sm font-semibold">Flight Legs Information</h3>
+              <div className="shrink-0 px-4 pt-3 pb-1.5 flex items-baseline gap-3">
+                <h3 className="text-sm font-semibold whitespace-nowrap">Flight Legs Information</h3>
+                {legs.length > 0 && (
+                  <span className="text-xs text-[#9ca3af] font-normal whitespace-nowrap">
+                    ({chain} · {legs.length} leg{legs.length !== 1 ? 's' : ''} · {minutesToHHMM(totalBlock)} · {durationLabel(routeDuration)})
+                  </span>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto px-4 pb-3 custom-scrollbar">
                 <table className="w-full border-collapse border border-black/[0.08] dark:border-white/[0.08] text-[13px]"
-                  style={{ userSelect: dragIdx !== null ? 'none' : undefined }}
+                  style={{ tableLayout: 'fixed', userSelect: dragIdx !== null ? 'none' : undefined }}
                   onDragStart={e => { if (!(e.target as HTMLElement).closest('[data-draggable-row]')) e.preventDefault() }}>
                   <thead>
                     {(() => {
@@ -2123,16 +2155,16 @@ export function AircraftRoutesBuilder({
                       const hlStyle = (col: number): React.CSSProperties | undefined => highlightedCol === col ? { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' } : undefined
                       return (
                         <tr className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-[#f8f9fa] dark:bg-white/[0.03] sticky top-0 z-10">
-                          <th className={cn('w-[30px]', thBase)}>#</th>
-                          <th className={cn('w-[35px]', thBase)} style={hlStyle(0)}>Day</th>
-                          <th className={cn('w-[70px]', thBase)} style={hlStyle(1)}>Flt No</th>
-                          <th className={cn('w-[50px]', thBase)} style={hlStyle(2)}>DEP</th>
-                          <th className={cn('w-[50px]', thBase)} style={hlStyle(3)}>ARR</th>
-                          <th className={cn('w-[60px]', thBase)} style={hlStyle(4)}>STD</th>
-                          <th className={cn('w-[60px]', thBase)} style={hlStyle(5)}>STA</th>
-                          <th className={cn('w-[55px]', thBase)} style={hlStyle(6)}>Block</th>
-                          <th className={cn('w-[35px]', thBase)} style={hlStyle(7)}>Svc</th>
-                          <th className={cn('w-[40px]', thBase)}></th>
+                          <th className={thBase} style={{ width: '4%' }}>#</th>
+                          <th className={thBase} style={{ width: '6%', ...hlStyle(0) }}>Day</th>
+                          <th className={thBase} style={{ width: '10%', ...hlStyle(1) }}>Flt No</th>
+                          <th className={thBase} style={{ width: '7%', ...hlStyle(2) }}>DEP</th>
+                          <th className={thBase} style={{ width: '7%', ...hlStyle(3) }}>ARR</th>
+                          <th className={thBase} style={{ width: '10%', ...hlStyle(4) }}>STD</th>
+                          <th className={thBase} style={{ width: '10%', ...hlStyle(5) }}>STA</th>
+                          <th className={thBase} style={{ width: '10%', ...hlStyle(6) }}>Block</th>
+                          <th className={thBase} style={{ width: '5%', ...hlStyle(7) }}>Svc</th>
+                          <th className={thBase} style={{ width: '5%' }}></th>
                         </tr>
                       )
                     })()}
@@ -2220,11 +2252,6 @@ export function AircraftRoutesBuilder({
                   <p className="mt-2 text-xs text-red-500">Resolve errors before adding more legs or saving</p>
                 )}
 
-                {legs.length > 0 && (
-                  <div className="mt-3 text-xs text-muted-foreground font-mono">
-                    {chain}  |  {legs.length} leg{legs.length !== 1 ? 's' : ''}  |  {minutesToHHMM(totalBlock)} total  |  {durationLabel(routeDuration)}
-                  </div>
-                )}
               </div>
 
               {/* Action buttons */}
@@ -2261,8 +2288,19 @@ export function AircraftRoutesBuilder({
             <RouteTemplatesSection templates={templates} onUseTemplate={handleUseTemplate} />
           </>
         ) : (
-          <div className="flex-1 glass rounded-2xl flex items-center justify-center">
-            <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground/40" />
+          <div className="flex-1 glass rounded-2xl flex flex-col items-center justify-center gap-3">
+            {selectedScenario ? (
+              <>
+                <Plane className="h-10 w-10 opacity-15" />
+                <p className="text-sm text-muted-foreground">Select a route or create a new one</p>
+              </>
+            ) : (
+              <>
+                <Plane className="h-10 w-10 opacity-15" />
+                <p className="text-sm text-muted-foreground">No scenario selected</p>
+                <p className="text-xs text-muted-foreground/60">Create or select a scenario to get started</p>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -2807,7 +2845,6 @@ function FocusableEmptyRow({ index, onActivate, disabled }: {
       <td className={cn(bdr, 'py-1 text-center font-mono text-[#d1d5db] dark:text-[#4b5563] select-none')}>&middot;&middot;:&middot;&middot;</td>
       <td className={cn(bdr, 'py-1 text-center font-mono text-[#d1d5db] dark:text-[#4b5563] select-none')}>&middot;</td>
       <td className={cn(bdr, 'py-1')}><div className="flex items-center justify-center"><StatusGray /></div></td>
-      <td className={cn(bdr, 'py-1')}></td>
     </tr>
   )
 }
@@ -3020,18 +3057,11 @@ function GridEntryRow({
           </div>
         </td>
 
-        <td className={cn(bdr, 'py-1')}>
-          <div className="flex items-center justify-center">
-            <button onClick={onCancel} disabled={draft._checking} tabIndex={-1} className="text-muted-foreground/40 hover:text-red-500 transition-colors disabled:opacity-30" title="Cancel">
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </td>
       </tr>
 
       {(draft._duplicateError || draft._checking) && (
         <tr className="bg-blue-50 dark:bg-blue-950/20">
-          <td colSpan={11} className={cn(bdr, 'py-0 pb-1.5')}>
+          <td colSpan={10} className={cn(bdr, 'py-0 pb-1.5')}>
             <div className="pl-[60px] pr-4">
               {draft._checking ? (
                 <span className="text-[11px] text-muted-foreground flex items-center gap-1.5">

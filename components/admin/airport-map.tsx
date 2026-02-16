@@ -36,7 +36,7 @@ export default function AirportMap({ latitude, longitude, name, isoCode2, classN
   return (
     <MapboxMap
       center={[longitude, latitude]}
-      zoom={14}
+      zoom={13}
       defaultSatellite={false}
       className={cn('h-full', className)}
       overlay={overlay}
