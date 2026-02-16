@@ -3,6 +3,8 @@
  * and route type determination.
  */
 
+import { classifyRoute } from '@/lib/data/airport-countries'
+
 const EARTH_RADIUS_NM = 3440.065 // Earth radius in nautical miles
 
 function toRad(deg: number): number {
@@ -79,15 +81,29 @@ export function calculateGreatCirclePoints(
 
 /**
  * Determine route type by comparing country and region information.
- * @returns 'domestic' | 'regional' | 'international'
+ * Uses country_id UUIDs first, falls back to IATA lookup if either is NULL.
+ * @returns 'domestic' | 'regional' | 'international' | 'unknown'
  */
 export function determineRouteType(
   country1Id: string | null,
   country2Id: string | null,
   region1?: string | null,
-  region2?: string | null
-): 'domestic' | 'regional' | 'international' {
-  if (country1Id && country2Id && country1Id === country2Id) return 'domestic'
-  if (region1 && region2 && region1 === region2) return 'regional'
-  return 'international'
+  region2?: string | null,
+  iata1?: string | null,
+  iata2?: string | null
+): 'domestic' | 'regional' | 'international' | 'unknown' {
+  // Primary: compare country UUIDs
+  if (country1Id && country2Id) {
+    if (country1Id === country2Id) return 'domestic'
+    if (region1 && region2 && region1 === region2) return 'regional'
+    return 'international'
+  }
+
+  // Fallback: use IATA hardcoded lookup when country_id is missing
+  if (iata1 && iata2) {
+    const result = classifyRoute(iata1, iata2)
+    if (result !== 'unknown') return result
+  }
+
+  return 'unknown'
 }

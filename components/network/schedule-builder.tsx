@@ -13,6 +13,7 @@ import {
 import { Plus, Download, Upload, RotateCcw, Trash2, AlertTriangle, Copy, Clock, Loader2 } from 'lucide-react'
 import { toast } from '@/components/ui/visionos-toast'
 import { friendlyError } from '@/lib/utils/error-handler'
+import { AIRPORT_COUNTRY } from '@/lib/data/airport-countries'
 
 // ─── Types ────────────────────────────────────────────────────
 interface FlightRow {
@@ -457,7 +458,10 @@ export function ScheduleBuilder({
 
   const iataToCountry = useMemo(() => {
     const m = new Map<string, string>()
-    airports.forEach(a => { if (a.iata_code && a.country) m.set(a.iata_code, a.country) })
+    // Primary: hardcoded IATA → ISO country lookup (reliable)
+    for (const [iata, cc] of Object.entries(AIRPORT_COUNTRY)) m.set(iata, cc)
+    // Fallback: DB country field for airports not in the hardcoded map
+    airports.forEach(a => { if (a.iata_code && a.country && !m.has(a.iata_code)) m.set(a.iata_code, a.country) })
     return m
   }, [airports])
 

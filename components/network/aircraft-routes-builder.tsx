@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { StatusGreen, StatusYellow, StatusRed, StatusGray } from '@/components/ui/validation-icons'
 import { toast } from '@/components/ui/visionos-toast'
 import { friendlyError } from '@/lib/utils/error-handler'
+import { AIRPORT_COUNTRY } from '@/lib/data/airport-countries'
 
 // ─── Props ────────────────────────────────────────────────────
 
@@ -447,7 +448,7 @@ export function AircraftRoutesBuilder({
     deleteSelectedLeg: () => void; addRow: () => void
     expandRowSelection: (direction: 'up' | 'down') => void; selectAll: () => void
     selectRow: () => void; selectCol: () => void
-  }>({ save: () => {}, undo: () => {}, redo: () => {}, newRoute: () => {}, duplicate: () => {}, cancel: () => {}, deleteSelectedLeg: () => {} })
+  }>({ save: () => {}, undo: () => {}, redo: () => {}, newRoute: () => {}, duplicate: () => {}, cancel: () => {}, deleteSelectedLeg: () => {}, addRow: () => {}, expandRowSelection: () => {}, selectAll: () => {}, selectRow: () => {}, selectCol: () => {} })
 
   // ── Lookup maps ──
   const acTypeMap = useMemo(() => {
@@ -464,7 +465,10 @@ export function AircraftRoutesBuilder({
 
   const airportCountryMap = useMemo(() => {
     const m = new Map<string, string>()
-    airports.forEach(a => { if (a.iata_code && a.country) m.set(a.iata_code, a.country) })
+    // Primary: hardcoded IATA → ISO country lookup (reliable)
+    for (const [iata, cc] of Object.entries(AIRPORT_COUNTRY)) m.set(iata, cc)
+    // Fallback: DB country field for airports not in the hardcoded map
+    airports.forEach(a => { if (a.iata_code && a.country && !m.has(a.iata_code)) m.set(a.iata_code, a.country) })
     return m
   }, [airports])
 
@@ -489,7 +493,7 @@ export function AircraftRoutesBuilder({
     }
     let best = ''; let bestCount = 0
     countryCount.forEach((count, country) => { if (count > bestCount) { best = country; bestCount = count } })
-    return best || 'Vietnam'
+    return best || 'VN'
   }, [routes, airportCountryMap])
 
   // ── Recalc helper ──
@@ -1541,7 +1545,7 @@ export function AircraftRoutesBuilder({
       },
       addRow: () => {
         // Insert a blank leg below the selected row
-        const firstSelected = selectedRows.size > 0 ? Math.max(...selectedRows) : null
+        const firstSelected = selectedRows.size > 0 ? Math.max(...Array.from(selectedRows)) : null
         const selIdx = firstSelected ?? (selectedCell && selectedCell.row < legs.length ? selectedCell.row : null)
         if (selIdx === null || selIdx >= legs.length) return
         const blankLeg: LegWithOffsets = {
@@ -1583,7 +1587,7 @@ export function AircraftRoutesBuilder({
         }, 0)
       },
       selectRow: () => {
-        const row = selectedCell?.row ?? (selectedRows.size > 0 ? Math.min(...selectedRows) : null)
+        const row = selectedCell?.row ?? (selectedRows.size > 0 ? Math.min(...Array.from(selectedRows)) : null)
         if (row !== null && row !== undefined && row < legs.length) {
           setSelectedRows(new Set([row]))
           setSelectedCell(null)

@@ -4,6 +4,7 @@ import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { CityPair, CityPairBlockHours } from '@/types/database'
 import { calculateGreatCircleDistance, determineRouteType } from '@/lib/utils/geo'
+import { AIRPORT_COUNTRY, classifyRoute } from '@/lib/data/airport-countries'
 
 // ─── Extended types ──────────────────────────────────────────────────────
 
@@ -276,7 +277,7 @@ export async function createCityPair(
 
   const region1 = (apt1.countries as any)?.region || null
   const region2 = (apt2.countries as any)?.region || null
-  const routeType = determineRouteType(apt1.country_id, apt2.country_id, region1, region2)
+  const routeType = determineRouteType(apt1.country_id, apt2.country_id, region1, region2, apt1.iata_code, apt2.iata_code)
 
   const { data: newPair, error } = await supabase
     .from('city_pairs')
@@ -331,7 +332,7 @@ export async function createCityPairFromIata(
 
   const region1 = (apt1.countries as any)?.region || null
   const region2 = (apt2.countries as any)?.region || null
-  const routeType = determineRouteType(apt1.country_id, apt2.country_id, region1, region2)
+  const routeType = determineRouteType(apt1.country_id, apt2.country_id, region1, region2, apt1.iata_code, apt2.iata_code)
 
   return { success: true, distance_nm: distanceNm, route_type: routeType }
 }
@@ -430,4 +431,71 @@ export async function searchAirports(query: string): Promise<CityPairAirport[]> 
     .limit(20)
 
   return (data as unknown as CityPairAirport[]) || []
+}
+
+// ─── Fix misclassified city pairs ─────────────────────────────────────────
+
+export async function fixCityPairClassification(): Promise<{
+  fixed: number
+  unknown: number
+  details: string[]
+}> {
+  const supabase = createAdminClient()
+
+  // Fetch all city pairs with their airports' IATA codes
+  const { data: pairs } = await supabase
+    .from('city_pairs')
+    .select('id, departure_airport, arrival_airport, route_type, departure_airport_id, arrival_airport_id')
+
+  if (!pairs) return { fixed: 0, unknown: 0, details: [] }
+
+  // Also fetch airports with country_id to use as additional context
+  const { data: airports } = await supabase
+    .from('airports')
+    .select('iata_code, country_id, countries(iso_code_2)')
+
+  const dbCountryMap = new Map<string, string>()
+  airports?.forEach(a => {
+    const iso = (a.countries as any)?.iso_code_2
+    if (a.iata_code && iso) dbCountryMap.set(a.iata_code, iso)
+  })
+
+  let fixed = 0
+  let unknown = 0
+  const details: string[] = []
+
+  for (const pair of pairs) {
+    const dep = pair.departure_airport
+    const arr = pair.arrival_airport
+    if (!dep || !arr) continue
+
+    const result = classifyRoute(dep, arr, dbCountryMap)
+    const currentType = pair.route_type
+
+    if (result === 'unknown') {
+      if (currentType !== 'unknown') {
+        // Only mark as unknown if we're sure the classification is wrong
+        unknown++
+        details.push(`${dep}-${arr}: cannot classify (missing country data)`)
+      }
+      continue
+    }
+
+    // Fix misclassified pairs
+    if (result === 'domestic' && currentType !== 'domestic') {
+      await supabase.from('city_pairs').update({ route_type: 'domestic' }).eq('id', pair.id)
+      fixed++
+      details.push(`${dep}-${arr}: ${currentType} → domestic`)
+    } else if (result === 'international' && currentType === 'domestic') {
+      await supabase.from('city_pairs').update({ route_type: 'international' }).eq('id', pair.id)
+      fixed++
+      details.push(`${dep}-${arr}: domestic → international`)
+    }
+  }
+
+  if (fixed > 0) {
+    revalidatePath('/admin/master-database/city-pairs')
+  }
+
+  return { fixed, unknown, details }
 }

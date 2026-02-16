@@ -17,6 +17,7 @@ import {
   updateBlockHour,
   deleteBlockHour,
   autoEstimateFlightHours,
+  fixCityPairClassification,
 } from '@/app/actions/city-pairs'
 import { calculateGreatCircleDistance, determineRouteType } from '@/lib/utils/geo'
 import { Button } from '@/components/ui/button'
@@ -53,6 +54,7 @@ import {
   Loader2,
   Copy,
   Zap,
+  AlertTriangle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from '@/components/ui/visionos-toast'
@@ -99,6 +101,7 @@ const ROUTE_TYPE_COLORS: Record<string, string> = {
   international: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   'long-haul': 'bg-purple-500/20 text-purple-400 border-purple-500/30',
   'ultra-long-haul': 'bg-red-500/20 text-red-400 border-red-500/30',
+  unknown: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
 }
 
 const ROUTE_TYPE_LABELS: Record<string, string> = {
@@ -107,6 +110,7 @@ const ROUTE_TYPE_LABELS: Record<string, string> = {
   international: 'International',
   'long-haul': 'Long-haul',
   'ultra-long-haul': 'Ultra-long-haul',
+  unknown: 'Unknown',
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────
@@ -120,6 +124,31 @@ export function CityPairsMasterDetail({ cityPairs, aircraftTypes, airports }: Pr
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   const [blockHours, setBlockHours] = useState<BlockHourWithAircraftType[]>([])
   const [loadingBlockHours, setLoadingBlockHours] = useState(false)
+  const [fixingClassification, setFixingClassification] = useState(false)
+
+  const unknownRouteCount = useMemo(
+    () => cityPairs.filter(cp => cp.route_type === 'unknown' || !cp.route_type).length,
+    [cityPairs]
+  )
+
+  async function handleFixClassification() {
+    setFixingClassification(true)
+    try {
+      const result = await fixCityPairClassification()
+      if (result.fixed > 0) {
+        toast.success(`Fixed ${result.fixed} city pair${result.fixed > 1 ? 's' : ''}`)
+        router.refresh()
+      } else {
+        toast.info('No misclassified city pairs found')
+      }
+      if (result.unknown > 0) {
+        toast.warning(`${result.unknown} pair${result.unknown > 1 ? 's' : ''} still need manual classification`)
+      }
+    } catch {
+      toast.error('Failed to fix city pair classification')
+    }
+    setFixingClassification(false)
+  }
 
   // Load block hours when pair changes
   useEffect(() => {
@@ -202,6 +231,17 @@ export function CityPairsMasterDetail({ cityPairs, aircraftTypes, airports }: Pr
             className="pl-9"
           />
         </div>
+        {unknownRouteCount > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+            <span className="text-xs text-amber-800 flex-1">
+              {unknownRouteCount} pair{unknownRouteCount > 1 ? 's' : ''} with unknown DOM/INT classification
+            </span>
+            <Button size="sm" variant="outline" className="h-6 text-xs px-2 shrink-0" onClick={handleFixClassification} disabled={fixingClassification}>
+              {fixingClassification ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Auto-fix'}
+            </Button>
+          </div>
+        )}
       </div>
     )
   }

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import dynamic from 'next/dynamic'
-import { type AirportWithCountry, updateAirportField, updateAirportFields } from '@/app/actions/airports'
+import { type AirportWithCountry, updateAirportField, updateAirportFields, fixAirportCountries } from '@/app/actions/airports'
 import { getRunways, createRunway, updateRunway, deleteRunway } from '@/app/actions/airport-subtables'
 import { getTerminals, createTerminal, updateTerminal, deleteTerminal } from '@/app/actions/airport-subtables'
 import { getCurfews, createCurfew, updateCurfew, deleteCurfew } from '@/app/actions/airport-subtables'
@@ -59,7 +59,29 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('basic')
   const [addAirportOpen, setAddAirportOpen] = useState(false)
+  const [fixingCountries, setFixingCountries] = useState(false)
   const router = useRouter()
+
+  const missingCountryCount = useMemo(
+    () => airports.filter(a => !a.country_id).length,
+    [airports]
+  )
+
+  async function handleFixCountries() {
+    setFixingCountries(true)
+    try {
+      const result = await fixAirportCountries()
+      if (result.fixed > 0) {
+        toast.success(`Fixed ${result.fixed} airport${result.fixed > 1 ? 's' : ''} with missing country data`)
+        router.refresh()
+      } else {
+        toast.info('No airports could be auto-fixed. Please assign countries manually.')
+      }
+    } catch {
+      toast.error('Failed to fix airport countries')
+    }
+    setFixingCountries(false)
+  }
 
   // Group airports by country
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
@@ -140,6 +162,17 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
               className="pl-9"
             />
           </div>
+          {missingCountryCount > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+              <span className="text-xs text-amber-800 flex-1">
+                {missingCountryCount} airport{missingCountryCount > 1 ? 's' : ''} missing country — DOM/INT classification may be wrong
+              </span>
+              <Button size="sm" variant="outline" className="h-6 text-xs px-2 shrink-0" onClick={handleFixCountries} disabled={fixingCountries}>
+                {fixingCountries ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Auto-fix'}
+              </Button>
+            </div>
+          )}
           <AddAirportModal
             open={addAirportOpen}
             onOpenChange={setAddAirportOpen}

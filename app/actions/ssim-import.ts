@@ -6,15 +6,9 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { parseSSIM, IATA_TO_ICAO_AIRCRAFT, toUtcTime } from '@/lib/utils/ssim-parser'
 import type { SSIMFlightLeg, SSIMParseResult } from '@/lib/utils/ssim-parser'
+import { AIRPORT_COUNTRY, classifyRoute } from '@/lib/data/airport-countries'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
-
-// Known Vietnamese IATA airport codes for domestic route classification
-const VN_AIRPORTS = new Set([
-  'SGN', 'HAN', 'DAD', 'CXR', 'PQC', 'HPH', 'HUI', 'VII', 'BMV',
-  'DLI', 'UIH', 'VCA', 'VDO', 'THD', 'TBB', 'VCL', 'PXU', 'DIN',
-  'VCS', 'CAH', 'VKG', 'PHA', 'SQH', 'CON',
-])
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -61,13 +55,11 @@ export interface ParseSSIMResult {
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
-/** Determine route type based on airport country codes and VN fallback list */
-function getRouteType(dep: string, arr: string, countryMap: Map<string, string>): string {
-  const depCountry = countryMap.get(dep) || (VN_AIRPORTS.has(dep) ? 'VN' : null)
-  const arrCountry = countryMap.get(arr) || (VN_AIRPORTS.has(arr) ? 'VN' : null)
-
-  if (depCountry && arrCountry && depCountry === arrCountry) return 'domestic'
-  return 'international'
+/** Determine route type using hardcoded lookup + DB country map as fallback */
+function getRouteType(dep: string, arr: string, dbCountryMap: Map<string, string>): string {
+  const result = classifyRoute(dep, arr, dbCountryMap)
+  if (result === 'unknown') return 'international' // safe default for SSIM import
+  return result
 }
 
 // ─── ACTION 1: Parse SSIM File ────────────────────────────────────
@@ -192,15 +184,25 @@ export async function createMissingAirports(
   const airportMap: Record<string, string> = {}
   let created = 0
 
+  // Build ISO code → country UUID map from countries table
+  const { data: countries } = await supabase.from('countries').select('id, iso_code_2')
+  const isoToCountryId = new Map<string, string>()
+  countries?.forEach(c => isoToCountryId.set(c.iso_code_2, c.id))
+
   for (const iata of airportCodes) {
-    const countryCode = VN_AIRPORTS.has(iata) ? 'VN' : null
+    const isoCode = AIRPORT_COUNTRY[iata] ?? null
+    const countryId = isoCode ? isoToCountryId.get(isoCode) ?? null : null
+
     const { data } = await supabase
       .from('airports')
       .insert({
         iata_code: iata,
+        icao_code: `Z${iata}`, // placeholder ICAO — user should fix later
         name: iata,
-        status: 'active',
-        ...(countryCode ? { country_code: countryCode } : {}),
+        timezone: isoCode === 'VN' ? 'Asia/Ho_Chi_Minh' : 'UTC',
+        country: isoCode ?? null,
+        country_id: countryId,
+        is_active: true,
       })
       .select('id')
       .single()
@@ -223,13 +225,16 @@ export async function createMissingCityPairs(
   const supabase = createAdminClient()
 
   // Build airport ID + country map for references and route type detection
-  const { data: airportRows } = await supabase.from('airports').select('id, iata_code, country_code')
+  const { data: airportRows } = await supabase
+    .from('airports')
+    .select('id, iata_code, country_id, countries(iso_code_2)')
   const airportIdMap = new Map<string, string>()
-  const countryMap = new Map<string, string>()
+  const dbCountryMap = new Map<string, string>()
   airportRows?.forEach(a => {
     if (a.iata_code) {
       airportIdMap.set(a.iata_code, a.id)
-      if (a.country_code) countryMap.set(a.iata_code, a.country_code)
+      const iso = (a.countries as any)?.iso_code_2
+      if (iso) dbCountryMap.set(a.iata_code, iso)
     }
   })
 
@@ -238,7 +243,7 @@ export async function createMissingCityPairs(
     const depId = airportIdMap.get(dep)
     const arrId = airportIdMap.get(arr)
     if (depId && arrId) {
-      const routeType = getRouteType(dep, arr, countryMap)
+      const routeType = getRouteType(dep, arr, dbCountryMap)
       const { error } = await supabase.from('city_pairs').insert({
         departure_airport: dep,
         arrival_airport: arr,
@@ -256,14 +261,16 @@ export async function createMissingCityPairs(
     }
   }
 
-  // Fix existing misclassified domestic city pairs
-  // Any pair where both airports are Vietnamese should be domestic
-  const vnArray = Array.from(VN_AIRPORTS)
+  // Fix existing misclassified domestic city pairs using hardcoded lookup
+  // Any pair where both airports are in the same country should be domestic
+  const vnIatas = Object.entries(AIRPORT_COUNTRY)
+    .filter(([, cc]) => cc === 'VN')
+    .map(([iata]) => iata)
   const fixResult = await pool.query(
     `UPDATE city_pairs SET route_type = 'domestic'
      WHERE departure_airport = ANY($1) AND arrival_airport = ANY($1)
      AND route_type != 'domestic'`,
-    [vnArray]
+    [vnIatas]
   )
   const domesticFixed = fixResult.rowCount || 0
   if (domesticFixed > 0) {

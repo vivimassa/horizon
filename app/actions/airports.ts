@@ -3,6 +3,7 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { Airport, Country } from '@/types/database'
+import { AIRPORT_COUNTRY } from '@/lib/data/airport-countries'
 
 export interface AirportWithCountry extends Airport {
   countries: { name: string; iso_code_2: string; flag_emoji: string | null } | null
@@ -134,4 +135,53 @@ export async function deleteAirport(id: string) {
   if (error) return { error: error.message }
   revalidatePath('/admin/master-database/airports')
   return { success: true }
+}
+
+// ─── Fix airports missing country_id using hardcoded lookup ────────────────
+
+export async function fixAirportCountries(): Promise<{
+  fixed: number
+  details: string[]
+}> {
+  const supabase = createAdminClient()
+
+  // Fetch airports missing country_id
+  const { data: airports } = await supabase
+    .from('airports')
+    .select('id, iata_code, country_id')
+    .is('country_id', null)
+
+  if (!airports || airports.length === 0) return { fixed: 0, details: [] }
+
+  // Build ISO → country UUID map
+  const { data: countries } = await supabase.from('countries').select('id, iso_code_2')
+  const isoToCountryId = new Map<string, string>()
+  countries?.forEach(c => isoToCountryId.set(c.iso_code_2, c.id))
+
+  let fixed = 0
+  const details: string[] = []
+
+  for (const airport of airports) {
+    if (!airport.iata_code) continue
+    const isoCode = AIRPORT_COUNTRY[airport.iata_code]
+    if (!isoCode) continue
+    const countryId = isoToCountryId.get(isoCode)
+    if (!countryId) continue
+
+    const { error } = await supabase
+      .from('airports')
+      .update({ country_id: countryId, country: isoCode })
+      .eq('id', airport.id)
+
+    if (!error) {
+      fixed++
+      details.push(`${airport.iata_code}: set country_id (${isoCode})`)
+    }
+  }
+
+  if (fixed > 0) {
+    revalidatePath('/admin/master-database/airports')
+  }
+
+  return { fixed, details }
 }
