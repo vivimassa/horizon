@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { AircraftType, AircraftTypeSeatingConfig } from '@/types/database'
+import { minutesToHHMM, hhmmToMinutes } from '@/lib/utils'
 import { MasterDetailLayout } from '@/components/ui/responsive/master-detail-layout'
 import {
   updateAircraftTypeField,
@@ -427,39 +428,62 @@ function DetailPanel({
 // ─── Inline Edit Helpers ─────────────────────────────────────────────────
 
 function InlineField({
-  label, field, value, acId, onSaved, mono, type = 'text', suffix,
+  label, field, value, acId, onSaved, mono, type = 'text', suffix, tatMode,
 }: {
-  label: string; field: string; value: string; acId: string; onSaved: () => void; mono?: boolean; type?: string; suffix?: string
+  label: string; field: string; value: string; acId: string; onSaved: () => void; mono?: boolean; type?: string; suffix?: string; tatMode?: boolean
 }) {
+  const displayValue = tatMode ? minutesToHHMM(Number(value)) || '' : value
   const [editing, setEditing] = useState(false)
-  const [editValue, setEditValue] = useState(value)
+  const [editValue, setEditValue] = useState(displayValue)
   const [saving, setSaving] = useState(false)
   const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { setEditValue(value) }, [value])
+  useEffect(() => { setEditValue(tatMode ? minutesToHHMM(Number(value)) || '' : value) }, [value, tatMode])
   useEffect(() => { if (editing && inputRef.current) inputRef.current.focus() }, [editing])
 
   const save = useCallback(async () => {
-    if (editValue === value) { setEditing(false); return }
+    let finalValue: string | number | null
+    if (tatMode) {
+      const mins = hhmmToMinutes(editValue)
+      if (mins === null && editValue.trim()) { setEditValue(displayValue); setEditing(false); return }
+      finalValue = mins
+    } else if (type === 'number') {
+      finalValue = editValue ? parseFloat(editValue) : null
+    } else {
+      finalValue = editValue
+    }
+
+    const compareValue = tatMode ? String(finalValue ?? '') : editValue
+    const compareOriginal = tatMode ? value : value
+    if (compareValue === compareOriginal) { setEditing(false); return }
+
     setSaving(true)
-    const finalValue = type === 'number' ? (editValue ? parseFloat(editValue) : null) : editValue
     const result = await updateAircraftTypeField(acId, field, finalValue as string | number | boolean | null)
     setSaving(false)
     if (result?.error) {
       alert(result.error)
-      setEditValue(value)
+      setEditValue(displayValue)
     } else {
       setFlashClass('animate-[flash-green_0.8s_ease-out]')
       setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
-  }, [acId, field, editValue, value, onSaved, type])
+  }, [acId, field, editValue, value, displayValue, onSaved, type, tatMode])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') save()
-    if (e.key === 'Escape') { setEditValue(value); setEditing(false) }
+    if (e.key === 'Escape') { setEditValue(displayValue); setEditing(false) }
+  }
+
+  // Auto-format on blur for TAT: raw number → HH:MM
+  const handleBlur = () => {
+    if (tatMode && editValue && !editValue.includes(':')) {
+      const mins = Number(editValue)
+      if (!isNaN(mins)) setEditValue(minutesToHHMM(mins))
+    }
+    save()
   }
 
   return (
@@ -471,12 +495,13 @@ function InlineField({
             ref={inputRef}
             value={editValue}
             onChange={e => setEditValue(e.target.value)}
-            onBlur={save}
+            onBlur={handleBlur}
             onKeyDown={handleKeyDown}
             disabled={saving}
-            type={type}
-            step={type === 'number' ? 'any' : undefined}
-            className={cn('h-8 text-sm flex-1', mono && 'font-mono')}
+            type={tatMode ? 'text' : type}
+            step={type === 'number' && !tatMode ? 'any' : undefined}
+            placeholder={tatMode ? 'HH:MM' : undefined}
+            className={cn('h-8 text-sm flex-1', (mono || tatMode) && 'font-mono')}
           />
           {suffix && <span className="text-xs text-muted-foreground shrink-0">{suffix}</span>}
         </div>
@@ -485,12 +510,12 @@ function InlineField({
           onClick={() => setEditing(true)}
           className={cn(
             'text-sm text-left w-full px-2 py-1 -mx-2 rounded-md hover:bg-white/50 dark:hover:bg-white/10 transition-colors min-h-[28px] flex items-center gap-2',
-            mono && 'font-mono',
-            !value && 'text-muted-foreground italic'
+            (mono || tatMode) && 'font-mono',
+            !displayValue && 'text-muted-foreground italic'
           )}
         >
-          <span>{value || '—'}</span>
-          {suffix && value && <span className="text-xs text-muted-foreground">{suffix}</span>}
+          <span>{displayValue || '—'}</span>
+          {suffix && displayValue && <span className="text-xs text-muted-foreground">{suffix}</span>}
         </button>
       )}
     </div>
@@ -770,7 +795,7 @@ function TATTab({ ac, onSaved }: { ac: AircraftType; onSaved: () => void }) {
   return (
     <div className="space-y-4">
       <Section title="Default Turn Around Time">
-        <InlineField label="Commercial Turn Around Time" field="default_tat_minutes" value={ac.default_tat_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} type="number" suffix="min" />
+        <InlineField label="Commercial Turn Around Time" field="default_tat_minutes" value={ac.default_tat_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
         <div className="mt-2 flex items-start gap-2 p-2 rounded-lg bg-muted/30">
           <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
           <span className="text-[11px] text-muted-foreground">Turn Around Time (TAT) is the minimum ground time between arrival and next departure. Airport-specific overrides take precedence over this default.</span>
@@ -779,10 +804,10 @@ function TATTab({ ac, onSaved }: { ac: AircraftType; onSaved: () => void }) {
 
       <Section title="Operational Turn Around Time by Route Type">
         <div className="grid grid-cols-2 gap-x-6">
-          <InlineField label="DOM → DOM" field="tat_dom_dom_minutes" value={ac.tat_dom_dom_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} type="number" suffix="min" />
-          <InlineField label="DOM → INT" field="tat_dom_int_minutes" value={ac.tat_dom_int_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} type="number" suffix="min" />
-          <InlineField label="INT → DOM" field="tat_int_dom_minutes" value={ac.tat_int_dom_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} type="number" suffix="min" />
-          <InlineField label="INT → INT" field="tat_int_int_minutes" value={ac.tat_int_int_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} type="number" suffix="min" />
+          <InlineField label="DOM → DOM" field="tat_dom_dom_minutes" value={ac.tat_dom_dom_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
+          <InlineField label="DOM → INT" field="tat_dom_int_minutes" value={ac.tat_dom_int_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
+          <InlineField label="INT → DOM" field="tat_int_dom_minutes" value={ac.tat_int_dom_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
+          <InlineField label="INT → INT" field="tat_int_int_minutes" value={ac.tat_int_int_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
         </div>
       </Section>
     </div>

@@ -83,7 +83,7 @@ export async function updateMessageStatus(
   return {}
 }
 
-/** Apply an inbound ASM message: update flight_numbers or flights table */
+/** Apply an inbound ASM message: update scheduled_flights or flights table */
 export async function applyAsmMessage(input: {
   message_id: string
   action_code: string
@@ -122,7 +122,7 @@ export async function applyAsmMessage(input: {
       if (error) return { error: error.message }
     }
   } else if (input.action_code === 'EQT') {
-    // Equipment change — update flight_numbers template
+    // Equipment change — update scheduled_flights template
     if (input.changes['aircraft_type']) {
       const iataType = input.changes['aircraft_type'].to
       const { data: acType } = await supabase
@@ -133,13 +133,18 @@ export async function applyAsmMessage(input: {
         .maybeSingle()
 
       if (acType) {
-        const { error } = await supabase
-          .from('flight_numbers')
-          .update({ aircraft_type_id: acType.id })
-          .eq('operator_id', operatorId)
-          .eq('flight_number', input.flight_number)
+        // Split flight number (e.g. "VJ120") to match scheduled_flights
+        const fnMatch = input.flight_number.match(/^([A-Z]{2})(\d+)$/)
+        if (fnMatch) {
+          const { error } = await supabase
+            .from('scheduled_flights')
+            .update({ aircraft_type_id: acType.id })
+            .eq('operator_id', operatorId)
+            .eq('airline_code', fnMatch[1])
+            .eq('flight_number', parseInt(fnMatch[2]))
 
-        if (error) return { error: error.message }
+          if (error) return { error: error.message }
+        }
       } else {
         return { error: `Unknown aircraft type: ${iataType}` }
       }

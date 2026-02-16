@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
-import localFont from "next/font/local";
-import { JetBrains_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { getCurrentOperator, getAccessibleModules } from '@/lib/operators'
 import { getOperatorProfile } from '@/app/actions/operator-profile'
@@ -12,19 +11,13 @@ import { CommandPalette } from '@/components/search/command-palette'
 import { StatusBar } from '@/components/status-bar'
 import { Toaster } from 'sonner'
 
-const geistSans = localFont({
-  src: "./fonts/GeistVF.woff",
-  variable: "--font-geist-sans",
-  weight: "100 900",
-});
-const geistMono = localFont({
-  src: "./fonts/GeistMonoVF.woff",
-  variable: "--font-geist-mono",
-  weight: "100 900",
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
 });
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
-  variable: "--font-jetbrains-mono",
+  variable: "--font-mono",
 });
 
 export const metadata: Metadata = {
@@ -48,7 +41,7 @@ export default async function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} antialiased h-screen overflow-hidden flex flex-col`}
+        className={`${inter.variable} ${jetbrainsMono.variable} antialiased h-screen overflow-hidden flex flex-col`}
       >
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <SchemeProvider>

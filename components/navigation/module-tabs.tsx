@@ -2,9 +2,11 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useRef, useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { Settings, Wrench, FileText } from 'lucide-react'
 import { getModuleByRoute } from '@/lib/modules/registry'
+import { ModuleBreadcrumb, resolveModule } from './module-breadcrumb'
 
 interface ModuleTabsProps {
   moduleBase: string
@@ -31,14 +33,34 @@ const tabs = [
 
 export function ModuleTabs({ moduleBase }: ModuleTabsProps) {
   const pathname = usePathname()
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const activeTabRef = useRef<HTMLAnchorElement>(null)
+  const [activeLeft, setActiveLeft] = useState(0)
 
   const isActive = (tabId: string) => {
     const tabPath = `${moduleBase}/${tabId}`
     return pathname === tabPath || pathname.startsWith(`${tabPath}/`)
   }
 
+  // Find the deepest leaf module for the current path
+  const currentModule = resolveModule(pathname)
+
+  // Measure the active tab's left edge relative to the wrapper
+  useEffect(() => {
+    const measure = () => {
+      if (activeTabRef.current && wrapperRef.current) {
+        const tabRect = activeTabRef.current.getBoundingClientRect()
+        const wrapperRect = wrapperRef.current.getBoundingClientRect()
+        setActiveLeft(tabRect.left - wrapperRect.left)
+      }
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [pathname])
+
   return (
-    <div className="mb-6">
+    <div ref={wrapperRef} className={currentModule ? '' : 'mb-4'}>
       <div className={cn(
         'inline-flex items-center gap-1 p-1 rounded-full',
         'glass'
@@ -54,6 +76,7 @@ export function ModuleTabs({ moduleBase }: ModuleTabsProps) {
             <Link
               key={tab.id}
               href={path}
+              ref={active ? activeTabRef : undefined}
               className={cn(
                 'flex items-center gap-2 px-5 py-2 rounded-full text-sm font-medium transition-all duration-300',
                 active
@@ -67,6 +90,10 @@ export function ModuleTabs({ moduleBase }: ModuleTabsProps) {
           )
         })}
       </div>
+
+      {currentModule && (
+        <ModuleBreadcrumb leftOffset={activeLeft} module={currentModule} />
+      )}
     </div>
   )
 }

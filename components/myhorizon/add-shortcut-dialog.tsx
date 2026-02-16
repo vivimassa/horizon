@@ -6,7 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { getModuleTree, type ModuleTreeNode } from '@/lib/modules/registry'
+import { getModuleTree, isLeafModule, type ModuleTreeNode } from '@/lib/modules/registry'
 import { getIcon } from '@/lib/modules/icons'
 import { cn } from '@/lib/utils'
 import { Check, Pin } from 'lucide-react'
@@ -75,6 +75,32 @@ export function AddShortcutDialog({
     )
   }
 
+  /** Recursively render children — leaf nodes get buttons, parents get sub-headers */
+  const renderChildren = (children: ModuleTreeNode[], depth: number = 0) => {
+    return children.map(child => {
+      if (!hasAccess(child)) return null
+
+      const isLeaf = isLeafModule(child.code)
+
+      if (isLeaf) {
+        return renderLeafItem(child)
+      }
+
+      // Parent node — render as sub-section header with its children
+      return (
+        <div key={child.code} className="space-y-0.5">
+          <div className={cn(
+            'text-xs font-medium text-muted-foreground/80 px-3 pt-1',
+            depth > 0 && 'pl-6'
+          )}>
+            {child.code} {child.name}
+          </div>
+          {renderChildren(child.children, depth + 1)}
+        </div>
+      )
+    })
+  }
+
   const renderSection = (node: ModuleTreeNode) => {
     if (!hasAccess(node)) return null
 
@@ -84,22 +110,7 @@ export function AddShortcutDialog({
         <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-3 pt-3 pb-1">
           {node.code} {node.name}
         </div>
-
-        {node.children.map(child => {
-          if (child.children.length > 0) {
-            // Sub-section (e.g. 1.1 Control)
-            return (
-              <div key={child.code} className="space-y-0.5">
-                <div className="text-xs font-medium text-muted-foreground/80 px-3 pt-1">
-                  {child.code} {child.name}
-                </div>
-                {child.children.map(leaf => renderLeafItem(leaf))}
-              </div>
-            )
-          }
-          // Direct leaf
-          return renderLeafItem(child)
-        })}
+        {renderChildren(node.children)}
       </div>
     )
   }

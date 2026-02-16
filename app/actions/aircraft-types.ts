@@ -3,6 +3,7 @@
 import { createClient, createAdminClient, getCurrentOperatorId } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { AircraftType, AircraftTypeSeatingConfig } from '@/types/database'
+import { hhmmToMinutes } from '@/lib/utils'
 
 const REVALIDATE_PATH = '/admin/master-database/aircraft-types'
 
@@ -95,7 +96,7 @@ export async function createAircraftType(formData: FormData) {
     pax_capacity: parseInt(formData.get('pax_capacity') as string) || null,
     cockpit_crew_required: parseInt(formData.get('cockpit_crew') as string) || 2,
     cabin_crew_required: parseInt(formData.get('cabin_crew') as string) || null,
-    default_tat_minutes: parseInt(formData.get('default_tat_minutes') as string) || null,
+    default_tat_minutes: hhmmToMinutes(formData.get('default_tat_minutes') as string || '') ?? null,
     default_cabin_config: defaultCabinConfig,
   }
 
@@ -135,7 +136,7 @@ export async function updateAircraftType(id: string, formData: FormData) {
     pax_capacity: parseInt(formData.get('pax_capacity') as string) || null,
     cockpit_crew_required: parseInt(formData.get('cockpit_crew') as string) || 2,
     cabin_crew_required: parseInt(formData.get('cabin_crew') as string) || null,
-    default_tat_minutes: parseInt(formData.get('default_tat_minutes') as string) || null,
+    default_tat_minutes: hhmmToMinutes(formData.get('default_tat_minutes') as string || '') ?? null,
     default_cabin_config: defaultCabinConfig,
   }
 

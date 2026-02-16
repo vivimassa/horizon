@@ -9,7 +9,8 @@ import {
   ArrowLeftRight, Calendar, Tag, Armchair, Ban, Copy,
   GitBranch, MapPin, Bell, MessageCircle, Award, BadgeCheck,
   Scale, Bot, ListChecks, UsersRound, FileQuestion, Trophy,
-  Puzzle, type LucideIcon,
+  Puzzle, Upload, Download, GitCompareArrows, Ruler,
+  type LucideIcon,
 } from 'lucide-react'
 
 /** Map icon name strings (from registry) to Lucide components */
@@ -24,7 +25,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   ArrowLeftRight, Calendar, Tag, Armchair, Ban, Copy,
   GitBranch, MapPin, Bell, MessageCircle, Award, BadgeCheck,
   Scale, Bot, ListChecks, UsersRound, FileQuestion, Trophy,
-  Puzzle,
+  Puzzle, Upload, Download, GitCompareArrows, Ruler,
+  // Aliases
+  GitCompare: GitCompareArrows,
 }
 
 export function getIcon(name: string): LucideIcon {

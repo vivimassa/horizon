@@ -32,7 +32,10 @@ export const MODULE_REGISTRY: ModuleEntry[] = [
   { code: '1.1.5', name: 'Codeshare Manager', description: 'Manage codeshare agreements', icon: 'Link', route: '/network/control/codeshare-manager', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
   { code: '1.1.6', name: 'Seasonal Planner', description: 'Seasonal schedule planning', icon: 'CalendarRange', route: '/network/control/seasonal-planner', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
   { code: '1.1.7', name: 'Capacity Manager', description: 'Manage network capacity', icon: 'BarChart3', route: '/network/control/capacity-manager', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.8', name: 'SSIM Import/Export', description: 'SSIM file processing', icon: 'FileUp', route: '/network/control/ssim', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.8', name: 'SSIM', description: 'SSIM file processing', icon: 'FileUp', route: '/network/control/ssim', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.8.1', name: 'SSIM Import', description: 'Import flight schedules from SSIM files', icon: 'Upload', route: '/network/control/ssim/import', parent_module: 'SSIM', parent_code: '1.1.8', required_module: 'network', level: 3 },
+  { code: '1.1.8.2', name: 'SSIM Export', description: 'Export flight schedules to SSIM format', icon: 'Download', route: '/network/control/ssim/export', parent_module: 'SSIM', parent_code: '1.1.8', required_module: 'network', level: 3 },
+  { code: '1.1.8.3', name: 'Schedule Comparison', description: 'Compare two SSIM files or schedule versions', icon: 'GitCompare', route: '/network/control/ssim/comparison', parent_module: 'SSIM', parent_code: '1.1.8', required_module: 'network', level: 3 },
 
   // 1.2 Tools
   { code: '1.2', name: 'Tools', description: 'Network tools and utilities', icon: 'Wrench', route: '/network/tools', parent_module: 'Network', parent_code: '1', required_module: 'network', level: 1 },
@@ -105,6 +108,8 @@ export const MODULE_REGISTRY: ModuleEntry[] = [
   { code: '4.1.1', name: 'Operator Profile', description: 'Manage operator company profile', icon: 'Building2', route: '/admin/system/operator-profile', parent_module: 'System', parent_code: '4.1', required_module: 'admin', level: 2 },
   { code: '4.1.2', name: 'User Management', description: 'Manage users and access', icon: 'UserCog', route: '/admin/system/users', parent_module: 'System', parent_code: '4.1', required_module: 'admin', level: 2 },
   { code: '4.1.3', name: 'Module Management', description: 'Enable and configure modules', icon: 'LayoutGrid', route: '/admin/system/modules', parent_module: 'System', parent_code: '4.1', required_module: 'admin', level: 2 },
+  { code: '4.1.4', name: 'Notifications', description: 'Notification settings', icon: 'Bell', route: '/admin/system/notifications', parent_module: 'System', parent_code: '4.1', required_module: 'admin', level: 2 },
+  { code: '4.1.5', name: 'Integrations', description: 'Integration settings', icon: 'Plug', route: '/admin/system/integrations', parent_module: 'System', parent_code: '4.1', required_module: 'admin', level: 2 },
 
   // 4.2 Master Database
   { code: '4.2', name: 'Master Database', description: 'Core reference data', icon: 'Database', route: '/admin/master-database', parent_module: 'Admin', parent_code: '4', required_module: 'admin', level: 1 },
@@ -117,13 +122,16 @@ export const MODULE_REGISTRY: ModuleEntry[] = [
   { code: '4.2.7', name: 'Flight Service Types', description: 'Flight service type codes', icon: 'Tag', route: '/admin/master-database/flight-service-types', parent_module: 'Master Database', parent_code: '4.2', required_module: 'admin', level: 2 },
   { code: '4.2.8', name: 'Delay Codes', description: 'IATA delay code definitions', icon: 'AlertTriangle', route: '/admin/master-database/delay-codes', parent_module: 'Master Database', parent_code: '4.2', required_module: 'admin', level: 2 },
   { code: '4.2.9', name: 'Cabin Classes', description: 'Cabin class definitions', icon: 'Armchair', route: '/admin/master-database/cabin-classes', parent_module: 'Master Database', parent_code: '4.2', required_module: 'admin', level: 2 },
+  { code: '4.2.10', name: 'Units of Measure', description: 'System-wide unit display preferences', icon: 'Ruler', route: '/admin/master-database/units-of-measure', parent_module: 'Master Database', parent_code: '4.2', required_module: 'admin', level: 2 },
 
   // 4.3 Network Config
   { code: '4.3', name: 'Network Config', description: 'Network module configuration', icon: 'Network', route: '/admin/network-config', parent_module: 'Admin', parent_code: '4', required_module: 'admin', level: 1 },
   { code: '4.3.1', name: 'Schedule Seasons', description: 'Define schedule seasons', icon: 'Calendar', route: '/admin/network-config/schedule-seasons', parent_module: 'Network Config', parent_code: '4.3', required_module: 'admin', level: 2 },
   { code: '4.3.2', name: 'Codeshare Config', description: 'Codeshare agreement settings', icon: 'Link', route: '/admin/network-config/codeshare-config', parent_module: 'Network Config', parent_code: '4.3', required_module: 'admin', level: 2 },
   { code: '4.3.3', name: 'Route Constraints', description: 'Route restriction rules', icon: 'Ban', route: '/admin/network-config/route-constraints', parent_module: 'Network Config', parent_code: '4.3', required_module: 'admin', level: 2 },
-  { code: '4.3.4', name: 'SSIM Configuration', description: 'SSIM import/export settings', icon: 'FileUp', route: '/admin/network-config/ssim-config', parent_module: 'Network Config', parent_code: '4.3', required_module: 'admin', level: 2 },
+  { code: '4.3.4', name: 'Cabin Config', description: 'Cabin configuration settings', icon: 'Armchair', route: '/admin/network-config/cabin-config', parent_module: 'Network Config', parent_code: '4.3', required_module: 'admin', level: 2 },
+  { code: '4.3.5', name: 'Schedule Templates', description: 'Schedule template definitions', icon: 'FileSpreadsheet', route: '/admin/network-config/schedule-templates', parent_module: 'Network Config', parent_code: '4.3', required_module: 'admin', level: 2 },
+  { code: '4.3.6', name: 'Service Types', description: 'Flight service type configuration', icon: 'Tag', route: '/admin/network-config/service-types', parent_module: 'Network Config', parent_code: '4.3', required_module: 'admin', level: 2 },
 
   // 4.4 Operations Config
   { code: '4.4', name: 'Operations Config', description: 'Operations module configuration', icon: 'Cog', route: '/admin/operations-config', parent_module: 'Admin', parent_code: '4', required_module: 'admin', level: 1 },
@@ -134,6 +142,7 @@ export const MODULE_REGISTRY: ModuleEntry[] = [
   { code: '4.4.5', name: 'Message Configuration', description: 'Operational messaging settings', icon: 'MessageCircle', route: '/admin/operations-config/message-config', parent_module: 'Operations Config', parent_code: '4.4', required_module: 'admin', level: 2 },
   { code: '4.4.6', name: 'OCC Desk Configuration', description: 'OCC desk layout and roles', icon: 'Monitor', route: '/admin/operations-config/occ-desk-config', parent_module: 'Operations Config', parent_code: '4.4', required_module: 'admin', level: 2 },
   { code: '4.4.7', name: 'Maintenance Types', description: 'Maintenance event type definitions', icon: 'Wrench', route: '/admin/operations-config/maintenance-types', parent_module: 'Operations Config', parent_code: '4.4', required_module: 'admin', level: 2 },
+  { code: '4.4.8', name: 'Delay Codes', description: 'Operational delay code configuration', icon: 'AlertTriangle', route: '/admin/operations-config/delay-codes', parent_module: 'Operations Config', parent_code: '4.4', required_module: 'admin', level: 2 },
 
   // 4.5 Workforce Config
   { code: '4.5', name: 'Workforce Config', description: 'Workforce module configuration', icon: 'Users', route: '/admin/workforce-config', parent_module: 'Admin', parent_code: '4', required_module: 'admin', level: 1 },
@@ -179,6 +188,12 @@ export function getChildModules(parentCode: string): ModuleEntry[] {
 export function getLeafModules(): ModuleEntry[] {
   const parentCodes = new Set(MODULE_REGISTRY.map(m => m.parent_code).filter(Boolean))
   return MODULE_REGISTRY.filter(m => !parentCodes.has(m.code))
+}
+
+/** Check if a module code is a leaf (has no children) */
+const _parentCodes = new Set(MODULE_REGISTRY.map(m => m.parent_code).filter(Boolean))
+export function isLeafModule(code: string): boolean {
+  return !_parentCodes.has(code)
 }
 
 export interface ModuleTreeNode extends ModuleEntry {

@@ -1519,7 +1519,43 @@ export type AirportWeatherLimit = Database['public']['Tables']['airport_weather_
 export type FlightServiceType = Database['public']['Tables']['flight_service_types']['Row']
 export type DelayCode = Database['public']['Tables']['delay_codes']['Row']
 export type CabinClass = Database['public']['Tables']['cabin_classes']['Row']
-export type FlightNumber = Database['public']['Tables']['flight_numbers']['Row']
+// FlightNumber is now a virtual type mapped from scheduled_flights
+export interface FlightNumber {
+  id: string
+  operator_id: string
+  season_id: string | null
+  flight_number: string
+  suffix: string | null
+  departure_airport_id: string | null
+  arrival_airport_id: string | null
+  departure_iata: string | null
+  arrival_iata: string | null
+  std_local: string
+  sta_local: string
+  std: string
+  sta: string
+  std_utc: string | null
+  sta_utc: string | null
+  block_minutes: number
+  arrival_day_offset: number
+  days_of_operation: string
+  days_of_week: string
+  aircraft_type_id: string | null
+  aircraft_type_icao: string | null
+  connecting_flight: string | null
+  status: string
+  cockpit_crew_required: number | null
+  cabin_crew_required: number | null
+  service_type: string
+  is_etops: boolean
+  is_overwater: boolean
+  is_active: boolean
+  effective_from: string | null
+  effective_until: string | null
+  created_at: string
+  updated_at: string | null
+  source: string | null
+}
 export type Flight = Database['public']['Tables']['flights']['Row']
 export type SsimImport = Database['public']['Tables']['ssim_imports']['Row']
 export type MessageLog = Database['public']['Tables']['message_log']['Row']

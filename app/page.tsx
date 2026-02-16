@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getCurrentOperator, isAdmin as checkAdmin } from '@/lib/operators'
 import { getOperatorProfile } from '@/app/actions/operator-profile'
+import { getShortcuts } from '@/app/actions/shortcuts'
 import { Launchpad } from '@/components/myhorizon/launchpad'
 
 export default async function Home() {
@@ -14,6 +15,7 @@ export default async function Home() {
 
   const operator = await getCurrentOperator()
   const profile = await getOperatorProfile()
+  const shortcuts = await getShortcuts()
 
   const enabledModules = profile?.enabled_modules || []
   const userName = user.email?.split('@')[0] || 'User'
@@ -28,6 +30,7 @@ export default async function Home() {
       enabledModules={enabledModules}
       currentOperatorId={operator?.id}
       operatorLogoUrl={operator?.logo_url}
+      initialShortcuts={shortcuts}
     />
   )
 }

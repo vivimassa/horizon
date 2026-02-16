@@ -30,7 +30,7 @@ import {
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
+import { cn, minutesToHHMM, hhmmToMinutes } from '@/lib/utils'
 import type { Country, TimezoneZone, AircraftType, AirportRunway, AirportTerminal, AirportCurfew, AirportFrequency, AirportWeatherLimit } from '@/types/database'
 
 const AirportMap = dynamic(() => import('./airport-map'), {
@@ -1244,7 +1244,7 @@ function TatTab({ airport, aircraftTypes }: { airport: AirportWithCountry; aircr
             <thead>
               <tr className="border-b border-white/10 text-xs text-muted-foreground">
                 <th className="text-left py-2 px-2 font-medium">A/C Type</th>
-                <th className="text-left py-2 px-2 font-medium">Default (min)</th>
+                <th className="text-left py-2 px-2 font-medium">Default</th>
                 <th className="text-left py-2 px-2 font-medium">Commercial</th>
                 <th className="text-left py-2 px-2 font-medium">DOM→DOM</th>
                 <th className="text-left py-2 px-2 font-medium">DOM→INT</th>
@@ -1271,12 +1271,12 @@ function TatRow({ rule, onUpdated }: { rule: TatRuleWithType; onUpdated: () => v
   return (
     <tr className="border-b border-white/5 hover:bg-white/50 dark:hover:bg-white/5 transition-colors">
       <td className="py-2.5 px-2 text-xs font-semibold">{rule.aircraft_types?.icao_type} <span className="text-muted-foreground font-normal">{rule.aircraft_types?.name}</span></td>
-      <td className="py-2.5 px-2 font-mono text-xs text-muted-foreground">{rule.aircraft_types?.default_tat_minutes ?? '—'}</td>
-      <td className="py-2.5 px-2 font-mono text-xs font-semibold">{rule.tat_minutes}</td>
-      <td className="py-2.5 px-2 font-mono text-xs">{rule.tat_dom_dom_minutes ?? '—'}</td>
-      <td className="py-2.5 px-2 font-mono text-xs">{rule.tat_dom_int_minutes ?? '—'}</td>
-      <td className="py-2.5 px-2 font-mono text-xs">{rule.tat_int_dom_minutes ?? '—'}</td>
-      <td className="py-2.5 px-2 font-mono text-xs">{rule.tat_int_int_minutes ?? '—'}</td>
+      <td className="py-2.5 px-2 font-mono text-xs text-muted-foreground">{minutesToHHMM(rule.aircraft_types?.default_tat_minutes) || '—'}</td>
+      <td className="py-2.5 px-2 font-mono text-xs font-semibold">{minutesToHHMM(rule.tat_minutes) || '—'}</td>
+      <td className="py-2.5 px-2 font-mono text-xs">{minutesToHHMM(rule.tat_dom_dom_minutes) || '—'}</td>
+      <td className="py-2.5 px-2 font-mono text-xs">{minutesToHHMM(rule.tat_dom_int_minutes) || '—'}</td>
+      <td className="py-2.5 px-2 font-mono text-xs">{minutesToHHMM(rule.tat_int_dom_minutes) || '—'}</td>
+      <td className="py-2.5 px-2 font-mono text-xs">{minutesToHHMM(rule.tat_int_int_minutes) || '—'}</td>
       <td className="py-2.5 px-2 text-right">
         <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={async () => {
           if (!confirm(`Delete Turn Around Time rule for ${rule.aircraft_types?.icao_type}?`)) return
@@ -1304,11 +1304,11 @@ function TatFormDialog({ open, onOpenChange, airportId, aircraftTypes, existingT
     const result = await createTatRule({
       airport_id: airportId,
       aircraft_type_id: fd.get('aircraft_type_id') as string,
-      tat_minutes: Number(fd.get('tat_minutes')),
-      tat_dom_dom_minutes: fd.get('tat_dom_dom') ? Number(fd.get('tat_dom_dom')) : null,
-      tat_dom_int_minutes: fd.get('tat_dom_int') ? Number(fd.get('tat_dom_int')) : null,
-      tat_int_dom_minutes: fd.get('tat_int_dom') ? Number(fd.get('tat_int_dom')) : null,
-      tat_int_int_minutes: fd.get('tat_int_int') ? Number(fd.get('tat_int_int')) : null,
+      tat_minutes: hhmmToMinutes(fd.get('tat_minutes') as string || '') ?? 0,
+      tat_dom_dom_minutes: hhmmToMinutes(fd.get('tat_dom_dom') as string || '') ?? null,
+      tat_dom_int_minutes: hhmmToMinutes(fd.get('tat_dom_int') as string || '') ?? null,
+      tat_int_dom_minutes: hhmmToMinutes(fd.get('tat_int_dom') as string || '') ?? null,
+      tat_int_int_minutes: hhmmToMinutes(fd.get('tat_int_int') as string || '') ?? null,
       notes: fd.get('notes') as string || null,
     })
     setLoading(false)
@@ -1329,11 +1329,11 @@ function TatFormDialog({ open, onOpenChange, airportId, aircraftTypes, existingT
             </select>
           </div>
           <div className="grid grid-cols-5 gap-2">
-            <div className="space-y-1"><label className="text-[10px] font-medium">Commercial</label><Input name="tat_minutes" type="number" required className="font-mono h-8 text-xs" placeholder="min" /></div>
-            <div className="space-y-1"><label className="text-[10px] font-medium">DOM→DOM</label><Input name="tat_dom_dom" type="number" className="font-mono h-8 text-xs" placeholder="—" /></div>
-            <div className="space-y-1"><label className="text-[10px] font-medium">DOM→INT</label><Input name="tat_dom_int" type="number" className="font-mono h-8 text-xs" placeholder="—" /></div>
-            <div className="space-y-1"><label className="text-[10px] font-medium">INT→DOM</label><Input name="tat_int_dom" type="number" className="font-mono h-8 text-xs" placeholder="—" /></div>
-            <div className="space-y-1"><label className="text-[10px] font-medium">INT→INT</label><Input name="tat_int_int" type="number" className="font-mono h-8 text-xs" placeholder="—" /></div>
+            <div className="space-y-1"><label className="text-[10px] font-medium">Commercial</label><Input name="tat_minutes" type="text" required className="font-mono h-8 text-xs" placeholder="HH:MM" /></div>
+            <div className="space-y-1"><label className="text-[10px] font-medium">DOM→DOM</label><Input name="tat_dom_dom" type="text" className="font-mono h-8 text-xs" placeholder="HH:MM" /></div>
+            <div className="space-y-1"><label className="text-[10px] font-medium">DOM→INT</label><Input name="tat_dom_int" type="text" className="font-mono h-8 text-xs" placeholder="HH:MM" /></div>
+            <div className="space-y-1"><label className="text-[10px] font-medium">INT→DOM</label><Input name="tat_int_dom" type="text" className="font-mono h-8 text-xs" placeholder="HH:MM" /></div>
+            <div className="space-y-1"><label className="text-[10px] font-medium">INT→INT</label><Input name="tat_int_int" type="text" className="font-mono h-8 text-xs" placeholder="HH:MM" /></div>
           </div>
           <div className="space-y-1"><label className="text-xs font-medium">Notes</label><Input name="notes" placeholder="Optional notes..." /></div>
           <div className="flex justify-end gap-2">

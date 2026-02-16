@@ -16,7 +16,7 @@ export default function WorkforceLayout({
           </p>
         </div>
         <div className="shrink-0"><ModuleTabs moduleBase="/workforce" moduleName="Workforce" /></div>
-        <div className="flex-1 min-h-0 overflow-hidden mt-3">{children}</div>
+        <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
       </div>
     </ModuleGuard>
   )

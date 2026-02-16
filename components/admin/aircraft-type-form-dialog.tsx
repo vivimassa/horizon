@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { AircraftType } from '@/types/database'
+import { minutesToHHMM, hhmmToMinutes } from '@/lib/utils'
 import { createAircraftType, updateAircraftType } from '@/app/actions/aircraft-types'
 import {
   Dialog,
@@ -156,9 +157,9 @@ export function AircraftTypeFormDialog({ open, onOpenChange, aircraftType }: Air
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="default_tat_minutes">Default Turn Around Time (minutes)</Label>
-            <Input id="default_tat_minutes" name="default_tat_minutes" type="number" defaultValue={aircraftType?.default_tat_minutes ?? ''} placeholder="45" disabled={loading} />
-            <p className="text-xs text-muted-foreground">Default Turn Around Time in minutes</p>
+            <Label htmlFor="default_tat_minutes">Default Turn Around Time (HH:MM)</Label>
+            <Input id="default_tat_minutes" name="default_tat_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.default_tat_minutes) || ''} placeholder="00:45" disabled={loading} className="font-mono" />
+            <p className="text-xs text-muted-foreground">e.g. 00:45 for 45 minutes, 01:10 for 70 minutes</p>
           </div>
 
           <div className="space-y-3">

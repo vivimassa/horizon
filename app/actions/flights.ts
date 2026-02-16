@@ -71,7 +71,7 @@ export async function countConflicts(input: {
   return count || 0
 }
 
-/** Publish (instantiate) flight_numbers into actual flight records */
+/** Publish (instantiate) scheduled_flights into actual flight records */
 export async function publishFlights(input: {
   flight_number_ids: string[]
   start_date: string
@@ -81,19 +81,36 @@ export async function publishFlights(input: {
   const supabase = createAdminClient()
   const operatorId = await getCurrentOperatorId()
 
-  // 1. Fetch selected flight number templates
+  // 1. Fetch selected scheduled_flights
   const { data: fnRows, error: fnErr } = await supabase
-    .from('flight_numbers')
+    .from('scheduled_flights')
     .select('*')
     .in('id', input.flight_number_ids)
 
   if (fnErr || !fnRows) {
-    return { created: 0, skipped: 0, errors: 0, error: fnErr?.message || 'Failed to fetch flight numbers' }
+    return { created: 0, skipped: 0, errors: 0, error: fnErr?.message || 'Failed to fetch scheduled flights' }
   }
+
+  // Map scheduled_flights columns to the shape publishFlights expects
+  const mappedRows = fnRows.map(sf => ({
+    id: sf.id,
+    flight_number: sf.airline_code + sf.flight_number,
+    departure_iata: sf.dep_station,
+    arrival_iata: sf.arr_station,
+    std: sf.std_local ? String(sf.std_local).replace(':', '').slice(0, 4) : '',
+    sta: sf.sta_local ? String(sf.sta_local).replace(':', '').slice(0, 4) : '',
+    block_minutes: sf.block_minutes || 0,
+    days_of_week: sf.days_of_operation,
+    aircraft_type_id: sf.aircraft_type_id,
+    service_type: sf.service_type,
+    effective_from: sf.period_start,
+    effective_until: sf.period_end,
+    arrival_day_offset: sf.arrival_day_offset || (sf.sta_local < sf.std_local ? 1 : 0),
+  }))
 
   // 2. Build timezone lookup from airports
   const iatas = new Set<string>()
-  fnRows.forEach(fn => { iatas.add(fn.departure_iata); iatas.add(fn.arrival_iata) })
+  mappedRows.forEach(fn => { iatas.add(fn.departure_iata); iatas.add(fn.arrival_iata) })
 
   const { data: airportRows } = await supabase
     .from('airports')
@@ -112,7 +129,7 @@ export async function publishFlights(input: {
       .eq('operator_id', operatorId)
       .gte('flight_date', input.start_date)
       .lte('flight_date', input.end_date)
-      .in('flight_number', fnRows.map(fn => fn.flight_number))
+      .in('flight_number', mappedRows.map(fn => fn.flight_number))
 
     existing?.forEach(e => existingSet.add(`${e.flight_number}|${e.flight_date}`))
   }
@@ -139,7 +156,7 @@ export async function publishFlights(input: {
   const records: FlightInsert[] = []
   let skipped = 0
 
-  for (const fn of fnRows) {
+  for (const fn of mappedRows) {
     let cur = input.start_date
     while (cur <= input.end_date) {
       const dow = dateToDow(cur)

@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import { AircraftType } from '@/types/database'
+import { minutesToHHMM } from '@/lib/utils'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -116,7 +117,7 @@ export function AircraftTypesTable({ aircraftTypes }: AircraftTypesTableProps) {
                 <TableCell>{t.name}</TableCell>
                 <TableCell><span className="text-xs bg-secondary px-2 py-0.5 rounded">{t.category}</span></TableCell>
                 <TableCell>{t.pax_capacity}</TableCell>
-                <TableCell>{t.default_tat_minutes ? `${t.default_tat_minutes}m` : '—'}</TableCell>
+                <TableCell className="font-mono">{minutesToHHMM(t.default_tat_minutes) || '—'}</TableCell>
                 <TableCell className="font-mono text-sm">{formatCabinConfig(t.default_cabin_config)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">

@@ -46,6 +46,7 @@ export interface ScheduleBlockLookup {
   dep_iata: string
   arr_iata: string
   block_minutes: number
+  flight_minutes: number | null
   distance_nm: number
 }
 
@@ -59,7 +60,7 @@ export async function getCityPairsForScheduleBuilder(): Promise<{
   const supabase = await createClient()
   const { data: blockHours } = await supabase
     .from('city_pair_block_hours')
-    .select('city_pair_id, aircraft_type_id, direction1_block_minutes, direction2_block_minutes, aircraft_types(icao_type)')
+    .select('city_pair_id, aircraft_type_id, direction1_block_minutes, direction2_block_minutes, direction1_flight_minutes, direction2_flight_minutes, aircraft_types(icao_type)')
 
   // Build airport ID to IATA map from pairs
   const idToIata = new Map<string, string>()
@@ -86,9 +87,9 @@ export async function getCityPairsForScheduleBuilder(): Promise<{
     if (!depIata || !arrIata) continue
 
     // Direction 1: dep -> arr
-    blockLookup.push({ dep_iata: depIata, arr_iata: arrIata, block_minutes: bh.direction1_block_minutes, distance_nm: pm.dist })
+    blockLookup.push({ dep_iata: depIata, arr_iata: arrIata, block_minutes: bh.direction1_block_minutes, flight_minutes: bh.direction1_flight_minutes ?? null, distance_nm: pm.dist })
     // Direction 2: arr -> dep
-    blockLookup.push({ dep_iata: arrIata, arr_iata: depIata, block_minutes: bh.direction2_block_minutes, distance_nm: pm.dist })
+    blockLookup.push({ dep_iata: arrIata, arr_iata: depIata, block_minutes: bh.direction2_block_minutes, flight_minutes: bh.direction2_flight_minutes ?? null, distance_nm: pm.dist })
   }
 
   return { pairs, blockLookup }

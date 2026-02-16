@@ -1,35 +1,37 @@
 import { getScheduleSeasons } from '@/app/actions/schedule-seasons'
 import { getAircraftTypes } from '@/app/actions/aircraft-types'
 import { getAirports } from '@/app/actions/airports'
-import { getFlightServiceTypes } from '@/app/actions/flight-service-types'
-import { getCityPairsForScheduleBuilder } from '@/app/actions/city-pairs'
-import { getAllTatRules } from '@/app/actions/airport-tat-rules'
+import { getAircraftRoutes, getUnassignedFlightCount, getRecentRoutes } from '@/app/actions/aircraft-routes'
 import { getOperatorProfile } from '@/app/actions/operator-profile'
-import { ScheduleBuilder } from '@/components/network/schedule-builder'
+import { AircraftRoutesBuilder } from '@/components/network/aircraft-routes-builder'
 
 export default async function ScheduleBuilderPage() {
-  const [seasons, aircraftTypes, airports, flightServiceTypes, cpData, tatRules, operator] =
-    await Promise.all([
-      getScheduleSeasons(),
-      getAircraftTypes(),
-      getAirports(),
-      getFlightServiceTypes(),
-      getCityPairsForScheduleBuilder(),
-      getAllTatRules(),
-      getOperatorProfile(),
-    ])
+  const [seasons, aircraftTypes, airports, operator, initialRecentRoutes] = await Promise.all([
+    getScheduleSeasons(),
+    getAircraftTypes(),
+    getAirports(),
+    getOperatorProfile(),
+    getRecentRoutes(),
+  ])
+
+  const defaultSeasonId = seasons[0]?.id || ''
+
+  const [initialRoutes, initialUnassignedCount] = defaultSeasonId
+    ? await Promise.all([
+        getAircraftRoutes(defaultSeasonId),
+        getUnassignedFlightCount(defaultSeasonId),
+      ])
+    : [[], 0]
 
   return (
-    <ScheduleBuilder
+    <AircraftRoutesBuilder
       seasons={seasons}
       aircraftTypes={aircraftTypes}
       airports={airports}
-      flightServiceTypes={flightServiceTypes}
-      cityPairs={cpData.pairs}
-      blockLookup={cpData.blockLookup}
-      tatRules={tatRules}
-      operatorIataCode={operator?.iata_code || ''}
-      operatorTimezone={operator?.timezone}
+      initialRoutes={initialRoutes}
+      initialUnassignedCount={initialUnassignedCount}
+      operatorIataCode={operator?.iata_code || 'VJ'}
+      initialRecentRoutes={initialRecentRoutes}
     />
   )
 }

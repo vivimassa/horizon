@@ -12,7 +12,7 @@ export function MainContent({ children }: { children: React.ReactNode }) {
       className={cn(
         'flex-1 overflow-hidden px-3 py-2',
         dockPos === 'left' && 'pl-[112px]',
-        dockPos === 'bottom' && 'pb-[72px]',
+        dockPos === 'bottom' && 'pb-[100px]',
         dockPos === 'top' && 'pt-[72px]',
       )}
       style={{ opacity: isLoaded ? 1 : 0, transition: 'opacity 150ms' }}

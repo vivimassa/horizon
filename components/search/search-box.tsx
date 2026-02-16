@@ -2,9 +2,9 @@
 
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import Fuse from 'fuse.js'
-import { Search } from 'lucide-react'
+import { Search, GripVertical } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { MODULE_REGISTRY, type ModuleEntry } from '@/lib/modules/registry'
+import { MODULE_REGISTRY, isLeafModule, type ModuleEntry } from '@/lib/modules/registry'
 import { getIcon } from '@/lib/modules/icons'
 
 interface SearchResult extends ModuleEntry {
@@ -14,13 +14,15 @@ interface SearchResult extends ModuleEntry {
 interface SearchBoxProps {
   onSelect: (mod: ModuleEntry) => void
   onPin?: (mod: ModuleEntry) => void
+  onDragAdd?: (mod: ModuleEntry) => void
   showPin?: boolean
+  showDrag?: boolean
   placeholder?: string
   className?: string
   autoFocus?: boolean
 }
 
-export function SearchBox({ onSelect, onPin, showPin = false, placeholder = 'Search modules...', className, autoFocus = false }: SearchBoxProps) {
+export function SearchBox({ onSelect, onPin, onDragAdd, showPin = false, showDrag = true, placeholder = 'Search modules...', className, autoFocus = false }: SearchBoxProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -105,6 +107,39 @@ export function SearchBox({ onSelect, onPin, showPin = false, placeholder = 'Sea
     }
   }
 
+  const handleDragStart = (e: React.DragEvent, mod: ModuleEntry) => {
+    e.dataTransfer.setData('application/horizon-shortcut', JSON.stringify({
+      code: mod.code,
+      name: mod.name,
+      path: mod.route,
+      icon: mod.icon,
+    }))
+    e.dataTransfer.effectAllowed = 'copy'
+
+    // Create a styled drag ghost
+    const ghost = document.createElement('div')
+    ghost.className = 'fixed pointer-events-none px-4 py-2 rounded-xl text-sm font-medium shadow-lg z-[9999]'
+    ghost.style.cssText = 'background: rgba(var(--primary-rgb, 59, 130, 246), 0.15); backdrop-filter: blur(12px); border: 1px solid rgba(var(--primary-rgb, 59, 130, 246), 0.3); transform: rotate(2deg); color: var(--foreground);'
+    ghost.textContent = `${mod.code} ${mod.name}`
+    document.body.appendChild(ghost)
+    e.dataTransfer.setDragImage(ghost, 0, 0)
+    // Clean up ghost after drag starts
+    requestAnimationFrame(() => {
+      ghost.style.position = 'absolute'
+      ghost.style.left = '-9999px'
+      ghost.style.top = '-9999px'
+      setTimeout(() => ghost.remove(), 0)
+    })
+  }
+
+  const handleDragEnd = (e: React.DragEvent, mod: ModuleEntry) => {
+    // If drop effect is 'none', it wasn't dropped on a valid target
+    // Use the onDragAdd callback to add the shortcut anyway
+    if (onDragAdd) {
+      onDragAdd(mod)
+    }
+  }
+
   return (
     <div className={cn('relative', className)}>
       <div className="relative">
@@ -134,9 +169,15 @@ export function SearchBox({ onSelect, onPin, showPin = false, placeholder = 'Sea
         >
           {results.map((mod, i) => {
             const Icon = getIcon(mod.icon)
+            const isLeaf = isLeafModule(mod.code)
+            const isDraggable = showDrag && isLeaf
+
             return (
-              <button
+              <div
                 key={mod.code}
+                draggable={isDraggable}
+                onDragStart={isDraggable ? (e) => handleDragStart(e, mod) : undefined}
+                onDragEnd={isDraggable ? (e) => handleDragEnd(e, mod) : undefined}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   onSelect(mod)
@@ -145,9 +186,17 @@ export function SearchBox({ onSelect, onPin, showPin = false, placeholder = 'Sea
                 }}
                 className={cn(
                   'flex items-center gap-3 w-full px-4 py-2.5 text-left text-sm transition-colors',
-                  i === selectedIndex ? 'bg-primary/10 text-primary' : 'hover:bg-white/30 dark:hover:bg-white/5'
+                  i === selectedIndex ? 'bg-primary/10 text-primary' : 'hover:bg-white/30 dark:hover:bg-white/5',
+                  isDraggable && 'cursor-grab active:cursor-grabbing group/drag',
                 )}
               >
+                {/* Drag grip — only for leaf modules */}
+                {isDraggable ? (
+                  <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30 group-hover/drag:text-muted-foreground/70 transition-colors" />
+                ) : (
+                  <div className="w-3.5 shrink-0" />
+                )}
+
                 <Icon className="h-4 w-4 shrink-0" />
                 <div className="flex-1 min-w-0">
                   <span className="font-medium">{mod.name}</span>
@@ -170,7 +219,7 @@ export function SearchBox({ onSelect, onPin, showPin = false, placeholder = 'Sea
                     </svg>
                   </button>
                 )}
-              </button>
+              </div>
             )
           })}
         </div>

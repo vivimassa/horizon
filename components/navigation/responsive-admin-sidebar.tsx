@@ -53,6 +53,7 @@ const sidebarSections: SidebarSection[] = [
       { label: 'Flight Service Types', href: '/admin/master-database/flight-service-types' },
       { label: 'Delay Codes', href: '/admin/master-database/delay-codes' },
       { label: 'Cabin Classes', href: '/admin/master-database/cabin-classes' },
+      { label: 'Units of Measure', href: '/admin/master-database/units-of-measure' },
     ],
   },
   {
@@ -63,7 +64,6 @@ const sidebarSections: SidebarSection[] = [
       { label: 'Schedule Seasons', href: '/admin/network-config/schedule-seasons' },
       { label: 'Codeshare Config', href: '/admin/network-config/codeshare-config' },
       { label: 'Route Constraints', href: '/admin/network-config/route-constraints' },
-      { label: 'SSIM Configuration', href: '/admin/network-config/ssim-config' },
     ],
   },
   {
