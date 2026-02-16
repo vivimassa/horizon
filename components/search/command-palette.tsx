@@ -9,7 +9,7 @@ import {
 import { SearchBox } from './search-box'
 import { type ModuleEntry, isLeafModule } from '@/lib/modules/registry'
 import { addShortcut } from '@/app/actions/shortcuts'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/visionos-toast'
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
@@ -33,7 +33,7 @@ export function CommandPalette() {
 
   const handlePin = useCallback(async (mod: ModuleEntry) => {
     if (!isLeafModule(mod.code)) {
-      toast('Only leaf pages can be pinned')
+      toast.info('Only leaf pages can be pinned')
       return
     }
     const result = await addShortcut({
@@ -43,9 +43,9 @@ export function CommandPalette() {
       pageIcon: mod.icon,
     })
     if (result.success) {
-      toast(`Added ${mod.name} to your dashboard`)
+      toast.success(`Added ${mod.name} to your dashboard`)
     } else if (result.error?.includes('duplicate')) {
-      toast(`${mod.name} is already on your dashboard`)
+      toast.info(`${mod.name} is already on your dashboard`)
     }
   }, [])
 
@@ -58,9 +58,9 @@ export function CommandPalette() {
       pageIcon: mod.icon,
     })
     if (result.success) {
-      toast(`Added ${mod.name} to your dashboard`)
+      toast.success(`Added ${mod.name} to your dashboard`)
     } else if (result.error?.includes('duplicate')) {
-      toast(`${mod.name} is already on your dashboard`)
+      toast.info(`${mod.name} is already on your dashboard`)
     }
   }, [])
 

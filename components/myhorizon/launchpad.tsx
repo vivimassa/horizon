@@ -29,7 +29,7 @@ import {
   reorderShortcuts,
   type UserShortcut,
 } from '@/app/actions/shortcuts'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/visionos-toast'
 
 interface LaunchpadProps {
   userName: string
@@ -87,14 +87,14 @@ export function Launchpad({ userName, userRole, isAdmin, enabledModules, current
     setShortcuts(prev => prev.filter(s => s.page_code !== code).map((s, i) => ({ ...s, position: i })))
 
     await removeShortcut(code)
-    toast('Shortcut removed')
+    toast.success('Shortcut removed')
   }, [])
 
   // ─── Add shortcut ───────────────────────────────────────────────
 
   const handleAdd = useCallback(async (mod: ModuleEntry) => {
     if (codes.includes(mod.code)) {
-      toast(`${mod.name} is already on your dashboard`)
+      toast.info(`${mod.name} is already on your dashboard`)
       return
     }
 
@@ -124,7 +124,7 @@ export function Launchpad({ userName, userRole, isAdmin, enabledModules, current
       setShortcuts(prev =>
         prev.map(s => s.id === newShortcut.id ? result.shortcut! : s)
       )
-      toast(`Added ${mod.name} to your dashboard`)
+      toast.success(`Added ${mod.name} to your dashboard`)
     }
   }, [codes, shortcuts.length])
 

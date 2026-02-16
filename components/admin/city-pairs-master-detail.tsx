@@ -55,7 +55,8 @@ import {
   Zap,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/visionos-toast'
+import { friendlyError } from '@/lib/utils/error-handler'
 
 const CityPairMap = dynamic(() => import('./city-pair-map'), {
   ssr: false,
@@ -625,7 +626,7 @@ function BlockHoursTab({
     if (newRow.notes) data.notes = newRow.notes
 
     const result = await addBlockHour(data)
-    if (result.error) { toast.error(result.error); return }
+    if (result.error) { toast.error(friendlyError(result.error)); return }
     toast.success('Row added')
     setAddingRow(false)
     setNewRow({ aircraft_type_id: '', season_type: 'annual', month_applicable: null, dir1: '', dir2: '', notes: '' })
@@ -634,7 +635,7 @@ function BlockHoursTab({
 
   async function handleEstimateFlightHours() {
     const result = await autoEstimateFlightHours(pair.id)
-    if (result.error) { toast.error(result.error); return }
+    if (result.error) { toast.error(friendlyError(result.error)); return }
     toast.success(`Estimated flight hours for ${result.updated} rows`)
     onRefresh()
   }
@@ -1033,7 +1034,7 @@ function AddCityPairDialog({
     const result = await createCityPair(selected1.id, selected2.id)
     setCreating(false)
 
-    if (result.error) { toast.error(result.error); return }
+    if (result.error) { toast.error(friendlyError(result.error)); return }
     toast.success(`Created ${selected1.iata_code} ↔ ${selected2.iata_code}`)
     // Reset
     setSearch1(''); setSearch2(''); setSelected1(null); setSelected2(null)

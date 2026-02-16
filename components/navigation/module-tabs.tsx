@@ -51,7 +51,7 @@ export function ModuleTabs({ moduleBase }: ModuleTabsProps) {
       if (activeTabRef.current && wrapperRef.current) {
         const tabRect = activeTabRef.current.getBoundingClientRect()
         const wrapperRect = wrapperRef.current.getBoundingClientRect()
-        setActiveLeft(tabRect.left - wrapperRect.left)
+        setActiveLeft(tabRect.left - wrapperRect.left + tabRect.width / 2)
       }
     }
     measure()

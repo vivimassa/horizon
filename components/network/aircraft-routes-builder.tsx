@@ -17,7 +17,8 @@ import {
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StatusGreen, StatusYellow, StatusRed, StatusGray } from '@/components/ui/validation-icons'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/visionos-toast'
+import { friendlyError } from '@/lib/utils/error-handler'
 
 // ─── Props ────────────────────────────────────────────────────
 
@@ -123,26 +124,32 @@ function daysBetween(a: string, b: string): number {
 interface LegWithOffsets extends AircraftRouteLeg {
   _dayOffset: number
   _arrivesNextDay: boolean
+  _dayOffsetManual: boolean
 }
 
 function calculateDayOffsets(legs: LegWithOffsets[]): void {
   if (legs.length === 0) return
-  legs[0]._dayOffset = 0
+  if (!legs[0]._dayOffsetManual) {
+    legs[0]._dayOffset = 0
+  }
   legs[0]._arrivesNextDay = timeToMinutes(legs[0].sta_local) < timeToMinutes(legs[0].std_local)
 
   for (let i = 1; i < legs.length; i++) {
     const prev = legs[i - 1]
     const curr = legs[i]
-    const prevStaMin = timeToMinutes(prev.sta_local)
-    const currStdMin = timeToMinutes(curr.std_local)
-    const arrivalDay = prev._dayOffset + (prev._arrivesNextDay ? 1 : 0)
 
-    if (currStdMin <= prevStaMin && prev._arrivesNextDay) {
-      curr._dayOffset = arrivalDay
-    } else if (currStdMin < prevStaMin) {
-      curr._dayOffset = arrivalDay + 1
-    } else {
-      curr._dayOffset = arrivalDay
+    if (!curr._dayOffsetManual) {
+      const prevStaMin = timeToMinutes(prev.sta_local)
+      const currStdMin = timeToMinutes(curr.std_local)
+      const arrivalDay = prev._dayOffset + (prev._arrivesNextDay ? 1 : 0)
+
+      if (currStdMin <= prevStaMin && prev._arrivesNextDay) {
+        curr._dayOffset = arrivalDay
+      } else if (currStdMin < prevStaMin) {
+        curr._dayOffset = arrivalDay + 1
+      } else {
+        curr._dayOffset = arrivalDay
+      }
     }
     curr._arrivesNextDay = timeToMinutes(curr.sta_local) < timeToMinutes(curr.std_local)
   }
@@ -262,7 +269,7 @@ const TAB_AC_TYPE = 2
 const TAB_FROM = 3
 const TAB_TO = 4
 const TAB_LEG_BASE = 5
-const FIELDS_PER_ROW = 7
+const FIELDS_PER_ROW = 8
 
 function legTabIndex(rowIdx: number, fieldIdx: number): number {
   return TAB_LEG_BASE + (rowIdx * FIELDS_PER_ROW) + fieldIdx
@@ -270,7 +277,7 @@ function legTabIndex(rowIdx: number, fieldIdx: number): number {
 
 /** Focus a grid cell by row/col. Works across LegRow, GridEntryRow, and FocusableEmptyRow. */
 function focusGridCell(row: number, col: number) {
-  if (row < 0 || col < 0 || col > 6) return
+  if (row < 0 || col < 0 || col > 7) return
   const el = document.querySelector<HTMLElement>(`[data-grid-row="${row}"][data-grid-col="${col}"]`)
   if (!el) return
   if (el.tagName === 'INPUT') {
@@ -382,11 +389,13 @@ export function AircraftRoutesBuilder({
   const [draft, setDraft] = useState<NewLegDraft>(emptyDraft())
   const [editingCell, setEditingCell] = useState<{ legId: string; field: string } | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [selectedCell, setSelectedCell] = useState<{row: number, col: number} | null>(null)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
-  const [dropIdx, setDropIdx] = useState<number | null>(null)
+  const [dropIndicator, setDropIndicator] = useState<{ index: number; position: 'above' | 'below' } | null>(null)
   const [activeEmptyRow, setActiveEmptyRow] = useState<number | null>(null)
   const [focusField, setFocusField] = useState<string | null>(null)
-  const [selectedLegIdx, setSelectedLegIdx] = useState<number | null>(null)
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set())
+  const [highlightedCol, setHighlightedCol] = useState<number | null>(null)
 
   // ── Undo/Redo history ──
   const [legsHistory, setLegsHistory] = useState<LegWithOffsets[][]>([])
@@ -414,6 +423,8 @@ export function AircraftRoutesBuilder({
   const [saving, setSaving] = useState(false)
   const [templates, setTemplates] = useState<RouteTemplate[]>(initialTemplates)
 
+  const [formErrors, setFormErrors] = useState<Record<string, boolean>>({})
+
   const snapshotRef = useRef<{ form: RouteFormState; legs: LegWithOffsets[] } | null>(null)
   const isNewRouteRef = useRef(false)
   isNewRouteRef.current = isNewRoute
@@ -433,7 +444,9 @@ export function AircraftRoutesBuilder({
   const shortcutRefs = useRef<{
     save: () => void; undo: () => void; redo: () => void
     newRoute: () => void; duplicate: () => void; cancel: () => void
-    deleteSelectedLeg: () => void
+    deleteSelectedLeg: () => void; addRow: () => void
+    expandRowSelection: (direction: 'up' | 'down') => void; selectAll: () => void
+    selectRow: () => void; selectCol: () => void
   }>({ save: () => {}, undo: () => {}, redo: () => {}, newRoute: () => {}, duplicate: () => {}, cancel: () => {}, deleteSelectedLeg: () => {} })
 
   // ── Lookup maps ──
@@ -523,7 +536,7 @@ export function AircraftRoutesBuilder({
 
     const route = routes.find(r => r.id === routeId)
     if (!route) {
-      setForm(null); setLegs([]); setIsDirty(false); setIsAdding(false); setEditingCell(null); setSelectedLegIdx(null)
+      setForm(null); setLegs([]); setIsDirty(false); setIsAdding(false); setEditingCell(null); setSelectedCell(null); setSelectedRows(new Set()); setFormErrors({})
       snapshotRef.current = null
       return
     }
@@ -539,10 +552,10 @@ export function AircraftRoutesBuilder({
       notes: route.notes || '',
     }
     const legsWithOffsets: LegWithOffsets[] = route.legs.map(l => ({
-      ...l, _dayOffset: l.day_offset || 0, _arrivesNextDay: l.arrives_next_day || false,
+      ...l, _dayOffset: l.day_offset || 0, _arrivesNextDay: l.arrives_next_day || false, _dayOffsetManual: false,
     }))
     calculateDayOffsets(legsWithOffsets)
-    setForm(f); setLegs(legsWithOffsets); setIsDirty(false); setIsAdding(false); setEditingCell(null); setSelectedLegIdx(null)
+    setForm(f); setLegs(legsWithOffsets); setIsDirty(false); setIsAdding(false); setEditingCell(null); setSelectedCell(null); setSelectedRows(new Set()); setFormErrors({})
     hasManualRouteNameRef.current = true
     snapshotRef.current = { form: { ...f }, legs: legsWithOffsets.map(l => ({ ...l })) }
     // Sync AC type search display
@@ -687,7 +700,7 @@ export function AircraftRoutesBuilder({
           std_local: stdNorm, sta_local: hasSta ? staNorm : stdNorm,
           dep_utc_offset: null, arr_utc_offset: null,
           block_minutes: 0, day_offset: 0, arrives_next_day: false,
-          service_type: 'J', _dayOffset: 0, _arrivesNextDay: false,
+          service_type: 'J', _dayOffset: 0, _arrivesNextDay: false, _dayOffsetManual: false,
         }
         const tempLegs = [...legs.map(l => ({ ...l })), tempLeg]
         calculateDayOffsets(tempLegs)
@@ -803,6 +816,7 @@ export function AircraftRoutesBuilder({
         service_type: tl.service_type,
         _dayOffset: 0,
         _arrivesNextDay: false,
+        _dayOffsetManual: false,
       }))
       calculateDayOffsets(initialLegs)
     }
@@ -810,7 +824,8 @@ export function AircraftRoutesBuilder({
     setLegs(initialLegs)
     setIsDirty(!!template)
     setEditingCell(null)
-    setSelectedLegIdx(null)
+    setSelectedCell(null)
+    setSelectedRows(new Set())
     setDraft(emptyDraft())
     hasManualRouteNameRef.current = false
     setLegsHistory([initialLegs.map(l => ({ ...l }))])
@@ -823,7 +838,7 @@ export function AircraftRoutesBuilder({
       setActiveEmptyRow(null)
       setFocusField(null)
       setTimeout(() => {
-        const el = document.querySelector<HTMLElement>('[data-grid-row="0"][data-grid-col="0"]')
+        const el = document.querySelector<HTMLElement>('[data-grid-row="0"][data-grid-col="1"]')
         if (el) el.click()
       }, 100)
     } else {
@@ -853,6 +868,14 @@ export function AircraftRoutesBuilder({
     }
     initNewRoute(template)
   }, [selectedSeason, isDirty, initNewRoute])
+
+  // ── Auto-init empty route when no form is active ──
+  useEffect(() => {
+    if (!form && !selectedRouteId && selectedSeason) {
+      initNewRoute()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form, selectedRouteId, selectedSeason])
 
   // ── Route selection (with dirty guard) ──
   const handleSelectRoute = useCallback((routeId: string) => {
@@ -948,6 +971,15 @@ export function AircraftRoutesBuilder({
   const updateForm = useCallback((patch: Partial<RouteFormState>) => {
     setForm(prev => prev ? { ...prev, ...patch } : null)
     setIsDirty(true)
+    // Clear formErrors for filled-in fields
+    setFormErrors(prev => {
+      const next = { ...prev }
+      if (patch.aircraftTypeId) delete next.aircraftType
+      if (patch.periodStart) delete next.periodStart
+      if (patch.periodEnd) delete next.periodEnd
+      if (patch.daysOfOperation) delete next.daysOfOperation
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next
+    })
   }, [])
 
   // ── Duplicate leg ──
@@ -1071,6 +1103,7 @@ export function AircraftRoutesBuilder({
       service_type: draft.serviceType || 'J',
       _dayOffset: 0,
       _arrivesNextDay: false,
+      _dayOffsetManual: false,
     }
 
     console.log('Leg confirmed, adding to array. Legs count:', legs.length + 1)
@@ -1138,7 +1171,7 @@ export function AircraftRoutesBuilder({
   const startEdit = useCallback((legId: string, field: string, currentValue: string) => {
     setEditingCell({ legId, field })
     setEditValue(currentValue)
-    setSelectedLegIdx(null)
+    setSelectedRows(new Set())
   }, [])
 
   const commitEdit = useCallback(() => {
@@ -1169,6 +1202,18 @@ export function AircraftRoutesBuilder({
           break
         }
         case 'service_type': leg.service_type = editValue.toUpperCase().slice(0, 1) || 'J'; break
+        case 'day_offset': {
+          if (editValue === '') {
+            leg._dayOffsetManual = false
+          } else {
+            const num = parseInt(editValue)
+            if (!isNaN(num) && num >= 0) {
+              leg._dayOffset = num
+              leg._dayOffsetManual = true
+            }
+          }
+          break
+        }
       }
 
       updated[idx] = leg
@@ -1182,21 +1227,126 @@ export function AircraftRoutesBuilder({
 
   const cancelEdit = useCallback(() => { setEditingCell(null) }, [])
 
+  // ── Cell selection (Excel-style) ──
+  const colToField = (col: number): string | null => {
+    switch (col) {
+      case 0: return 'day_offset'
+      case 1: return 'flight_number'
+      case 2: return 'dep_station'
+      case 3: return 'arr_station'
+      case 4: return 'std_local'
+      case 5: return 'sta_local'
+      case 7: return 'service_type'
+      default: return null
+    }
+  }
+
+  const selectCell = useCallback((row: number, col: number) => {
+    if (row < 0 || col < 0 || col > 7) return
+    if (row >= legs.length) {
+      setSelectedCell(null)
+      focusGridCell(row, col)
+      return
+    }
+    setSelectedCell({ row, col })
+    setEditingCell(null)
+    setSelectedRows(new Set())
+    setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-grid-row="${row}"][data-grid-col="${col}"]`)
+      if (el) el.focus()
+    }, 0)
+  }, [legs.length])
+
+  const deselectCell = useCallback(() => { setSelectedCell(null) }, [])
+
+  const clearCellValue = useCallback((row: number, col: number) => {
+    const field = colToField(col)
+    if (!field || row >= legs.length) return
+    setLegs(prev => {
+      const updated = [...prev]
+      const leg = { ...updated[row] }
+      switch (field) {
+        case 'day_offset': leg._dayOffsetManual = false; break
+        case 'flight_number': leg.flight_number = null; leg.airline_code = null; break
+        case 'dep_station': leg.dep_station = ''; break
+        case 'arr_station': leg.arr_station = ''; break
+        case 'std_local': leg.std_local = ''; leg.block_minutes = computeBlockMinutes('', leg.sta_local); break
+        case 'sta_local': leg.sta_local = ''; leg.block_minutes = computeBlockMinutes(leg.std_local, ''); break
+        case 'service_type': leg.service_type = ''; break
+      }
+      updated[row] = leg
+      const result = recalcLegs(updated)
+      pushHistory(result)
+      return result
+    })
+    setIsDirty(true)
+  }, [legs.length, recalcLegs, pushHistory])
+
   // ── Drag & Drop ──
-  const handleDragStart = useCallback((idx: number) => { setDragIdx(idx) }, [])
-  const handleDragOver = useCallback((e: React.DragEvent, idx: number) => { e.preventDefault(); setDropIdx(idx) }, [])
+  const dragCloneRef = useRef<HTMLElement | null>(null)
+
+  const handleDragStart = useCallback((e: React.DragEvent, idx: number) => {
+    setDragIdx(idx)
+    const row = e.currentTarget as HTMLElement
+    // Create a clone of just this row for the drag ghost
+    const clone = row.cloneNode(true) as HTMLElement
+    clone.style.position = 'fixed'
+    clone.style.top = '-1000px'
+    clone.style.left = '0'
+    clone.style.width = row.offsetWidth + 'px'
+    clone.style.height = row.offsetHeight + 'px'
+    clone.style.backgroundColor = 'rgba(255, 255, 255, 0.95)'
+    clone.style.backdropFilter = 'blur(20px)'
+    clone.style.borderRadius = '8px'
+    clone.style.boxShadow = '0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)'
+    clone.style.border = '1px solid rgba(153, 27, 27, 0.3)'
+    clone.style.zIndex = '9999'
+    clone.style.display = 'table-row'
+    clone.style.opacity = '0.95'
+    document.body.appendChild(clone)
+    dragCloneRef.current = clone
+    const rect = row.getBoundingClientRect()
+    e.dataTransfer.setDragImage(clone, e.clientX - rect.left, e.clientY - rect.top)
+    e.dataTransfer.effectAllowed = 'move'
+    // Dim the original row
+    row.style.opacity = '0.3'
+  }, [])
+
+  const handleDragEnd = useCallback((e: React.DragEvent) => {
+    (e.currentTarget as HTMLElement).style.opacity = '1'
+    if (dragCloneRef.current) {
+      dragCloneRef.current.remove()
+      dragCloneRef.current = null
+    }
+    setDragIdx(null)
+    setDropIndicator(null)
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent, idx: number) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (dragIdx === idx) { setDropIndicator(null); return }
+    const row = e.currentTarget as HTMLElement
+    const rect = row.getBoundingClientRect()
+    const midY = rect.top + rect.height / 2
+    setDropIndicator({ index: idx, position: e.clientY < midY ? 'above' : 'below' })
+  }, [dragIdx])
+
   const handleDrop = useCallback((targetIdx: number) => {
-    if (dragIdx === null || dragIdx === targetIdx) { setDragIdx(null); setDropIdx(null); return }
+    if (dragIdx === null || dragIdx === targetIdx) { setDragIdx(null); setDropIndicator(null); return }
+    const insertIdx = dropIndicator?.position === 'below' ? targetIdx + 1 : targetIdx
     setLegs(prev => {
       const items = [...prev]
       const [moved] = items.splice(dragIdx, 1)
-      items.splice(targetIdx, 0, moved)
+      // Adjust target if source was before target
+      const adjIdx = dragIdx < insertIdx ? insertIdx - 1 : insertIdx
+      items.splice(adjIdx, 0, moved)
       const result = recalcLegs(items)
       pushHistory(result)
       return result
     })
-    setDragIdx(null); setDropIdx(null); setIsDirty(true)
-  }, [dragIdx, recalcLegs, pushHistory])
+    setDragIdx(null); setDropIndicator(null); setIsDirty(true)
+  }, [dragIdx, dropIndicator, recalcLegs, pushHistory])
 
   // ═══════════════════════════════════════════════════════════════
   // SAVE / DISCARD / DELETE / PUBLISH
@@ -1257,52 +1407,64 @@ export function AircraftRoutesBuilder({
       }
 
       const res = await saveRoute(input)
-      if (res.error) { toast.error(res.error); return }
+      if (res.error) { toast.error(friendlyError(res.error)); return }
 
       toast.success(`Route ${form.routeName || 'Untitled'} saved (${legs.length} leg${legs.length !== 1 ? 's' : ''})`)
-      setIsDirty(false)
-      setForm(prev => prev ? { ...prev, status: 'draft' } : null)
-      const newRouteId = res.id!
       await Promise.all([refresh(), refreshTemplates()])
+      // Wipe form and start fresh for next route
+      setIsDirty(false)
+      setSelectedRouteId(null)
       setIsNewRoute(false)
       isNewRouteRef.current = false
-      setSelectedRouteId(newRouteId)
+      initNewRoute()
     } catch { toast.error('Failed to save route') }
     finally { setSaving(false) }
-  }, [form, selectedRouteId, isNewRoute, legs, routeDuration, refresh, refreshTemplates])
+  }, [form, selectedRouteId, isNewRoute, legs, routeDuration, refresh, refreshTemplates, initNewRoute])
 
   const handleSaveRoute = useCallback(() => {
     if (!form) return
     if (hasRedErrors) { toast.error('Cannot save \u2014 resolve errors first'); return }
     if (isAdding && draft._duplicateError) { toast.error('Cannot save \u2014 resolve duplicate flight error first'); return }
 
+    // Validate required form fields
+    const errs: Record<string, boolean> = {}
+    const missing: string[] = []
+    if (!form.aircraftTypeId) { errs.aircraftType = true; missing.push('AC Type') }
+    if (!form.periodStart) { errs.periodStart = true; missing.push('From date') }
+    if (!form.periodEnd) { errs.periodEnd = true; missing.push('To date') }
+    if (!form.daysOfOperation) { errs.daysOfOperation = true; missing.push('Day of Week') }
+    if (legs.length === 0) { missing.push('At least one flight leg') }
+
+    if (missing.length > 0) {
+      setFormErrors(errs)
+      toast.error('Required fields missing', { items: missing })
+      return
+    }
+    setFormErrors({})
+
     const warnings = computeWarnings()
     if (warnings.length > 0) { setSaveWarnings(warnings); setShowWarningDialog(true); return }
     executeSave()
-  }, [form, hasRedErrors, isAdding, draft._duplicateError, computeWarnings, executeSave])
+  }, [form, hasRedErrors, isAdding, draft._duplicateError, legs.length, computeWarnings, executeSave])
 
   const discardChanges = useCallback(() => {
     if (isNewRoute) {
-      // Discard new route → go back to empty state
-      setIsNewRoute(false)
-      isNewRouteRef.current = false
-      setForm(null)
-      setLegs([])
-      setSelectedRouteId(null)
+      // Discard new route → re-init empty form
+      initNewRoute()
     } else if (snapshotRef.current) {
       setForm({ ...snapshotRef.current.form })
       setLegs(snapshotRef.current.legs.map(l => ({ ...l })))
     }
-    setIsDirty(false); setIsAdding(false); setActiveEmptyRow(null); setFocusField(null); setEditingCell(null); setSelectedLegIdx(null); setDraft(emptyDraft())
+    setIsDirty(false); setIsAdding(false); setActiveEmptyRow(null); setFocusField(null); setEditingCell(null); setSelectedCell(null); setSelectedRows(new Set()); setFormErrors({}); setDraft(emptyDraft())
     setShowDiscardDialog(false)
-  }, [isNewRoute])
+  }, [isNewRoute, initNewRoute])
 
   const handleDeleteRoute = useCallback(async () => {
     if (!selectedRouteId) return
     setSaving(true); setShowDeleteDialog(false)
     try {
       const res = await deleteRouteAction(selectedRouteId)
-      if (res.error) { toast.error(res.error); return }
+      if (res.error) { toast.error(friendlyError(res.error)); return }
       toast.success(`Route ${form?.routeName || 'Untitled'} deleted`)
       setSelectedRouteId(null); setIsDirty(false)
       await Promise.all([refresh(), refreshTemplates()])
@@ -1316,7 +1478,7 @@ export function AircraftRoutesBuilder({
     setSaving(true); setShowPublishDialog(false)
     try {
       const res = await publishRouteAction(selectedRouteId, !isPublished)
-      if (res.error) { toast.error(res.error); return }
+      if (res.error) { toast.error(friendlyError(res.error)); return }
       toast.success(`Route ${isPublished ? 'unpublished' : 'published'}`)
       setForm(prev => prev ? { ...prev, status: isPublished ? 'draft' : 'published' } : null)
       await Promise.all([refresh(), refreshTemplates()])
@@ -1335,12 +1497,104 @@ export function AircraftRoutesBuilder({
       cancel: () => {
         if (isAdding) { deactivateEmptyRow() }
         else if (editingCell) { cancelEdit() }
-        else if (selectedLegIdx !== null) { setSelectedLegIdx(null) }
+        else if (selectedCell) { setSelectedCell(null) }
+        else if (highlightedCol !== null) { setHighlightedCol(null) }
+        else if (selectedRows.size > 0) { setSelectedRows(new Set()) }
       },
       deleteSelectedLeg: () => {
-        if (selectedLegIdx !== null && selectedLegIdx < legs.length) {
-          deleteLeg(legs[selectedLegIdx].id)
-          setSelectedLegIdx(null)
+        if (selectedRows.size > 0) {
+          // Delete all selected rows (in reverse order to preserve indices)
+          const indices = Array.from(selectedRows).sort((a, b) => b - a)
+          setLegs(prev => {
+            const items = prev.filter((_, i) => !selectedRows.has(i))
+            const result = recalcLegs(items)
+            pushHistory(result)
+            return result
+          })
+          setSelectedRows(new Set())
+          setIsDirty(true)
+        } else if (selectedCell && selectedCell.row < legs.length) {
+          deleteLeg(legs[selectedCell.row].id)
+          setSelectedCell(null)
+        }
+      },
+      expandRowSelection: (direction: 'up' | 'down') => {
+        if (selectedRows.size === 0) return
+        const sorted = Array.from(selectedRows).sort((a, b) => a - b)
+        const next = new Set(selectedRows)
+        if (direction === 'down') {
+          const max = sorted[sorted.length - 1]
+          if (max + 1 < legs.length) next.add(max + 1)
+        } else {
+          const min = sorted[0]
+          if (min - 1 >= 0) next.add(min - 1)
+        }
+        setSelectedRows(next)
+      },
+      selectAll: () => {
+        if (legs.length === 0) return
+        const all = new Set<number>()
+        for (let i = 0; i < legs.length; i++) all.add(i)
+        setSelectedRows(all)
+        setSelectedCell(null)
+        setHighlightedCol(null)
+      },
+      addRow: () => {
+        // Insert a blank leg below the selected row
+        const firstSelected = selectedRows.size > 0 ? Math.max(...selectedRows) : null
+        const selIdx = firstSelected ?? (selectedCell && selectedCell.row < legs.length ? selectedCell.row : null)
+        if (selIdx === null || selIdx >= legs.length) return
+        const blankLeg: LegWithOffsets = {
+          id: makeLegId(),
+          route_id: selectedRouteId || '',
+          leg_sequence: 0,
+          flight_id: null,
+          airline_code: operatorIataCode,
+          flight_number: null,
+          dep_station: '',
+          arr_station: '',
+          std_local: '',
+          sta_local: '',
+          dep_utc_offset: null,
+          arr_utc_offset: null,
+          block_minutes: null,
+          day_offset: 0,
+          arrives_next_day: false,
+          service_type: 'J',
+          _dayOffset: 0,
+          _arrivesNextDay: false,
+          _dayOffsetManual: false,
+        }
+        setLegs(prev => {
+          const items = [...prev]
+          items.splice(selIdx + 1, 0, blankLeg)
+          const result = recalcLegs(items)
+          pushHistory(result)
+          return result
+        })
+        setIsDirty(true)
+        // Select the newly inserted row
+        const newIdx = selIdx + 1
+        setSelectedRows(new Set())
+        setSelectedCell({ row: newIdx, col: 1 })
+        setTimeout(() => {
+          const el = document.querySelector<HTMLElement>(`[data-grid-row="${newIdx}"][data-grid-col="1"]`)
+          if (el) el.focus()
+        }, 0)
+      },
+      selectRow: () => {
+        const row = selectedCell?.row ?? (selectedRows.size > 0 ? Math.min(...selectedRows) : null)
+        if (row !== null && row !== undefined && row < legs.length) {
+          setSelectedRows(new Set([row]))
+          setSelectedCell(null)
+          setHighlightedCol(null)
+        }
+      },
+      selectCol: () => {
+        const col = selectedCell?.col
+        if (col !== null && col !== undefined) {
+          setHighlightedCol(prev => prev === col ? null : col)
+          setSelectedRows(new Set())
         }
       },
     }
@@ -1362,11 +1616,53 @@ export function AircraftRoutesBuilder({
       if (mod && e.key === 'd') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.duplicate(); return }
       // Ctrl+F: Focus search
       if (mod && e.key === 'f') { e.preventDefault(); e.stopPropagation(); document.getElementById('route-search')?.focus(); return }
+      // Ctrl+-: Delete selected row  |  Ctrl+=: Insert row below
+      if (mod && (e.key === '-' || e.key === '=' || e.key === '+')) {
+        e.preventDefault(); e.stopPropagation()
+        if (e.key === '-') { shortcutRefs.current.deleteSelectedLeg() }
+        else { shortcutRefs.current.addRow() }
+        return
+      }
       // Delete: Remove selected leg (only when not typing in an input)
       if (e.key === 'Delete') {
         const el = document.activeElement
         const isTyping = el?.tagName === 'INPUT' || el?.tagName === 'SELECT' || el?.tagName === 'TEXTAREA'
         if (!isTyping) { e.preventDefault(); shortcutRefs.current.deleteSelectedLeg(); return }
+      }
+      // Shift+Space: Select entire row  |  Ctrl+Space: Select entire column
+      if (e.key === ' ') {
+        const el = document.activeElement
+        const isTyping = el?.tagName === 'INPUT' || el?.tagName === 'SELECT' || el?.tagName === 'TEXTAREA'
+        if (!isTyping) {
+          if (e.shiftKey && !mod) {
+            e.preventDefault(); e.stopPropagation()
+            shortcutRefs.current.selectRow()
+            return
+          }
+          if (mod && !e.shiftKey) {
+            e.preventDefault(); e.stopPropagation()
+            shortcutRefs.current.selectCol()
+            return
+          }
+        }
+      }
+      // Ctrl+A: Select all rows
+      if (mod && e.key === 'a') {
+        const el = document.activeElement
+        const isTyping = el?.tagName === 'INPUT' || el?.tagName === 'SELECT' || el?.tagName === 'TEXTAREA'
+        if (!isTyping) { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.selectAll(); return }
+      }
+      // Arrow Up/Down when rows are selected: expand selection
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !mod && !e.shiftKey) {
+        // Only intercept when rows are selected (not cell selection)
+        const el = document.activeElement
+        const isTyping = el?.tagName === 'INPUT' || el?.tagName === 'SELECT' || el?.tagName === 'TEXTAREA'
+        const hasFocusedCell = el?.hasAttribute('data-grid-col')
+        if (!isTyping && !hasFocusedCell) {
+          e.preventDefault(); e.stopPropagation()
+          shortcutRefs.current.expandRowSelection(e.key === 'ArrowDown' ? 'down' : 'up')
+          return
+        }
       }
       // Escape: Cancel edit / deselect row
       if (e.key === 'Escape') { shortcutRefs.current.cancel(); return }
@@ -1474,7 +1770,7 @@ export function AircraftRoutesBuilder({
 
       {/* ═══ RIGHT PANEL ═══ */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 gap-4">
-        {(selectedRoute || isNewRoute) && form ? (
+        {form ? (
           <>
             {/* ── ROUTE HEADER ── */}
             <div className="shrink-0 glass rounded-2xl px-4 py-2 group/header">
@@ -1529,7 +1825,7 @@ export function AircraftRoutesBuilder({
                       }
                     }}
                     placeholder="A321" maxLength={8}
-                    className={cn(inputClass, 'w-[80px] text-xs font-mono h-[30px]')} autoComplete="off" />
+                    className={cn(inputClass, 'w-[80px] text-xs font-mono h-[30px]', formErrors.aircraftType && 'border-red-500 ring-1 ring-red-500/30')} autoComplete="off" />
                   {acTypeOpen && acTypeSearch && (() => {
                     const filtered = filterAndSortAcTypes(aircraftTypes, acTypeSearch)
                     return (
@@ -1572,7 +1868,7 @@ export function AircraftRoutesBuilder({
                     }}
                     onFocus={e => e.target.select()}
                     placeholder="DD/MM/YYYY" maxLength={10}
-                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]')} />
+                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodStart && 'border-red-500 ring-1 ring-red-500/30')} />
                 </div>
 
                 <span className="text-xs text-muted-foreground pb-[7px]">&mdash;</span>
@@ -1593,12 +1889,12 @@ export function AircraftRoutesBuilder({
                     }}
                     onFocus={e => e.target.select()}
                     placeholder="DD/MM/YYYY" maxLength={10}
-                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]')} />
+                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodEnd && 'border-red-500 ring-1 ring-red-500/30')} />
                 </div>
 
                 <div>
                   <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">Day of Week</span>
-                  <div className="h-[30px] flex items-center">
+                  <div className={cn('h-[30px] flex items-center rounded-lg px-1', formErrors.daysOfOperation && 'ring-1 ring-red-500/30')}>
                     <DowCirclesInteractive value={form.daysOfOperation} onChange={v => updateForm({ daysOfOperation: v })} />
                   </div>
                 </div>
@@ -1635,28 +1931,38 @@ export function AircraftRoutesBuilder({
               </div>
 
               <div className="flex-1 overflow-y-auto px-4 pb-3 custom-scrollbar">
-                <table className="w-full border-collapse border border-black/[0.08] dark:border-white/[0.08] text-[13px]">
+                <table className="w-full border-collapse border border-black/[0.08] dark:border-white/[0.08] text-[13px]"
+                  style={{ userSelect: dragIdx !== null ? 'none' : undefined }}
+                  onDragStart={e => { if (!(e.target as HTMLElement).closest('[data-draggable-row]')) e.preventDefault() }}>
                   <thead>
-                    <tr className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-[#f8f9fa] dark:bg-white/[0.03] sticky top-0 z-10">
-                      <th className="w-[30px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">#</th>
-                      <th className="w-[35px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">Day</th>
-                      <th className="w-[70px] py-1.5 text-left pl-2 border border-black/[0.08] dark:border-white/[0.08]">Flt No</th>
-                      <th className="w-[50px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">DEP</th>
-                      <th className="w-[50px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">ARR</th>
-                      <th className="w-[60px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">STD</th>
-                      <th className="w-[60px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">STA</th>
-                      <th className="w-[55px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">Block</th>
-                      <th className="w-[35px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]">Svc</th>
-                      <th className="w-[40px] py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]"></th>
-                      <th className="w-[30px] py-1.5 border border-black/[0.08] dark:border-white/[0.08]"></th>
-                    </tr>
+                    {(() => {
+                      const thBase = 'py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]'
+                      const hlStyle = (col: number): React.CSSProperties | undefined => highlightedCol === col ? { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' } : undefined
+                      return (
+                        <tr className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-[#f8f9fa] dark:bg-white/[0.03] sticky top-0 z-10">
+                          <th className={cn('w-[30px]', thBase)}>#</th>
+                          <th className={cn('w-[35px]', thBase)} style={hlStyle(0)}>Day</th>
+                          <th className={cn('w-[70px]', thBase)} style={hlStyle(1)}>Flt No</th>
+                          <th className={cn('w-[50px]', thBase)} style={hlStyle(2)}>DEP</th>
+                          <th className={cn('w-[50px]', thBase)} style={hlStyle(3)}>ARR</th>
+                          <th className={cn('w-[60px]', thBase)} style={hlStyle(4)}>STD</th>
+                          <th className={cn('w-[60px]', thBase)} style={hlStyle(5)}>STA</th>
+                          <th className={cn('w-[55px]', thBase)} style={hlStyle(6)}>Block</th>
+                          <th className={cn('w-[35px]', thBase)} style={hlStyle(7)}>Svc</th>
+                          <th className={cn('w-[40px]', thBase)}></th>
+                          <th className={cn('w-[30px]', thBase)}></th>
+                        </tr>
+                      )
+                    })()}
                   </thead>
                   <tbody>
                     {/* Filled leg rows */}
                     {legs.map((leg, idx) => {
                       const fltLabel = leg.airline_code && leg.flight_number != null
                         ? `${leg.airline_code}${leg.flight_number}` : '\u2014'
-                      const isDropTarget = dropIdx === idx && dragIdx !== null && dragIdx !== idx
+                      const di = dropIndicator
+                      const showDropAbove = di !== null && dragIdx !== null && dragIdx !== idx && di.index === idx && di.position === 'above'
+                      const showDropBelow = di !== null && dragIdx !== null && dragIdx !== idx && di.index === idx && di.position === 'below'
 
                       return (
                         <LegRow
@@ -1675,12 +1981,19 @@ export function AircraftRoutesBuilder({
                           operatorIataCode={operatorIataCode}
                           airportIataSet={airportIataSet}
                           cellInputClass={cellInputClass}
-                          onDragStart={() => handleDragStart(idx)}
+                          onDragStart={(e) => handleDragStart(e, idx)}
+                          onDragEnd={handleDragEnd}
                           onDragOver={(e) => handleDragOver(e, idx)}
                           onDrop={() => handleDrop(idx)}
-                          isDropTarget={isDropTarget}
-                          isSelected={selectedLegIdx === idx}
-                          onSelect={() => setSelectedLegIdx(idx)}
+                          dropAbove={showDropAbove}
+                          dropBelow={showDropBelow}
+                          isRowSelected={selectedRows.has(idx)}
+                          onRowSelect={() => { setSelectedRows(new Set([idx])); setSelectedCell(null); setHighlightedCol(null) }}
+                          selectedCol={selectedCell?.row === idx ? selectedCell.col : null}
+                          highlightedCol={highlightedCol}
+                          onSelectCell={(r, c) => { selectCell(r, c); setHighlightedCol(null) }}
+                          onDeselectCell={deselectCell}
+                          onClearCell={clearCellValue}
                         />
                       )
                     })}
@@ -1767,20 +2080,9 @@ export function AircraftRoutesBuilder({
             <RouteTemplatesSection templates={templates} onUseTemplate={handleUseTemplate} />
           </>
         ) : (
-          <>
-            <div className="flex-1 glass rounded-2xl flex flex-col items-center justify-center text-center p-8">
-              <div className="w-16 h-16 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] flex items-center justify-center mb-4">
-                <Plane className="h-7 w-7 text-muted-foreground/30" />
-              </div>
-              <p className="text-sm text-muted-foreground mb-1">Select a route from the left panel</p>
-              <p className="text-xs text-muted-foreground/60 mb-4">or create a new one to get started</p>
-              <button onClick={handleNewRoute} disabled={loading}
-                className="h-8 px-4 flex items-center gap-1.5 rounded-lg bg-[#991b1b] text-white text-sm font-medium hover:bg-[#7f1d1d] transition-colors">
-                <Plus className="h-3.5 w-3.5" /> Create New Route
-              </button>
-            </div>
-            <RouteTemplatesSection templates={templates} onUseTemplate={handleUseTemplate} />
-          </>
+          <div className="flex-1 glass rounded-2xl flex items-center justify-center">
+            <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground/40" />
+          </div>
         )}
       </div>
 
@@ -1920,8 +2222,9 @@ function LegRow({
   leg, index, flightLabel, validation, onDelete,
   editingCell, editValue, onStartEdit, onEditChange, onCommitEdit, onCancelEdit,
   operatorIataCode, airportIataSet, cellInputClass,
-  onDragStart, onDragOver, onDrop, isDropTarget,
-  isSelected, onSelect,
+  onDragStart, onDragEnd, onDragOver, onDrop, dropAbove, dropBelow,
+  isRowSelected, onRowSelect,
+  selectedCol, highlightedCol, onSelectCell, onDeselectCell, onClearCell,
 }: {
   leg: LegWithOffsets
   index: number
@@ -1937,82 +2240,175 @@ function LegRow({
   operatorIataCode: string
   airportIataSet: Set<string>
   cellInputClass: string
-  onDragStart: () => void
+  onDragStart: (e: React.DragEvent) => void
+  onDragEnd: (e: React.DragEvent) => void
   onDragOver: (e: React.DragEvent) => void
   onDrop: () => void
-  isDropTarget: boolean
-  isSelected: boolean
-  onSelect: () => void
+  dropAbove: boolean
+  dropBelow: boolean
+  isRowSelected: boolean
+  onRowSelect: () => void
+  selectedCol: number | null
+  highlightedCol: number | null
+  onSelectCell: (row: number, col: number) => void
+  onDeselectCell: () => void
+  onClearCell: (row: number, col: number) => void
 }) {
   const isEditing = (field: string) => editingCell?.legId === leg.id && editingCell?.field === field
+  const isCellSelected = (col: number) => selectedCol === col && !editingCell
 
-  function renderEditableCell(field: string, displayValue: string, rawValue: string, width: string, colIdx: number, extraClass?: string) {
+  // Shared keyboard handler for SELECTED mode (non-editable cells like Block use this too)
+  const handleSelectedKeyDown = (e: React.KeyboardEvent, col: number) => {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault()
+      const dr = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+      const dc = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
+      onSelectCell(index + dr, col + dc)
+      return
+    }
+    if (e.key === 'Tab') { e.preventDefault(); onSelectCell(index, e.shiftKey ? col - 1 : col + 1); return }
+    if (e.key === 'Escape') { e.preventDefault(); onDeselectCell(); return }
+  }
+
+  // Returns outline style for a <td> based on selection/editing/highlight state
+  function cellOutlineStyle(colIdx: number, field?: string): React.CSSProperties | undefined {
+    if (field && isEditing(field)) {
+      return { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fff' }
+    }
+    if (isCellSelected(colIdx)) {
+      return { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' }
+    }
+    if (highlightedCol === colIdx) {
+      return { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' }
+    }
+    return undefined
+  }
+
+  function renderEditableCell(field: string, displayValue: string, rawValue: string, colIdx: number, extraClass?: string) {
+    // ── EDITING MODE: actual input with cursor ──
     if (isEditing(field)) {
       return (
         <input autoFocus value={editValue}
           data-grid-row={index} data-grid-col={colIdx}
           onChange={e => onEditChange(field === 'dep_station' || field === 'arr_station' ? e.target.value.toUpperCase() : e.target.value)}
+          onFocus={e => { const el = e.target; setTimeout(() => el.setSelectionRange(el.value.length, el.value.length), 0) }}
           onBlur={onCommitEdit}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') { onCommitEdit(); return }
-            if (e.key === 'Escape') { onCancelEdit(); return }
-            const input = e.target as HTMLInputElement
-            const atStart = input.selectionStart === 0
-            const atEnd = input.selectionStart === input.value.length
-            if (e.key === 'ArrowDown') { e.preventDefault(); onCommitEdit(); setTimeout(() => focusGridCell(index + 1, colIdx), 0); return }
-            if (e.key === 'ArrowUp' && index > 0) { e.preventDefault(); onCommitEdit(); setTimeout(() => focusGridCell(index - 1, colIdx), 0); return }
-            if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); onCommitEdit(); setTimeout(() => focusGridCell(index, colIdx - 1), 0); return }
-            if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); onCommitEdit(); setTimeout(() => focusGridCell(index, colIdx + 1), 0); return }
+            if (e.key === 'Tab') { e.preventDefault(); onCommitEdit(); onSelectCell(index, e.shiftKey ? colIdx - 1 : colIdx + 1); return }
+            if (e.key === 'Enter') { e.preventDefault(); onCommitEdit(); onSelectCell(index + 1, colIdx); return }
+            if (e.key === 'Escape') {
+              e.preventDefault(); onCancelEdit()
+              setTimeout(() => { const el = document.querySelector<HTMLElement>(`[data-grid-row="${index}"][data-grid-col="${colIdx}"]`); if (el) el.focus() }, 0)
+              return
+            }
           }}
-          className={cn(cellInputClass, 'text-[13px] text-center', width, extraClass)} style={{ width }} />
+          className={cn('w-full h-full bg-transparent border-none outline-none text-[13px] font-mono tabular-nums', extraClass)}
+          style={{ textAlign: 'center' }} />
       )
     }
+
+    // ── SELECTED MODE: highlighted cell, keyboard navigation ──
+    if (isCellSelected(colIdx)) {
+      return (
+        <div
+          tabIndex={0}
+          data-grid-row={index} data-grid-col={colIdx}
+          onKeyDown={(e) => {
+            if (e.key === 'F2' || e.key === 'Enter') { e.preventDefault(); onStartEdit(leg.id, field, rawValue); return }
+            if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); onClearCell(index, colIdx); return }
+            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+              e.preventDefault()
+              const initial = field === 'dep_station' || field === 'arr_station' ? e.key.toUpperCase() : e.key
+              onStartEdit(leg.id, field, initial)
+              return
+            }
+            handleSelectedKeyDown(e, colIdx)
+          }}
+          onDoubleClick={() => onStartEdit(leg.id, field, rawValue)}
+          className={cn('w-full h-full flex items-center justify-center outline-none select-none cursor-default', extraClass)}
+        >
+          {displayValue || '\u2014'}
+        </div>
+      )
+    }
+
+    // ── NORMAL MODE ──
     const invalid = (field === 'dep_station' || field === 'arr_station') && displayValue.length === 3 && !airportIataSet.has(displayValue)
     return (
-      <span data-grid-row={index} data-grid-col={colIdx}
-        onClick={() => onStartEdit(leg.id, field, rawValue)}
-        className={cn('cursor-text hover:bg-black/[0.04] dark:hover:bg-white/[0.06] rounded px-0.5 -mx-0.5 transition-colors',
-          invalid && 'text-red-500 underline decoration-red-300 decoration-wavy underline-offset-2')}>
+      <span className={cn(
+          invalid && 'text-red-500 underline decoration-red-300 decoration-wavy underline-offset-2',
+          extraClass)}>
         {displayValue || '\u2014'}
       </span>
     )
   }
 
+  // Render a selectable (but not editable) cell — used for Block column
+  function renderSelectableCell(displayValue: string, colIdx: number) {
+    if (isCellSelected(colIdx)) {
+      return (
+        <div
+          tabIndex={0}
+          data-grid-row={index} data-grid-col={colIdx}
+          onKeyDown={(e) => handleSelectedKeyDown(e, colIdx)}
+          className="w-full h-full flex items-center justify-center outline-none select-none cursor-default"
+        >
+          {displayValue}
+        </div>
+      )
+    }
+    return displayValue
+  }
+
+  // Click handler for <td> — selects the cell (works on any click target within the td)
+  function cellClick(colIdx: number, e: React.MouseEvent) {
+    // Don't re-select if already editing this cell (let the input handle clicks)
+    const target = e.target as HTMLElement
+    if (target.tagName === 'INPUT') return
+    e.stopPropagation()
+    onSelectCell(index, colIdx)
+  }
+
   const bdr = 'border border-black/[0.08] dark:border-white/[0.08]'
   return (
     <tr
-      className={cn('group hover:bg-blue-50/50 dark:hover:bg-white/[0.02] transition-colors h-[36px]',
-        isDropTarget && 'ring-2 ring-primary',
-        isSelected && 'bg-[#f3f4f6] dark:bg-white/[0.05]'
-      )}
-      onClick={onSelect}
-      draggable onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop}
+      data-draggable-row
+      className={cn('group hover:bg-blue-50/50 dark:hover:bg-white/[0.02] transition-colors h-[36px] relative')}
+      style={{
+        ...(isRowSelected ? { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' } : {}),
+        ...(dropAbove ? { boxShadow: 'inset 0 2px 0 0 #991b1b' } : dropBelow ? { boxShadow: 'inset 0 -2px 0 0 #991b1b' } : {}),
+      }}
+      draggable onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDragOver} onDrop={onDrop}
     >
-      <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground tabular-nums')}>{index + 1}</td>
-      <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground/60 tabular-nums')}>D+{leg._dayOffset}</td>
-      <td className={cn(bdr, 'py-1 pl-2 font-mono font-bold tabular-nums')}>
-        {renderEditableCell('flight_number', flightLabel, leg.flight_number != null ? String(leg.flight_number) : '', '70px', 0, 'font-bold text-left')}
+      <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground tabular-nums cursor-pointer')}
+        onClick={onRowSelect}>{index + 1}</td>
+      <td className={cn(bdr, 'text-center text-[12px] font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(0, 'day_offset')} onClick={e => cellClick(0, e)}>
+        {renderEditableCell('day_offset', `D+${leg._dayOffset}`, String(leg._dayOffset), 0,
+          cn('text-center', leg._dayOffsetManual ? 'font-bold text-foreground' : 'text-muted-foreground/60'))}
       </td>
-      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums')}>
-        {renderEditableCell('dep_station', leg.dep_station, leg.dep_station, '45px', 1)}
+      <td className={cn(bdr, 'text-center font-mono font-bold tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(1, 'flight_number')} onClick={e => cellClick(1, e)}>
+        {renderEditableCell('flight_number', flightLabel, leg.flight_number != null ? String(leg.flight_number) : '', 1, 'font-bold')}
       </td>
-      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums')}>
-        {renderEditableCell('arr_station', leg.arr_station, leg.arr_station, '45px', 2)}
+      <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(2, 'dep_station')} onClick={e => cellClick(2, e)}>
+        {renderEditableCell('dep_station', leg.dep_station, leg.dep_station, 2)}
       </td>
-      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums')}>
-        {renderEditableCell('std_local', leg.std_local, leg.std_local, '50px', 3)}
+      <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(3, 'arr_station')} onClick={e => cellClick(3, e)}>
+        {renderEditableCell('arr_station', leg.arr_station, leg.arr_station, 3)}
       </td>
-      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums')}>
-        {renderEditableCell('sta_local', leg.sta_local, leg.sta_local, '50px', 4)}
-        {!isEditing('sta_local') && leg._arrivesNextDay && (
+      <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(4, 'std_local')} onClick={e => cellClick(4, e)}>
+        {renderEditableCell('std_local', leg.std_local, leg.std_local, 4)}
+      </td>
+      <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(5, 'sta_local')} onClick={e => cellClick(5, e)}>
+        {renderEditableCell('sta_local', leg.sta_local, leg.sta_local, 5)}
+        {!isEditing('sta_local') && !isCellSelected(5) && leg._arrivesNextDay && (
           <sup className="text-[9px] font-semibold text-amber-600 dark:text-amber-400 ml-0.5">+1</sup>
         )}
       </td>
-      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums text-muted-foreground')}>
-        {minutesToHHMM(leg.block_minutes || 0)}
+      <td className={cn(bdr, 'text-center font-mono tabular-nums text-muted-foreground p-0 cursor-cell')} style={cellOutlineStyle(6)} onClick={e => cellClick(6, e)}>
+        {renderSelectableCell(minutesToHHMM(leg.block_minutes || 0), 6)}
       </td>
-      <td className={cn(bdr, 'py-1 text-center font-mono tabular-nums text-muted-foreground/70 text-[12px]')}>
-        {renderEditableCell('service_type', leg.service_type || 'J', leg.service_type || 'J', '30px', 6)}
+      <td className={cn(bdr, 'text-center font-mono tabular-nums text-muted-foreground/70 text-[12px] p-0 cursor-cell')} style={cellOutlineStyle(7, 'service_type')} onClick={e => cellClick(7, e)}>
+        {renderEditableCell('service_type', leg.service_type || 'J', leg.service_type || 'J', 7)}
       </td>
       <td className={cn(bdr, 'py-1')}>
         <div className="flex items-center justify-center">
@@ -2055,36 +2451,36 @@ function FocusableEmptyRow({ index, onActivate, disabled }: {
       <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-[#d1d5db] dark:text-[#4b5563] tabular-nums')}>{index + 1}</td>
       <td className={cn(bdr, 'py-1 text-center font-mono text-[#d1d5db] dark:text-[#4b5563] select-none')}>&middot;&middot;&middot;</td>
       <td className={cn(bdr, 'py-1 pl-2')}>
-        <input type="text" readOnly tabIndex={disabled ? -1 : legTabIndex(index, 0)}
-          data-grid-row={index} data-grid-col={0}
+        <input type="text" readOnly tabIndex={disabled ? -1 : legTabIndex(index, 1)}
+          data-grid-row={index} data-grid-col={1}
           onFocus={() => handleFocus('flightNumber')}
           placeholder="&middot;&middot;&middot;&middot;&middot;&middot;&middot;"
           className={cn(ghostInput, 'text-left w-[60px]')} />
       </td>
       <td className={cn(bdr, 'py-1 text-center')}>
         <input type="text" readOnly tabIndex={-1}
-          data-grid-row={index} data-grid-col={1}
+          data-grid-row={index} data-grid-col={2}
           onFocus={() => handleFocus('depStation')}
           placeholder="&middot;&middot;&middot;"
           className={cn(ghostInput, 'w-[40px]')} />
       </td>
       <td className={cn(bdr, 'py-1 text-center')}>
         <input type="text" readOnly tabIndex={-1}
-          data-grid-row={index} data-grid-col={2}
+          data-grid-row={index} data-grid-col={3}
           onFocus={() => handleFocus('arrStation')}
           placeholder="&middot;&middot;&middot;"
           className={cn(ghostInput, 'w-[40px]')} />
       </td>
       <td className={cn(bdr, 'py-1 text-center')}>
         <input type="text" readOnly tabIndex={-1}
-          data-grid-row={index} data-grid-col={3}
+          data-grid-row={index} data-grid-col={4}
           onFocus={() => handleFocus('stdLocal')}
           placeholder="&middot;&middot;:&middot;&middot;"
           className={cn(ghostInput, 'w-[45px]')} />
       </td>
       <td className={cn(bdr, 'py-1 text-center')}>
         <input type="text" readOnly tabIndex={-1}
-          data-grid-row={index} data-grid-col={4}
+          data-grid-row={index} data-grid-col={5}
           onFocus={() => handleFocus('staLocal')}
           placeholder="&middot;&middot;:&middot;&middot;"
           className={cn(ghostInput, 'w-[45px]')} />
@@ -2151,13 +2547,10 @@ function GridEntryRow({
   }, [draft.depStation, draft.arrStation, draft.stdLocal, draft._autoFilledSta, blockTimeMap, setDraft])
 
   const arrowNav = (e: React.KeyboardEvent, col: number): boolean => {
-    const input = e.target as HTMLInputElement
-    const atStart = input.selectionStart === 0
-    const atEnd = input.selectionStart === input.value.length
     if (e.key === 'ArrowDown') { e.preventDefault(); focusGridCell(index + 1, col); return true }
     if (e.key === 'ArrowUp' && index > 0) { e.preventDefault(); focusGridCell(index - 1, col); return true }
-    if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); focusGridCell(index, col - 1); return true }
-    if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); focusGridCell(index, col + 1); return true }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); focusGridCell(index, col - 1); return true }
+    if (e.key === 'ArrowRight') { e.preventDefault(); focusGridCell(index, col + 1); return true }
     return false
   }
 
@@ -2169,7 +2562,7 @@ function GridEntryRow({
 
   // Tab from STA → move to Block field (which then confirms on Tab)
   const handleStaKeyDown = (e: React.KeyboardEvent) => {
-    if (arrowNav(e, 4)) return
+    if (arrowNav(e, 5)) return
     if (e.key === 'Tab' && !e.shiftKey) {
       e.preventDefault()
       if (draft.staLocal) {
@@ -2183,7 +2576,7 @@ function GridEntryRow({
 
   // Tab from Block → move to Svc
   const handleBlockKeyDown = (e: React.KeyboardEvent) => {
-    if (arrowNav(e, 5)) return
+    if (arrowNav(e, 6)) return
     if (e.key === 'Tab' && !e.shiftKey) {
       e.preventDefault()
       svcRef.current?.focus()
@@ -2194,7 +2587,7 @@ function GridEntryRow({
 
   // Tab from Svc → confirm leg and activate next row
   const handleSvcKeyDown = (e: React.KeyboardEvent) => {
-    if (arrowNav(e, 6)) return
+    if (arrowNav(e, 7)) return
     if (e.key === 'Tab' && !e.shiftKey) {
       e.preventDefault()
       if (draft.flightNumber || draft.arrStation) {
@@ -2229,48 +2622,48 @@ function GridEntryRow({
         <td className={cn(bdr, 'py-1 pl-2')}>
           <div className="flex items-center gap-0.5">
             <span className="text-[11px] text-muted-foreground/50 font-mono">{operatorIataCode}</span>
-            <input ref={fltRef} type="text" value={draft.flightNumber} tabIndex={legTabIndex(index, 0)}
-              data-grid-row={index} data-grid-col={0}
+            <input ref={fltRef} type="text" value={draft.flightNumber} tabIndex={legTabIndex(index, 1)}
+              data-grid-row={index} data-grid-col={1}
               onChange={e => update({ flightNumber: e.target.value.replace(/\D/g, '') })}
               onFocus={e => e.target.select()}
-              onKeyDown={e => handleKeyDown(e, 0)} placeholder="121"
+              onKeyDown={e => handleKeyDown(e, 1)} placeholder="121"
               className={cn(cellInputClass, 'w-[50px] font-bold', errBorder('flightNumber'))} />
           </div>
         </td>
 
         <td className={cn(bdr, 'py-1 text-center')}>
-          <input ref={depRef} type="text" value={draft.depStation} tabIndex={legTabIndex(index, 1)}
-            data-grid-row={index} data-grid-col={1}
+          <input ref={depRef} type="text" value={draft.depStation} tabIndex={legTabIndex(index, 2)}
+            data-grid-row={index} data-grid-col={2}
             onChange={e => update({ depStation: e.target.value.toUpperCase().slice(0, 3), _autoFilledDep: false })}
             onFocus={e => { if (draft._autoFilledDep) e.target.select() }}
-            onKeyDown={e => handleKeyDown(e, 1)} placeholder="DEP" maxLength={3}
+            onKeyDown={e => handleKeyDown(e, 2)} placeholder="DEP" maxLength={3}
             className={cn(cellInputClass, 'w-[45px] text-center', errBorder('depStation'),
               draft._autoFilledDep && 'italic text-[#9ca3af]', depInvalid && 'text-red-500')} />
         </td>
 
         <td className={cn(bdr, 'py-1 text-center')}>
-          <input ref={arrRef} type="text" value={draft.arrStation} tabIndex={legTabIndex(index, 2)}
-            data-grid-row={index} data-grid-col={2}
+          <input ref={arrRef} type="text" value={draft.arrStation} tabIndex={legTabIndex(index, 3)}
+            data-grid-row={index} data-grid-col={3}
             onChange={e => update({ arrStation: e.target.value.toUpperCase().slice(0, 3) })}
             onFocus={e => e.target.select()}
-            onKeyDown={e => handleKeyDown(e, 2)} placeholder="ARR" maxLength={3}
+            onKeyDown={e => handleKeyDown(e, 3)} placeholder="ARR" maxLength={3}
             className={cn(cellInputClass, 'w-[45px] text-center', errBorder('arrStation'), arrInvalid && 'text-red-500')} />
         </td>
 
         <td className={cn(bdr, 'py-1 text-center')}>
-          <input ref={stdRef} type="text" value={draft.stdLocal} tabIndex={legTabIndex(index, 3)}
-            data-grid-row={index} data-grid-col={3}
+          <input ref={stdRef} type="text" value={draft.stdLocal} tabIndex={legTabIndex(index, 4)}
+            data-grid-row={index} data-grid-col={4}
             onChange={e => update({ stdLocal: e.target.value, _autoFilledStd: false })}
             onFocus={e => { if (draft._autoFilledStd) e.target.select() }}
             onBlur={() => { if (draft.stdLocal) update({ stdLocal: normalizeTime(draft.stdLocal) }) }}
-            onKeyDown={e => handleKeyDown(e, 3)} placeholder="HH:MM"
+            onKeyDown={e => handleKeyDown(e, 4)} placeholder="HH:MM"
             className={cn(cellInputClass, 'w-[50px] text-center', errBorder('stdLocal'),
               draft._autoFilledStd && 'italic text-[#9ca3af]')} />
         </td>
 
         <td className={cn(bdr, 'py-1 text-center')}>
-          <input ref={staRef} type="text" value={draft.staLocal} tabIndex={legTabIndex(index, 4)}
-            data-grid-row={index} data-grid-col={4}
+          <input ref={staRef} type="text" value={draft.staLocal} tabIndex={legTabIndex(index, 5)}
+            data-grid-row={index} data-grid-col={5}
             onChange={e => update({ staLocal: e.target.value, _autoFilledSta: false })}
             onFocus={e => { if (draft._autoFilledSta) e.target.select() }}
             onBlur={() => { if (draft.staLocal) update({ staLocal: normalizeTime(draft.staLocal) }) }}
@@ -2280,16 +2673,16 @@ function GridEntryRow({
         </td>
 
         <td className={cn(bdr, 'py-1 text-center')}>
-          <input ref={blockRef} type="text" readOnly tabIndex={legTabIndex(index, 5)}
-            data-grid-row={index} data-grid-col={5}
+          <input ref={blockRef} type="text" readOnly tabIndex={legTabIndex(index, 6)}
+            data-grid-row={index} data-grid-col={6}
             value={blockMin > 0 ? minutesToHHMM(blockMin) : '--:--'}
             onKeyDown={handleBlockKeyDown}
             className="bg-transparent outline-none font-mono tabular-nums text-muted-foreground/50 w-[45px] text-center cursor-default focus:ring-1 focus:ring-primary/30 rounded" />
         </td>
 
         <td className={cn(bdr, 'py-1 text-center')}>
-          <input ref={svcRef} type="text" value={draft.serviceType} tabIndex={legTabIndex(index, 6)}
-            data-grid-row={index} data-grid-col={6}
+          <input ref={svcRef} type="text" value={draft.serviceType} tabIndex={legTabIndex(index, 7)}
+            data-grid-row={index} data-grid-col={7}
             onChange={e => update({ serviceType: e.target.value.toUpperCase().slice(0, 1) })}
             onFocus={e => e.target.select()}
             onKeyDown={handleSvcKeyDown} placeholder="J" maxLength={1}

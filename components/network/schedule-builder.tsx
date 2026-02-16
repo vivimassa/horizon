@@ -11,7 +11,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { Plus, Download, Upload, RotateCcw, Trash2, AlertTriangle, Copy, Clock, Loader2 } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/visionos-toast'
+import { friendlyError } from '@/lib/utils/error-handler'
 
 // ─── Types ────────────────────────────────────────────────────
 interface FlightRow {
@@ -1547,7 +1548,7 @@ export function ScheduleBuilder({
                     })
                     const result = await createCityPairFromIata(dep, arr)
                     if (result.error) {
-                      toast.error(result.error)
+                      toast.error(friendlyError(result.error))
                       setMissingPairBanners(prev => {
                         const next = new Map(prev)
                         next.set(key, { dep, arr, creating: false })

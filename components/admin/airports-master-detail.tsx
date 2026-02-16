@@ -29,7 +29,8 @@ import {
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/visionos-toast'
+import { friendlyError } from '@/lib/utils/error-handler'
 import { cn, minutesToHHMM, hhmmToMinutes } from '@/lib/utils'
 import type { Country, TimezoneZone, AircraftType, AirportRunway, AirportTerminal, AirportCurfew, AirportFrequency, AirportWeatherLimit } from '@/types/database'
 
@@ -1578,7 +1579,7 @@ function InquiryModal({
     setApplying(false)
 
     if (result && 'error' in result) {
-      toast.error('Apply failed', { description: result.error })
+      toast.error('Apply failed', { description: friendlyError(result.error || '') })
     } else if (result && 'success' in result) {
       const r = result.results
       const parts: string[] = []
@@ -1901,7 +1902,7 @@ function AddAirportModal({
     })
     setImporting(false)
     if ('error' in result) {
-      toast.error('Import failed', { description: result.error })
+      toast.error('Import failed', { description: friendlyError(result.error || '') })
     } else {
       const name = inquiryData.basicInfo.name || inquiryData.basicInfo.icao_code
       const label = inquiryData.basicInfo.iata_code || inquiryData.basicInfo.icao_code

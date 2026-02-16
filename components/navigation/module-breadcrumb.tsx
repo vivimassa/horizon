@@ -38,24 +38,44 @@ export function ModuleBreadcrumb({ leftOffset = 8, module: moduleProp }: ModuleB
 
   return (
     <div
-      className="h-7 flex items-end mb-2"
-      style={{ paddingLeft: leftOffset }}
+      className="relative mb-2"
+      style={{ height: 28, marginTop: 4 }}
     >
-      {/* L-shaped connector: vertical line + corner + horizontal line */}
+      {/* Vertical line from tab center */}
       <div
-        className="shrink-0"
         style={{
-          width: 10,
-          height: 12,
-          borderLeft: '1.5px solid #991b1b',
-          borderBottom: '1.5px solid #991b1b',
-          borderBottomLeftRadius: 3,
+          position: 'absolute',
+          left: leftOffset,
+          top: 0,
+          width: 2,
+          height: 16,
+          backgroundColor: '#991b1b',
         }}
       />
-      <span className="text-[13px] font-medium ml-1.5 whitespace-nowrap leading-none">
-        <span className="text-red-800">{currentModule.code}.</span>
-        <span className="text-gray-700 dark:text-gray-300">
-          {' '}
+      {/* Corner + horizontal line */}
+      <div
+        style={{
+          position: 'absolute',
+          left: leftOffset,
+          top: 14,
+          width: 14,
+          height: 2,
+          backgroundColor: '#991b1b',
+          borderRadius: '0 0 0 2px',
+        }}
+      />
+      {/* Page name */}
+      <span
+        className="absolute whitespace-nowrap"
+        style={{
+          left: leftOffset + 18,
+          top: 8,
+          fontSize: 13,
+          fontWeight: 500,
+        }}
+      >
+        <span className="text-red-800 font-semibold">{currentModule.code}.</span>
+        <span className="text-gray-700 dark:text-gray-300 ml-1">
           {currentModule.name}
         </span>
       </span>
