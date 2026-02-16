@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
-import { ScheduleSeason, AircraftType, Airport } from '@/types/database'
+import { ScheduleSeason, AircraftType, Airport, ScheduleScenario } from '@/types/database'
 import {
   AircraftRoute, AircraftRouteLeg,
   getAircraftRoutes, getUnassignedFlightCount,
@@ -10,6 +10,7 @@ import {
   type RouteTemplate, type SaveRouteInput,
 } from '@/app/actions/aircraft-routes'
 import { type ScheduleBlockLookup } from '@/app/actions/city-pairs'
+import { getScenarios, createScenario, deleteScenario, getNextScenarioNumber } from '@/app/actions/scenarios'
 import { cn, minutesToHHMM } from '@/lib/utils'
 import {
   Plus, Search, RefreshCw, Plane, ChevronDown, ChevronRight,
@@ -32,6 +33,64 @@ interface Props {
   operatorIataCode: string
   initialTemplates: RouteTemplate[]
   blockLookup?: ScheduleBlockLookup[]
+  scenarios?: (ScheduleScenario & { route_count: number })[]
+}
+
+// ─── Season code parser ──────────────────────────────────────
+
+function getLastSundayOfOctober(year: number): Date {
+  const d = new Date(year, 9, 31)
+  d.setDate(d.getDate() - d.getDay())
+  return d
+}
+function getLastSaturdayOfMarch(year: number): Date {
+  const d = new Date(year, 2, 31)
+  d.setDate(d.getDate() - ((d.getDay() + 1) % 7))
+  return d
+}
+function getLastSundayOfMarch(year: number): Date {
+  const d = new Date(year, 2, 31)
+  d.setDate(d.getDate() - d.getDay())
+  return d
+}
+function getLastSaturdayOfOctober(year: number): Date {
+  const d = new Date(year, 9, 31)
+  d.setDate(d.getDate() - ((d.getDay() + 1) % 7))
+  return d
+}
+
+function parseSeasonCode(code: string): { start: string; end: string } | null {
+  const match = code.toUpperCase().match(/^([WS])(\d{2})$/)
+  if (!match) return null
+  const type = match[1]
+  const year = 2000 + parseInt(match[2])
+  if (type === 'W') {
+    const start = getLastSundayOfOctober(year)
+    const end = getLastSaturdayOfMarch(year + 1)
+    return { start: fmtDate(start), end: fmtDate(end) }
+  }
+  if (type === 'S') {
+    const start = getLastSundayOfMarch(year)
+    const end = getLastSaturdayOfOctober(year)
+    return { start: fmtDate(start), end: fmtDate(end) }
+  }
+  return null
+}
+
+function fmtDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function fmtDateDisplay(iso: string): string {
+  if (!iso) return ''
+  const [y, m, d] = iso.split('-')
+  return `${d}/${m}/${y}`
+}
+
+function parseDateDisplay(display: string): string {
+  const match = display.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+  if (!match) return ''
+  return `${match[3]}-${match[2]}-${match[1]}`
 }
 
 // ─── DOW Helpers ──────────────────────────────────────────────
@@ -368,10 +427,19 @@ function makeLegId(): string {
 // ═══════════════════════════════════════════════════════════════
 
 export function AircraftRoutesBuilder({
-  seasons, aircraftTypes, airports, initialRoutes, initialUnassignedCount, operatorIataCode, initialTemplates, blockLookup,
+  seasons, aircraftTypes, airports, initialRoutes, initialUnassignedCount, operatorIataCode, initialTemplates, blockLookup, scenarios: initialScenarios,
 }: Props) {
   const [selectedSeason, setSelectedSeason] = useState(seasons[0]?.id || '')
   const [routes, setRoutes] = useState<AircraftRoute[]>(initialRoutes)
+
+  // ── Scenario state ──
+  const [scenarios, setScenarios] = useState(initialScenarios || [])
+  const [selectedScenario, setSelectedScenario] = useState<(ScheduleScenario & { route_count: number }) | null>(null)
+  const [showCreateScenario, setShowCreateScenario] = useState(false)
+  const [showScenarioList, setShowScenarioList] = useState(false)
+  const [scenarioLoading, setScenariosLoading] = useState(false)
+  const [nextScenarioNum, setNextScenarioNum] = useState('')
+  const [newScenario, setNewScenario] = useState({ name: '', from: '', to: '', season: '', description: '', isPrivate: false })
   const [unassignedCount, setUnassignedCount] = useState(initialUnassignedCount)
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -753,26 +821,102 @@ export function AircraftRoutesBuilder({
 
   // ── Refresh helpers ──
   const refresh = useCallback(async () => {
-    if (!selectedSeason) return; setLoading(true)
+    if (!selectedScenario) return; setLoading(true)
     try {
-      const [r, c] = await Promise.all([getAircraftRoutes(selectedSeason), getUnassignedFlightCount(selectedSeason)])
+      const [r, c] = await Promise.all([getAircraftRoutes(selectedScenario.id), getUnassignedFlightCount(selectedSeason)])
       setRoutes(r); setUnassignedCount(c)
     } catch { toast.error('Failed to refresh') }
     finally { setLoading(false) }
-  }, [selectedSeason])
+  }, [selectedScenario, selectedSeason])
 
   const refreshTemplates = useCallback(async () => {
     try { setTemplates(await getRouteTemplates()) } catch { /* silent */ }
   }, [])
 
+  const refreshScenarios = useCallback(async () => {
+    try { setScenarios(await getScenarios()) } catch { /* silent */ }
+  }, [])
+
+  // ── Scenario selection ──
+  const selectScenario = useCallback(async (scenario: (ScheduleScenario & { route_count: number }) | null) => {
+    setSelectedScenario(scenario)
+    setSelectedRouteId(null)
+    setForm(null)
+    setLegs([])
+    setIsDirty(false)
+    if (scenario) {
+      localStorage.setItem('horizon_scenario', scenario.id)
+      setLoading(true)
+      try {
+        const r = await getAircraftRoutes(scenario.id)
+        setRoutes(r)
+      } catch { toast.error('Failed to load routes') }
+      finally { setLoading(false) }
+    } else {
+      setRoutes([])
+    }
+  }, [])
+
+  // ── Auto-restore last scenario from localStorage ──
+  useEffect(() => {
+    const lastId = localStorage.getItem('horizon_scenario')
+    if (lastId && scenarios.length > 0) {
+      const found = scenarios.find(s => s.id === lastId)
+      if (found) selectScenario(found)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Create scenario handler ──
+  const handleCreateScenario = useCallback(async () => {
+    if (!newScenario.name.trim()) { toast.error('Scenario name is required'); return }
+    const periodStart = parseDateDisplay(newScenario.from)
+    const periodEnd = parseDateDisplay(newScenario.to)
+    if (!periodStart || !periodEnd) { toast.error('Valid period dates required (DD/MM/YYYY)'); return }
+
+    setScenariosLoading(true)
+    const result = await createScenario({
+      scenario_name: newScenario.name.trim(),
+      period_start: periodStart,
+      period_end: periodEnd,
+      season_code: newScenario.season || undefined,
+      description: newScenario.description || undefined,
+      is_private: newScenario.isPrivate,
+    })
+
+    if (result.error) {
+      toast.error(friendlyError(result.error))
+      setScenariosLoading(false)
+      return
+    }
+
+    toast.success(`Scenario ${result.scenario!.scenario_number} created`)
+    const refreshed = await getScenarios()
+    setScenarios(refreshed)
+    const created = refreshed.find(s => s.id === result.scenario!.id) || { ...result.scenario!, route_count: 0 }
+    selectScenario(created)
+    setShowCreateScenario(false)
+    setNewScenario({ name: '', from: '', to: '', season: '', description: '', isPrivate: false })
+    setScenariosLoading(false)
+  }, [newScenario, selectScenario])
+
+  const handleDeleteScenario = useCallback(async (id: string) => {
+    const res = await deleteScenario(id)
+    if (res.error) { toast.error(res.error); return }
+    toast.success('Scenario deleted')
+    const refreshed = await getScenarios()
+    setScenarios(refreshed)
+    if (selectedScenario?.id === id) selectScenario(null)
+  }, [selectedScenario, selectScenario])
+
+  const openCreateScenarioDialog = useCallback(async () => {
+    try { setNextScenarioNum(await getNextScenarioNumber()) } catch { setNextScenarioNum('XX-0001') }
+    setNewScenario({ name: '', from: '', to: '', season: '', description: '', isPrivate: false })
+    setShowCreateScenario(true)
+  }, [])
+
   // ── Season / new route ──
   const handleSeasonChange = useCallback(async (seasonId: string) => {
-    setSelectedSeason(seasonId); setSelectedRouteId(null); setLoading(true)
-    try {
-      const [r, c] = await Promise.all([getAircraftRoutes(seasonId), getUnassignedFlightCount(seasonId)])
-      setRoutes(r); setUnassignedCount(c)
-    } catch { toast.error('Failed to load routes') }
-    finally { setLoading(false) }
+    setSelectedSeason(seasonId); setSelectedRouteId(null)
   }, [])
 
   // ── Init new route (purely local, no DB) ──
@@ -854,28 +998,28 @@ export function AircraftRoutesBuilder({
   }, [aircraftTypes, selectedSeason])
 
   const handleNewRoute = useCallback(() => {
-    if (!selectedSeason) { toast.error('Select a season first'); return }
+    if (!selectedScenario) { toast.error('Select a scenario first'); return }
     if (isDirty) {
       pendingActionRef.current = () => initNewRoute()
       setShowUnsavedDialog(true)
       return
     }
     initNewRoute()
-  }, [selectedSeason, isDirty, initNewRoute])
+  }, [selectedScenario, isDirty, initNewRoute])
 
   const handleUseTemplate = useCallback((template: RouteTemplate) => {
-    if (!selectedSeason) { toast.error('Select a season first'); return }
+    if (!selectedScenario) { toast.error('Select a scenario first'); return }
     if (isDirty) {
       pendingActionRef.current = () => initNewRoute(template)
       setShowUnsavedDialog(true)
       return
     }
     initNewRoute(template)
-  }, [selectedSeason, isDirty, initNewRoute])
+  }, [selectedScenario, isDirty, initNewRoute])
 
-  // ── Auto-init empty route when no form is active ──
+  // ── Auto-init empty route when scenario is selected ──
   useEffect(() => {
-    if (!form && !selectedRouteId && selectedSeason) {
+    if (!form && !selectedRouteId && selectedScenario) {
       initNewRoute()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1386,6 +1530,7 @@ export function AircraftRoutesBuilder({
       const input: SaveRouteInput = {
         id: isNewRoute ? null : selectedRouteId,
         season_id: form.seasonId,
+        scenario_id: selectedScenario?.id || '',
         route_name: form.routeName || null,
         aircraft_type_id: form.aircraftTypeId || null,
         aircraft_type_icao: form.aircraftTypeIcao || null,
@@ -1414,7 +1559,7 @@ export function AircraftRoutesBuilder({
       if (res.error) { toast.error(friendlyError(res.error)); return }
 
       toast.success(`Route ${form.routeName || 'Untitled'} saved (${legs.length} leg${legs.length !== 1 ? 's' : ''})`)
-      await Promise.all([refresh(), refreshTemplates()])
+      await Promise.all([refresh(), refreshTemplates(), refreshScenarios()])
       // Wipe form and start fresh for next route
       setIsDirty(false)
       setSelectedRouteId(null)
@@ -1684,57 +1829,89 @@ export function AircraftRoutesBuilder({
       {/* ═══ LEFT PANEL ═══ */}
       <div className="w-[280px] shrink-0 glass rounded-2xl flex flex-col overflow-hidden">
         <div className="shrink-0 p-4 pb-3 space-y-3">
-          <select value={selectedSeason} onChange={e => handleSeasonChange(e.target.value)}
-            className={cn(inputClass, 'w-full font-medium')}>
-            {seasons.map(s => <option key={s.id} value={s.id}>{s.code} — {s.name}</option>)}
-          </select>
-
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Aircraft Routes</h2>
-            <div className="flex items-center gap-1">
-              <button onClick={refresh} disabled={loading} className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors" title="Refresh">
-                <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-              </button>
-              <div className="relative" ref={filterRef}>
-                <button onClick={() => setFilterOpen(p => !p)}
-                  className="h-7 px-2.5 flex items-center gap-1 rounded-lg border border-black/[0.06] dark:border-white/[0.06] hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-xs">
-                  <span className="max-w-[80px] truncate">{acFilterLabel}</span>
-                  <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-                </button>
-                {filterOpen && usedAcTypes.length > 0 && (
-                  <div className="absolute right-0 top-full mt-1 z-50 glass-heavy rounded-lg shadow-lg py-1 min-w-[200px] max-h-[200px] overflow-y-auto">
-                    {usedAcTypes.map(([icao, name]) => {
-                      const checked = acTypeFilter.size === 0 || acTypeFilter.has(icao)
-                      return (
-                        <button key={icao} type="button"
-                          onClick={() => toggleAcTypeFilter(icao)}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-left">
-                          <div className={cn(
-                            'w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0',
-                            checked ? 'bg-[#991b1b] border-[#991b1b]' : 'border-black/20 dark:border-white/20'
-                          )}>
-                            {checked && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                          </div>
-                          <span className="font-mono font-semibold">{icao}</span>
-                          <span className="text-muted-foreground truncate">{name}</span>
-                        </button>
-                      )
-                    })}
+          {/* ── Scenario header ── */}
+          {selectedScenario ? (
+            <>
+              <div className="space-y-0.5">
+                <p className="text-[13px] text-[#6b7280] italic leading-tight">Currently editing {selectedScenario.scenario_name}</p>
+                <div className="flex items-center justify-between">
+                  <button onClick={() => setShowScenarioList(true)} className="text-sm font-bold hover:text-[#991b1b] transition-colors">{selectedScenario.scenario_number}</button>
+                  <div className="flex items-center gap-1">
+                    <button onClick={openCreateScenarioDialog} className="h-6 w-6 flex items-center justify-center rounded-md hover:bg-black/5 dark:hover:bg-white/10 transition-colors" title="Create scenario">
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                    <button onClick={() => setShowScenarioList(true)} className="h-6 w-6 flex items-center justify-center rounded-md hover:bg-black/5 dark:hover:bg-white/10 transition-colors" title="Scenario list">
+                      <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 4h12M2 8h12M2 12h12" /></svg>
+                    </button>
                   </div>
-                )}
+                </div>
               </div>
+              <div className="h-px bg-black/[0.06] dark:bg-white/[0.06]" />
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold">Aircraft Routes</h2>
+                <div className="flex items-center gap-1">
+                  <button onClick={refresh} disabled={loading} className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors" title="Refresh">
+                    <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+                  </button>
+                  <div className="relative" ref={filterRef}>
+                    <button onClick={() => setFilterOpen(p => !p)}
+                      className="h-7 px-2.5 flex items-center gap-1 rounded-lg border border-black/[0.06] dark:border-white/[0.06] hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-xs">
+                      <span className="max-w-[80px] truncate">{acFilterLabel}</span>
+                      <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                    </button>
+                    {filterOpen && usedAcTypes.length > 0 && (
+                      <div className="absolute right-0 top-full mt-1 z-50 glass-heavy rounded-lg shadow-lg py-1 min-w-[200px] max-h-[200px] overflow-y-auto">
+                        {usedAcTypes.map(([icao, name]) => {
+                          const checked = acTypeFilter.size === 0 || acTypeFilter.has(icao)
+                          return (
+                            <button key={icao} type="button"
+                              onClick={() => toggleAcTypeFilter(icao)}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-left">
+                              <div className={cn(
+                                'w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0',
+                                checked ? 'bg-[#991b1b] border-[#991b1b]' : 'border-black/20 dark:border-white/20'
+                              )}>
+                                {checked && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                              </div>
+                              <span className="font-mono font-semibold">{icao}</span>
+                              <span className="text-muted-foreground truncate">{name}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <input id="route-search" type="text" placeholder="Search routes..." value={search} onChange={e => setSearch(e.target.value)}
+                  className={cn(inputClass, 'w-full pl-8')} />
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button onClick={openCreateScenarioDialog}
+                className="flex-1 h-8 flex items-center justify-center gap-1.5 rounded-lg bg-[#991b1b] text-white text-xs font-medium hover:bg-[#7f1d1d] transition-colors">
+                <Plus className="h-3.5 w-3.5" /> Create Scenario
+              </button>
+              <button onClick={() => setShowScenarioList(true)}
+                className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg border border-black/[0.06] dark:border-white/[0.06] hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-xs">
+                <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 4h12M2 8h12M2 12h12" /></svg>
+                List
+              </button>
             </div>
-          </div>
-
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <input id="route-search" type="text" placeholder="Search routes..." value={search} onChange={e => setSearch(e.target.value)}
-              className={cn(inputClass, 'w-full pl-8')} />
-          </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto px-2 pb-2 custom-scrollbar">
-          {loading && !routes.length ? (
+          {!selectedScenario ? (
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <Plane className="h-10 w-10 mb-3 opacity-20" />
+              <p className="text-sm font-medium text-muted-foreground">No scenario selected</p>
+              <p className="text-xs text-muted-foreground/70 mt-1">Create a new scenario or select from existing ones</p>
+            </div>
+          ) : loading && !routes.length ? (
             <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">Loading...</div>
           ) : groups.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-sm text-muted-foreground">
@@ -1762,14 +1939,16 @@ export function AircraftRoutesBuilder({
           ))}
         </div>
 
-        <div className="shrink-0 border-t border-black/[0.06] dark:border-white/[0.06] px-4 py-2.5">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Unassigned Flights</span>
-            <span className={cn('font-mono font-semibold tabular-nums', unassignedCount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground/50')}>
-              {unassignedCount}
-            </span>
+        {selectedScenario && (
+          <div className="shrink-0 border-t border-black/[0.06] dark:border-white/[0.06] px-4 py-2.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Unassigned Flights</span>
+              <span className={cn('font-mono font-semibold tabular-nums', unassignedCount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground/50')}>
+                {unassignedCount}
+              </span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* ═══ RIGHT PANEL ═══ */}
@@ -1954,7 +2133,6 @@ export function AircraftRoutesBuilder({
                           <th className={cn('w-[55px]', thBase)} style={hlStyle(6)}>Block</th>
                           <th className={cn('w-[35px]', thBase)} style={hlStyle(7)}>Svc</th>
                           <th className={cn('w-[40px]', thBase)}></th>
-                          <th className={cn('w-[30px]', thBase)}></th>
                         </tr>
                       )
                     })()}
@@ -1975,7 +2153,6 @@ export function AircraftRoutesBuilder({
                           index={idx}
                           flightLabel={fltLabel}
                           validation={legValidations[idx]}
-                          onDelete={() => deleteLeg(leg.id)}
                           editingCell={editingCell}
                           editValue={editValue}
                           onStartEdit={startEdit}
@@ -2089,6 +2266,152 @@ export function AircraftRoutesBuilder({
           </div>
         )}
       </div>
+
+      {/* ═══ CREATE SCENARIO DIALOG ═══ */}
+      <Dialog open={showCreateScenario} onOpenChange={setShowCreateScenario}>
+        <DialogContent className="sm:max-w-[480px] p-0 border-0 bg-transparent shadow-none">
+          <div style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(40px) saturate(180%)', border: '1px solid rgba(255,255,255,0.5)', borderRadius: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.15)', padding: 32 }}>
+            <DialogHeader className="mb-6"><DialogTitle className="text-lg font-semibold">Create New Scenario</DialogTitle></DialogHeader>
+            <div className="space-y-5">
+              {/* Scenario No */}
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-[#6b7280] mb-1.5">Scenario No.</label>
+                <input type="text" readOnly value={nextScenarioNum}
+                  className="w-full h-9 px-3 rounded-lg bg-[#f3f4f6] text-sm font-mono font-semibold text-[#374151] border border-black/[0.06] cursor-default" />
+              </div>
+              {/* Scenario Name */}
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-[#6b7280] mb-1.5">Scenario Name</label>
+                <div className="relative">
+                  <input type="text" maxLength={20} placeholder="e.g. W25 Draft"
+                    value={newScenario.name} onChange={e => setNewScenario(p => ({ ...p, name: e.target.value }))}
+                    className="w-full h-9 px-3 rounded-lg border border-black/[0.08] text-sm focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#9ca3af] tabular-nums">{newScenario.name.length}/20</span>
+                </div>
+              </div>
+              {/* Period */}
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-[#6b7280] mb-1.5">Period</label>
+                <div className="flex items-center gap-2">
+                  <input type="text" placeholder="DD/MM/YYYY" value={newScenario.from}
+                    onChange={e => setNewScenario(p => ({ ...p, from: e.target.value, season: '' }))}
+                    className="flex-1 h-9 px-3 rounded-lg border border-black/[0.08] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                  <span className="text-[#9ca3af] text-sm">—</span>
+                  <input type="text" placeholder="DD/MM/YYYY" value={newScenario.to}
+                    onChange={e => setNewScenario(p => ({ ...p, to: e.target.value, season: '' }))}
+                    className="flex-1 h-9 px-3 rounded-lg border border-black/[0.08] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                  <input type="text" placeholder="W25" maxLength={3} value={newScenario.season}
+                    onChange={e => {
+                      const val = e.target.value.toUpperCase()
+                      setNewScenario(p => ({ ...p, season: val }))
+                      const parsed = parseSeasonCode(val)
+                      if (parsed) {
+                        setNewScenario(p => ({ ...p, season: val, from: fmtDateDisplay(parsed.start), to: fmtDateDisplay(parsed.end) }))
+                      }
+                    }}
+                    className="w-[60px] h-9 px-2 rounded-lg border border-black/[0.08] text-sm font-mono text-center focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                </div>
+              </div>
+              {/* Description */}
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-[#6b7280] mb-1.5">Description</label>
+                <div className="relative">
+                  <input type="text" maxLength={100} placeholder="Brief description..."
+                    value={newScenario.description} onChange={e => setNewScenario(p => ({ ...p, description: e.target.value }))}
+                    className="w-full h-9 px-3 rounded-lg border border-black/[0.08] text-sm focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#9ca3af] tabular-nums">{newScenario.description.length}/100</span>
+                </div>
+              </div>
+              {/* Private toggle */}
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-[#374151]">Private</span>
+                <button type="button" onClick={() => setNewScenario(p => ({ ...p, isPrivate: !p.isPrivate }))}
+                  className={cn('relative w-10 h-[22px] rounded-full transition-colors duration-200', newScenario.isPrivate ? 'bg-[#34d399]' : 'bg-black/[0.08]')}>
+                  <span className={cn('absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow-sm transition-transform duration-200', newScenario.isPrivate ? 'translate-x-[20px]' : 'translate-x-[2px]')} />
+                </button>
+                <span className="text-[12px] text-[#9ca3af]">Only you can see this scenario</span>
+              </div>
+            </div>
+            {/* Buttons */}
+            <div className="flex items-center justify-end gap-2 mt-8">
+              <button onClick={() => setShowCreateScenario(false)}
+                className="h-9 px-5 rounded-lg text-sm font-medium text-[#6b7280] hover:text-[#374151] transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleCreateScenario} disabled={scenarioLoading}
+                className="h-9 px-5 rounded-lg bg-[#991b1b] text-white text-sm font-medium hover:bg-[#7f1d1d] transition-colors disabled:opacity-50">
+                {scenarioLoading ? 'Creating...' : 'Create Scenario'}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══ SCENARIO LIST DIALOG ═══ */}
+      <Dialog open={showScenarioList} onOpenChange={setShowScenarioList}>
+        <DialogContent className="sm:max-w-[600px] p-0 border-0 bg-transparent shadow-none">
+          <div style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(40px) saturate(180%)', border: '1px solid rgba(255,255,255,0.5)', borderRadius: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.15)', padding: 24 }}>
+            <div className="flex items-center justify-between mb-4">
+              <DialogTitle className="text-lg font-semibold">Scenarios</DialogTitle>
+              <button onClick={() => { setShowScenarioList(false); openCreateScenarioDialog() }}
+                className="h-7 px-3 flex items-center gap-1.5 rounded-lg bg-[#991b1b] text-white text-xs font-medium hover:bg-[#7f1d1d] transition-colors">
+                <Plus className="h-3 w-3" /> Create New
+              </button>
+            </div>
+            <div className="border border-black/[0.08] rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-[#f8f9fa]">
+                    <th className="text-left px-3 py-2">No.</th>
+                    <th className="text-left px-3 py-2">Name</th>
+                    <th className="text-left px-3 py-2">Period</th>
+                    <th className="text-center px-3 py-2">Routes</th>
+                    <th className="w-[60px] px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scenarios.length === 0 ? (
+                    <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground text-xs">No scenarios yet</td></tr>
+                  ) : scenarios.map(s => (
+                    <tr key={s.id}
+                      onClick={() => { selectScenario(s); setShowScenarioList(false) }}
+                      className={cn(
+                        'cursor-pointer border-t border-black/[0.04] hover:bg-[#f3f4f6] transition-colors group',
+                        selectedScenario?.id === s.id && 'bg-[#fef2f2]'
+                      )}>
+                      <td className="px-3 py-2 font-mono font-semibold text-xs">{s.scenario_number}</td>
+                      <td className="px-3 py-2 text-xs">{s.scenario_name}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground font-mono">
+                        {fmtDateDisplay(s.period_start).slice(0, 5)} — {fmtDateDisplay(s.period_end).slice(0, 5)}
+                      </td>
+                      <td className="px-3 py-2 text-center text-xs font-mono">{s.route_count}</td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          {s.is_private && <span title="Private" className="text-[10px]">🔒</span>}
+                          <span className={cn('w-2 h-2 rounded-full', s.status === 'published' ? 'bg-emerald-400' : 'bg-gray-300')} />
+                          {s.route_count === 0 && (
+                            <button onClick={e => { e.stopPropagation(); handleDeleteScenario(s.id) }}
+                              className="opacity-0 group-hover:opacity-100 h-5 w-5 flex items-center justify-center rounded hover:bg-red-50 transition-all" title="Delete">
+                              <Trash2 className="h-3 w-3 text-red-400 hover:text-red-600" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-between mt-3">
+              <span className="text-xs text-muted-foreground">{scenarios.length} scenario{scenarios.length !== 1 ? 's' : ''}</span>
+              <button onClick={() => setShowScenarioList(false)}
+                className="h-8 px-4 rounded-lg border border-black/[0.08] text-xs font-medium hover:bg-black/5 transition-colors">
+                Close
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ═══ DIALOGS ═══ */}
 
@@ -2223,7 +2546,7 @@ function StatusIconForOverall({ overall }: { overall: 'green' | 'yellow' | 'red'
 // ─── Editable Leg Row ─────────────────────────────────────────
 
 function LegRow({
-  leg, index, flightLabel, validation, onDelete,
+  leg, index, flightLabel, validation,
   editingCell, editValue, onStartEdit, onEditChange, onCommitEdit, onCancelEdit,
   operatorIataCode, airportIataSet, cellInputClass,
   onDragStart, onDragEnd, onDragOver, onDrop, dropAbove, dropBelow,
@@ -2234,7 +2557,6 @@ function LegRow({
   index: number
   flightLabel: string
   validation: LegValidation
-  onDelete: () => void
   editingCell: { legId: string; field: string } | null
   editValue: string
   onStartEdit: (legId: string, field: string, value: string) => void
@@ -2421,13 +2743,6 @@ function LegRow({
               <StatusIconForOverall overall={validation.overall} />
             </ValidationTooltip>
           )}
-        </div>
-      </td>
-      <td className={cn(bdr, 'py-1')}>
-        <div className="flex items-center justify-center">
-          <button onClick={onDelete} className="opacity-0 group-hover:opacity-100 transition-opacity" title="Delete leg">
-            <Trash2 className="h-3.5 w-3.5 text-muted-foreground/40 hover:text-red-500 transition-colors" />
-          </button>
         </div>
       </td>
     </tr>

@@ -30,6 +30,7 @@ export interface AircraftRoute {
   id: string
   operator_id: string
   season_id: string | null
+  scenario_id: string
   route_number: number
   route_name: string | null
   aircraft_type_id: string | null
@@ -52,10 +53,10 @@ export interface AircraftRoute {
 }
 
 /**
- * Get all aircraft routes with their legs for a given season,
+ * Get all aircraft routes with their legs for a given scenario,
  * grouped by aircraft type for the left panel display.
  */
-export async function getAircraftRoutes(seasonId: string): Promise<AircraftRoute[]> {
+export async function getAircraftRoutes(scenarioId: string): Promise<AircraftRoute[]> {
   const operatorId = await getCurrentOperatorId()
 
   // Fetch routes
@@ -66,9 +67,9 @@ export async function getAircraftRoutes(seasonId: string): Promise<AircraftRoute
     FROM aircraft_routes r
     LEFT JOIN aircraft_types at ON at.id = r.aircraft_type_id
     WHERE r.operator_id = $1
-      AND r.season_id = $2
+      AND r.scenario_id = $2
     ORDER BY r.aircraft_type_icao, r.route_name
-  `, [operatorId, seasonId])
+  `, [operatorId, scenarioId])
 
   if (!routeRes.rows.length) return []
 
@@ -149,6 +150,7 @@ export async function getUnassignedFlightCount(seasonId: string): Promise<number
  */
 export async function createAircraftRoute(input: {
   season_id: string
+  scenario_id: string
   route_name?: string
   aircraft_type_id?: string
   aircraft_type_icao?: string
@@ -161,13 +163,14 @@ export async function createAircraftRoute(input: {
   try {
     const res = await pool.query(`
       INSERT INTO aircraft_routes (
-        operator_id, season_id, route_name, aircraft_type_id, aircraft_type_icao,
+        operator_id, season_id, scenario_id, route_name, aircraft_type_id, aircraft_type_icao,
         days_of_operation, period_start, period_end
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING id
     `, [
       operatorId,
       input.season_id,
+      input.scenario_id,
       input.route_name || null,
       input.aircraft_type_id || null,
       input.aircraft_type_icao || null,
@@ -259,6 +262,7 @@ export interface SaveRouteLegInput {
 export interface SaveRouteInput {
   id: string | null // null → INSERT, non-null → UPDATE
   season_id: string
+  scenario_id: string
   route_name: string | null
   aircraft_type_id: string | null
   aircraft_type_icao: string | null
@@ -314,12 +318,12 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
     } else {
       const ins = await client.query(`
         INSERT INTO aircraft_routes (
-          operator_id, season_id, route_name, aircraft_type_id, aircraft_type_icao,
+          operator_id, season_id, scenario_id, route_name, aircraft_type_id, aircraft_type_icao,
           days_of_operation, period_start, period_end, duration_days, status, notes
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
         RETURNING id
       `, [
-        operatorId, input.season_id, input.route_name || null,
+        operatorId, input.season_id, input.scenario_id, input.route_name || null,
         input.aircraft_type_id || null, input.aircraft_type_icao || null,
         input.days_of_operation, input.period_start || null, input.period_end || null,
         input.duration_days, input.status, input.notes || null,

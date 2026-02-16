@@ -1561,6 +1561,24 @@ export type SsimImport = Database['public']['Tables']['ssim_imports']['Row']
 export type MessageLog = Database['public']['Tables']['message_log']['Row']
 export type TimezoneZone = Database['public']['Tables']['timezone_zones']['Row']
 
+export interface ScheduleScenario {
+  id: string
+  operator_id: string
+  scenario_number: string
+  scenario_name: string
+  description: string | null
+  period_start: string
+  period_end: string
+  season_code: string | null
+  is_private: boolean
+  created_by: string
+  status: 'draft' | 'published' | 'archived'
+  published_at: string | null
+  published_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface UserPreferences {
   id: string
   user_id: string
