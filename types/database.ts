@@ -1442,6 +1442,26 @@ export interface Database {
           created_at?: string
         }
       }
+      gantt_settings: {
+        Row: {
+          id: string
+          operator_id: string
+          settings: Json
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          operator_id: string
+          settings?: Json
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          operator_id?: string
+          settings?: Json
+          updated_at?: string
+        }
+      }
       message_log: {
         Row: {
           id: string
@@ -1555,9 +1575,14 @@ export interface FlightNumber {
   created_at: string
   updated_at: string | null
   source: string | null
+  scenario_id: string | null
+  scenario_name: string | null
+  scenario_number: string | null
+  previous_status: string | null
 }
 export type Flight = Database['public']['Tables']['flights']['Row']
 export type SsimImport = Database['public']['Tables']['ssim_imports']['Row']
+export type GanttSettings = Database['public']['Tables']['gantt_settings']['Row']
 export type MessageLog = Database['public']['Tables']['message_log']['Row']
 export type TimezoneZone = Database['public']['Tables']['timezone_zones']['Row']
 

@@ -436,7 +436,6 @@ function InlineField({
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(displayValue)
   const [saving, setSaving] = useState(false)
-  const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setEditValue(tatMode ? minutesToHHMM(Number(value)) || '' : value) }, [value, tatMode])
@@ -465,8 +464,6 @@ function InlineField({
       alert(result.error)
       setEditValue(displayValue)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
@@ -487,7 +484,7 @@ function InlineField({
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       {editing ? (
         <div className="flex items-center gap-2">
@@ -527,22 +524,18 @@ function InlineSelect({
 }: {
   label: string; field: string; value: string; acId: string; options: readonly string[]; onSaved: () => void
 }) {
-  const [flashClass, setFlashClass] = useState('')
-
   const handleChange = async (newValue: string) => {
     if (newValue === value) return
     const result = await updateAircraftTypeField(acId, field, newValue)
     if (result?.error) {
       alert(result.error)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       <Select value={value || ''} onValueChange={handleChange}>
         <SelectTrigger className="h-8 text-sm">
@@ -563,21 +556,17 @@ function InlineToggle({
 }: {
   label: string; field: string; value: boolean; acId: string; onSaved: () => void
 }) {
-  const [flashClass, setFlashClass] = useState('')
-
   const handleChange = async (checked: boolean) => {
     const result = await updateAircraftTypeField(acId, field, checked)
     if (result?.error) {
       alert(result.error)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5 flex items-center justify-between', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5 flex items-center justify-between')}>
       <div className="text-xs text-muted-foreground">{label}</div>
       <Switch checked={value} onCheckedChange={handleChange} />
     </div>
@@ -585,22 +574,18 @@ function InlineToggle({
 }
 
 function InlineCategorySelect({ value, acId, onSaved }: { value: string; acId: string; onSaved: () => void }) {
-  const [flashClass, setFlashClass] = useState('')
-
   const handleChange = async (newValue: string) => {
     if (newValue === value) return
     const result = await updateAircraftTypeField(acId, 'category', newValue)
     if (result?.error) {
       alert(result.error)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">Category</div>
       <Select value={value || ''} onValueChange={handleChange}>
         <SelectTrigger className="h-8 text-sm">
@@ -621,7 +606,6 @@ function ManufacturerField({ value, acId, onSaved }: { value: string; acId: stri
   const isCustom = value && !isKnown && value !== 'Custom'
   const [showCustomInput, setShowCustomInput] = useState(!!isCustom)
   const [customValue, setCustomValue] = useState(isCustom ? value : '')
-  const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -635,11 +619,6 @@ function ManufacturerField({ value, acId, onSaved }: { value: string; acId: stri
     if (showCustomInput && inputRef.current) inputRef.current.focus()
   }, [showCustomInput])
 
-  const flash = () => {
-    setFlashClass('animate-[flash-green_0.8s_ease-out]')
-    setTimeout(() => setFlashClass(''), 800)
-  }
-
   const handleSelectChange = async (newValue: string) => {
     if (newValue === 'Custom') {
       setShowCustomInput(true)
@@ -650,7 +629,7 @@ function ManufacturerField({ value, acId, onSaved }: { value: string; acId: stri
     if (newValue === value) return
     const result = await updateAircraftTypeField(acId, 'manufacturer', newValue || null)
     if (result?.error) alert(result.error)
-    else { flash(); onSaved() }
+    else { onSaved() }
   }
 
   const saveCustom = async () => {
@@ -659,14 +638,14 @@ function ManufacturerField({ value, acId, onSaved }: { value: string; acId: stri
     if (trimmed === value) return
     const result = await updateAircraftTypeField(acId, 'manufacturer', trimmed)
     if (result?.error) alert(result.error)
-    else { flash(); onSaved() }
+    else { onSaved() }
   }
 
   const selectValue = showCustomInput || isCustom ? 'Custom' : (value || '')
   const logoUrl = MANUFACTURER_LOGOS[value]
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">Manufacturer</div>
       <div className="flex items-center gap-2">
         <div className="w-10 h-5 flex items-center justify-center shrink-0">
@@ -922,7 +901,6 @@ function CargoTab({ ac, onSaved }: { ac: AircraftType; onSaved: () => void }) {
   const uldTypes = Array.isArray(ac.uld_types_accepted) ? (ac.uld_types_accepted as string[]).join(', ') : ''
   const [uldEdit, setUldEdit] = useState(uldTypes)
   const [editing, setEditing] = useState(false)
-  const [flashClass, setFlashClass] = useState('')
 
   useEffect(() => {
     const val = Array.isArray(ac.uld_types_accepted) ? (ac.uld_types_accepted as string[]).join(', ') : ''
@@ -934,8 +912,6 @@ function CargoTab({ ac, onSaved }: { ac: AircraftType; onSaved: () => void }) {
     const result = await updateAircraftTypeField(ac.id, 'uld_types_accepted', arr as unknown as Record<string, unknown>)
     if (result?.error) alert(result.error)
     else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
@@ -949,7 +925,7 @@ function CargoTab({ ac, onSaved }: { ac: AircraftType; onSaved: () => void }) {
           <InlineField label="Cargo Positions (ULD)" field="cargo_positions" value={ac.cargo_positions?.toString() || ''} acId={ac.id} onSaved={onSaved} type="number" />
           <InlineField label="Bulk Hold Capacity" field="bulk_hold_capacity_kg" value={ac.bulk_hold_capacity_kg?.toString() || ''} acId={ac.id} onSaved={onSaved} type="number" suffix="kg" />
         </div>
-        <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+        <div className={cn('py-2.5 border-b border-white/5')}>
           <div className="text-xs text-muted-foreground mb-1">ULD Types Accepted</div>
           {editing ? (
             <Input

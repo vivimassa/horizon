@@ -29,49 +29,54 @@ export interface OperatorWithRole {
  * Get the current operator's data with user role
  */
 export async function getCurrentOperator(): Promise<OperatorWithRole | null> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
 
-  if (!user) {
+    if (!user) {
+      return null
+    }
+
+    const cookieStore = await cookies()
+    const selectedId = cookieStore.get(OPERATOR_COOKIE)?.value
+
+    const adminClient = createAdminClient()
+
+    // Get all roles for this user
+    const { data: userRoles } = await adminClient
+      .from('user_roles')
+      .select('id, operator_id, role')
+      .eq('user_id', user.id)
+
+    if (!userRoles || userRoles.length === 0) return null
+
+    // Pick the role matching the cookie, or fall back to first
+    let targetRole = userRoles[0]
+    if (selectedId) {
+      const found = userRoles.find(r => r.operator_id === selectedId)
+      if (found) targetRole = found
+    }
+
+    // Get operator profile for the selected operator
+    const { data: operator, error: opError } = await adminClient
+      .from('operators')
+      .select('*')
+      .eq('id', targetRole.operator_id)
+      .single()
+
+    if (opError || !operator) {
+      console.error('Error fetching operator:', opError)
+      return null
+    }
+
+    return {
+      ...operator,
+      user_role: targetRole.role || null,
+      user_role_id: targetRole.id || null
+    }
+  } catch (error) {
+    console.error('getCurrentOperator failed (possible network timeout):', error)
     return null
-  }
-
-  const cookieStore = await cookies()
-  const selectedId = cookieStore.get(OPERATOR_COOKIE)?.value
-
-  const adminClient = createAdminClient()
-
-  // Get all roles for this user
-  const { data: userRoles } = await adminClient
-    .from('user_roles')
-    .select('id, operator_id, role')
-    .eq('user_id', user.id)
-
-  if (!userRoles || userRoles.length === 0) return null
-
-  // Pick the role matching the cookie, or fall back to first
-  let targetRole = userRoles[0]
-  if (selectedId) {
-    const found = userRoles.find(r => r.operator_id === selectedId)
-    if (found) targetRole = found
-  }
-
-  // Get operator profile for the selected operator
-  const { data: operator, error: opError } = await adminClient
-    .from('operators')
-    .select('*')
-    .eq('id', targetRole.operator_id)
-    .single()
-
-  if (opError || !operator) {
-    console.error('Error fetching operator:', opError)
-    return null
-  }
-
-  return {
-    ...operator,
-    user_role: targetRole.role || null,
-    user_role_id: targetRole.id || null
   }
 }
 

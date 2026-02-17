@@ -1,21 +1,15 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-
 export default function WorkforceControlPage() {
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Workforce Control</CardTitle>
-          <CardDescription>
-            Manage team assignments and scheduling
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Workforce control features will be implemented here.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="px-1">
+        <h1 className="text-xl font-semibold tracking-tight">Workforce Control</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          Manage team assignments and scheduling
+        </p>
+      </div>
+      <p className="text-sm text-muted-foreground px-1">
+        Workforce control features will be implemented here.
+      </p>
     </div>
   )
 }

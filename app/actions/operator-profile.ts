@@ -23,24 +23,29 @@ export type OperatorProfile = {
 }
 
 export async function getOperatorProfile(): Promise<OperatorProfile | null> {
-  const cookieStore = await cookies()
-  const selectedId = cookieStore.get(OPERATOR_COOKIE)?.value
-  const supabase = createAdminClient()
+  try {
+    const cookieStore = await cookies()
+    const selectedId = cookieStore.get(OPERATOR_COOKIE)?.value
+    const supabase = createAdminClient()
 
-  let query = supabase.from('operators').select('*')
+    let query = supabase.from('operators').select('*')
 
-  if (selectedId) {
-    query = query.eq('id', selectedId)
-  }
+    if (selectedId) {
+      query = query.eq('id', selectedId)
+    }
 
-  const { data, error } = await query.limit(1).maybeSingle()
+    const { data, error } = await query.limit(1).maybeSingle()
 
-  if (error) {
-    console.error('Error fetching operator profile:', error)
+    if (error) {
+      console.error('Error fetching operator profile:', error)
+      return null
+    }
+
+    return data
+  } catch (error) {
+    console.error('getOperatorProfile failed (possible network timeout):', error)
     return null
   }
-
-  return data
 }
 
 export async function updateOperatorProfile(id: string, formData: FormData) {

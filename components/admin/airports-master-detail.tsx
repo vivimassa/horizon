@@ -480,7 +480,6 @@ function InlineField({
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
   const [saving, setSaving] = useState(false)
-  const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setEditValue(value) }, [value])
@@ -499,8 +498,6 @@ function InlineField({
     setSaving(false)
     if (result?.error) { alert(result.error); setEditValue(value) }
     else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
@@ -512,7 +509,7 @@ function InlineField({
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       {editing ? (
         <Input ref={inputRef} value={editValue} onChange={(e) => setEditValue(e.target.value)}
@@ -535,21 +532,17 @@ function InlineSelectField({
   label: string; field: string; value: string; airportId: string
   options: { value: string; label: string }[]; onSaved: () => void
 }) {
-  const [flashClass, setFlashClass] = useState('')
-
   const handleChange = async (newValue: string) => {
     if (newValue === value) return
     const result = await updateAirportField(airportId, field, newValue)
     if (result?.error) alert(result.error)
     else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       <Select value={value} onValueChange={handleChange}>
         <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
@@ -568,25 +561,31 @@ function InlineToggle({
 }: {
   label: string; field: string; value: boolean; airportId: string; onSaved: () => void; description?: string
 }) {
-  const [flashClass, setFlashClass] = useState('')
+  const [optimistic, setOptimistic] = useState(value)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { setOptimistic(value) }, [value])
 
   const handleChange = async (checked: boolean) => {
+    setOptimistic(checked)
+    setSaving(true)
     const result = await updateAirportField(airportId, field, checked)
-    if (result?.error) alert(result.error)
-    else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
+    setSaving(false)
+    if (result?.error) {
+      setOptimistic(value)
+      alert(result.error)
+    } else {
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5 flex items-center justify-between', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5 flex items-center justify-between')}>
       <div>
         <div className="text-sm font-medium">{label}</div>
         {description && <div className="text-[10px] text-muted-foreground">{description}</div>}
       </div>
-      <Switch checked={value} onCheckedChange={handleChange} />
+      <Switch checked={optimistic} onCheckedChange={handleChange} disabled={saving} />
     </div>
   )
 }

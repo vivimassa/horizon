@@ -24,18 +24,20 @@ export const MODULE_REGISTRY: ModuleEntry[] = [
   { code: '1', name: 'Network', description: 'Route management, airports, and fleet infrastructure', icon: 'Network', route: '/network', parent_module: null, parent_code: null, required_module: 'network', level: 0 },
 
   // 1.1 Control
-  { code: '1.1', name: 'Control', description: 'Network control panel', icon: 'Settings', route: '/network/control', parent_module: 'Network', parent_code: '1', required_module: 'network', level: 1 },
-  { code: '1.1.1', name: 'Schedule Builder', description: 'Build and manage flight schedules', icon: 'CalendarPlus', route: '/network/control/schedule-builder', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.2', name: 'Schedule Grid', description: 'Visual weekly schedule overview', icon: 'Grid3X3', route: '/network/control/schedule-grid', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.3', name: 'Schedule Messages', description: 'SSIM and ASM/SSM schedule messaging', icon: 'MessageSquare', route: '/network/control/schedule-messages', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.4', name: 'Flight Publish', description: 'Publish schedule templates into operational flights', icon: 'Send', route: '/network/control/flight-publish', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.5', name: 'Codeshare Manager', description: 'Manage codeshare agreements', icon: 'Link', route: '/network/control/codeshare-manager', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.6', name: 'Seasonal Planner', description: 'Seasonal schedule planning', icon: 'CalendarRange', route: '/network/control/seasonal-planner', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.7', name: 'Capacity Manager', description: 'Manage network capacity', icon: 'BarChart3', route: '/network/control/capacity-manager', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.8', name: 'SSIM', description: 'SSIM file processing', icon: 'FileUp', route: '/network/control/ssim', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
-  { code: '1.1.8.1', name: 'SSIM Import', description: 'Import flight schedules from SSIM files', icon: 'Upload', route: '/network/control/ssim/import', parent_module: 'SSIM', parent_code: '1.1.8', required_module: 'network', level: 3 },
-  { code: '1.1.8.2', name: 'SSIM Export', description: 'Export flight schedules to SSIM format', icon: 'Download', route: '/network/control/ssim/export', parent_module: 'SSIM', parent_code: '1.1.8', required_module: 'network', level: 3 },
-  { code: '1.1.8.3', name: 'Schedule Comparison', description: 'Compare two SSIM files or schedule versions', icon: 'GitCompare', route: '/network/control/ssim/comparison', parent_module: 'SSIM', parent_code: '1.1.8', required_module: 'network', level: 3 },
+  { code: '1.1', name: 'Control', description: 'Schedule planning, administration, and distribution', icon: 'Settings', route: '/network/control', parent_module: 'Network', parent_code: '1', required_module: 'network', level: 1 },
+  // Schedule Planning
+  { code: '1.1.1', name: 'Schedule Builder', description: 'Create and manage aircraft routes with flight legs, frequencies, and seasonal periods', icon: 'PenLine', route: '/network/control/schedule-builder', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.2', name: 'Schedule Grid', description: 'Tabular view of all scheduled flights with inline editing and bulk operations', icon: 'LayoutGrid', route: '/network/control/schedule-grid', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.3', name: 'Gantt Chart', description: 'Aircraft rotation timeline showing fleet utilization and tail assignment', icon: 'GanttChart', route: '/network/control/schedule-gantt', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.4', name: 'Schedule Comparison', description: 'Compare planning scenarios side by side', icon: 'GitCompareArrows', route: '/network/control/schedule-comparison', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  // Schedule Administration
+  { code: '1.1.5', name: 'Schedule Publish', description: 'Review, approve, and publish planning scenarios to the active schedule', icon: 'SendHorizonal', route: '/network/control/schedule-publish', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.6', name: 'Codeshare Manager', description: 'Manage codeshare agreements and partner flight designators', icon: 'Link2', route: '/network/control/codeshare-manager', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.7', name: 'Slot Manager', description: 'Track airport slot allocations and IATA 80/20 utilization', icon: 'CalendarClock', route: '/network/control/slot-manager', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.8', name: 'Charter Manager', description: 'Manage ad-hoc and charter flight operations', icon: 'PlaneTakeoff', route: '/network/control/charter-manager', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  // Schedule Distribution
+  { code: '1.1.9', name: 'Schedule Messaging', description: 'Generate and process ASM and SSM messages for schedule distribution', icon: 'MessageSquareShare', route: '/network/control/schedule-messaging', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
+  { code: '1.1.10', name: 'SSIM Exchange', description: 'Import and export SSIM format files for airports and distribution systems', icon: 'FileInput', route: '/network/control/ssim-exchange', parent_module: 'Control', parent_code: '1.1', required_module: 'network', level: 2 },
 
   // 1.2 Tools
   { code: '1.2', name: 'Tools', description: 'Network tools and utilities', icon: 'Wrench', route: '/network/tools', parent_module: 'Network', parent_code: '1', required_module: 'network', level: 1 },

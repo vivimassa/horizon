@@ -61,7 +61,7 @@ function makeSingleton(type: ToastType, defaultMs: number | null) {
 
 export const toast = {
   success: makeSingleton('success', 3000),
-  error: makeSingleton('error', null),
+  error: makeSingleton('error', 5000),
   warning: makeSingleton('warning', 5000),
   info: makeSingleton('info', 4000),
 }

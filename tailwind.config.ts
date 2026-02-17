@@ -99,11 +99,21 @@ const config: Config = {
   				from: { opacity: '0', transform: 'scale(0.95)' },
   				to: { opacity: '1', transform: 'scale(1)' },
   			},
+  			'zoom-in': {
+  				from: { opacity: '0', transform: 'scale(0.92)' },
+  				to: { opacity: '1', transform: 'scale(1)' },
+  			},
+  			'zoom-out': {
+  				from: { opacity: '0', transform: 'scale(1.06)' },
+  				to: { opacity: '1', transform: 'scale(1)' },
+  			},
   		},
   		animation: {
   			'fade-in': 'fade-in 0.3s ease-out',
   			'fade-up': 'fade-up 0.4s ease-out',
   			'scale-up': 'scale-up 0.3s ease-out',
+  			'zoom-in': 'zoom-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards',
+  			'zoom-out': 'zoom-out 0.3s cubic-bezier(0.22, 1, 0.36, 1) forwards',
   		},
   	}
   },

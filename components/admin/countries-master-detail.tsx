@@ -414,7 +414,6 @@ function InlineField({
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
   const [saving, setSaving] = useState(false)
-  const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setEditValue(value) }, [value])
@@ -431,8 +430,6 @@ function InlineField({
       alert(result.error)
       setEditValue(value)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
@@ -444,7 +441,7 @@ function InlineField({
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       {editing ? (
         <Input
@@ -477,22 +474,18 @@ function InlineSelectField({
 }: {
   label: string; field: string; value: string; countryId: string; options: readonly string[]; onSaved: () => void
 }) {
-  const [flashClass, setFlashClass] = useState('')
-
   const handleChange = async (newValue: string) => {
     if (newValue === value) return
     const result = await updateCountryField(countryId, field, newValue)
     if (result?.error) {
       alert(result.error)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       <Select value={value} onValueChange={handleChange}>
         <SelectTrigger className="h-8 text-sm">

@@ -6,7 +6,9 @@ import {
   AircraftRoute, AircraftRouteLeg,
   getAircraftRoutes, getUnassignedFlightCount,
   checkDuplicateFlight, saveRoute, deleteRoute as deleteRouteAction,
-  publishRoute as publishRouteAction, getRouteTemplates,
+  publishRoute as publishRouteAction, markRouteReady as markRouteReadyAction,
+  publishReadyRoutes as publishReadyRoutesAction, publishAllRoutes as publishAllRoutesAction,
+  getRouteTemplates,
   type RouteTemplate, type SaveRouteInput,
 } from '@/app/actions/aircraft-routes'
 import { type ScheduleBlockLookup } from '@/app/actions/city-pairs'
@@ -14,7 +16,7 @@ import { getScenarios, createScenario, deleteScenario, getNextScenarioNumber } f
 import { cn, minutesToHHMM } from '@/lib/utils'
 import {
   Plus, Search, RefreshCw, Plane, ChevronDown, ChevronRight,
-  Trash2, Save, RotateCcw, AlertTriangle,
+  Trash2, Save, RotateCcw, AlertTriangle, Lock, Check, ChevronUp,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StatusGreen, StatusYellow, StatusRed, StatusGray } from '@/components/ui/validation-icons'
@@ -120,19 +122,20 @@ function toggleDow(value: string, pos: number): string {
 }
 
 
-function DowCirclesInteractive({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function DowCirclesInteractive({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
   return (
     <div className="flex items-center gap-[3px]">
       {DOW_LABELS.map((label, i) => (
         <button
           key={i}
           type="button"
-          onClick={() => onChange(toggleDow(value, i))}
+          onClick={() => { if (!disabled) onChange(toggleDow(value, i)) }}
           className={cn(
             'w-[22px] h-[22px] rounded-full text-[10px] font-semibold leading-none flex items-center justify-center transition-colors select-none',
             isDayActive(value, i)
               ? 'bg-[#991b1b] text-white hover:bg-[#7f1d1d]'
-              : 'bg-transparent text-[#d1d5db] dark:text-[#4b5563] border-[1.5px] border-[#e5e7eb] dark:border-[#374151] hover:border-[#d1d5db] hover:text-[#9ca3af]'
+              : 'bg-transparent text-[#d1d5db] dark:text-[#4b5563] border-[1.5px] border-[#e5e7eb] dark:border-[#374151] hover:border-[#d1d5db] hover:text-[#9ca3af]',
+            disabled && 'opacity-50 cursor-not-allowed'
           )}
         >{label}</button>
       ))}
@@ -154,12 +157,76 @@ function timeToMinutes(time: string): number {
   return 0
 }
 
+/** Compute UTC offset in hours from an IANA timezone string (e.g., "Asia/Ho_Chi_Minh" → 7) */
+function getUtcOffsetFromTimezone(tz: string): number | null {
+  try {
+    const now = new Date()
+    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' })
+    const parts = fmt.formatToParts(now)
+    const tzPart = parts.find(p => p.type === 'timeZoneName')
+    if (!tzPart) return null
+    // tzPart.value is like "GMT+7", "GMT-5", "GMT+5:30", "GMT"
+    const val = tzPart.value.replace('GMT', '')
+    if (!val) return 0
+    const match = val.match(/^([+-])(\d+)(?::(\d+))?$/)
+    if (!match) return null
+    const sign = match[1] === '+' ? 1 : -1
+    const hours = parseInt(match[2])
+    const minutes = match[3] ? parseInt(match[3]) : 0
+    return sign * (hours + minutes / 60)
+  } catch {
+    return null
+  }
+}
+
 function minutesToTimeStr(m: number): string {
   if (m < 0) m += 1440
   m = m % 1440
   const h = Math.floor(m / 60)
   const min = m % 60
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
+}
+
+/** Convert a stored UTC time to a display mode. Returns HH:MM string. */
+function convertTimeDisplay(hhmm: string, stationIata: string, mode: TimeDisplayMode, airportUtcMap: Map<string, number>, homeBaseOffset: number): string {
+  if (!hhmm || hhmm.length < 3) return hhmm
+  // Ensure HH:MM format for passthrough
+  const formatted = hhmm.includes(':') ? hhmm : hhmm.slice(0, 2) + ':' + hhmm.slice(2, 4)
+  if (mode === 'utc') return formatted
+  const mins = timeToMinutes(hhmm)
+  if (mode === 'local') {
+    const stationOffset = airportUtcMap.get(stationIata)
+    if (stationOffset == null) return formatted
+    let localMins = mins + stationOffset * 60
+    if (localMins < 0) localMins += 1440
+    if (localMins >= 1440) localMins -= 1440
+    return minutesToTimeStr(localMins)
+  }
+  // mode === 'base' → UTC + home base offset
+  let baseMins = mins + homeBaseOffset * 60
+  if (baseMins < 0) baseMins += 1440
+  if (baseMins >= 1440) baseMins -= 1440
+  return minutesToTimeStr(baseMins)
+}
+
+/** Reverse-convert a displayed time (in the current mode) back to UTC for storage. */
+function reverseConvertTime(hhmm: string, stationIata: string, mode: TimeDisplayMode, airportUtcMap: Map<string, number>, homeBaseOffset: number): string {
+  if (!hhmm || hhmm.length < 3) return hhmm
+  if (mode === 'utc') return hhmm.includes(':') ? hhmm : hhmm.slice(0, 2) + ':' + hhmm.slice(2, 4)
+  const mins = timeToMinutes(hhmm)
+  if (mode === 'local') {
+    const stationOffset = airportUtcMap.get(stationIata)
+    if (stationOffset == null) return hhmm.includes(':') ? hhmm : hhmm.slice(0, 2) + ':' + hhmm.slice(2, 4)
+    let utcMins = mins - stationOffset * 60
+    if (utcMins < 0) utcMins += 1440
+    if (utcMins >= 1440) utcMins -= 1440
+    return minutesToTimeStr(utcMins)
+  }
+  // mode === 'base' → subtract home base offset to get UTC
+  let utcMins = mins - homeBaseOffset * 60
+  if (utcMins < 0) utcMins += 1440
+  if (utcMins >= 1440) utcMins -= 1440
+  return minutesToTimeStr(utcMins)
 }
 
 function normalizeTime(input: string): string {
@@ -189,6 +256,8 @@ function daysBetween(a: string, b: string): number {
   const d2 = new Date(b).getTime()
   return Math.ceil(Math.abs(d2 - d1) / (1000 * 60 * 60 * 24))
 }
+
+type TimeDisplayMode = 'local' | 'utc' | 'base'
 
 // ─── Day Offset ───────────────────────────────────────────────
 
@@ -451,6 +520,7 @@ export function AircraftRoutesBuilder({
   const [scenarioLoading, setScenariosLoading] = useState(false)
   const [nextScenarioNum, setNextScenarioNum] = useState('')
   const [newScenario, setNewScenario] = useState({ name: '', from: '', to: '', season: '', description: '', isPrivate: false })
+  const [pendingDeleteScenarioId, setPendingDeleteScenarioId] = useState<string | null>(null)
   const [unassignedCount, setUnassignedCount] = useState(initialUnassignedCount)
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -498,6 +568,9 @@ export function AircraftRoutesBuilder({
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showDiscardDialog, setShowDiscardDialog] = useState(false)
   const [showPublishDialog, setShowPublishDialog] = useState(false)
+  const [showBulkPublishDialog, setShowBulkPublishDialog] = useState(false)
+  const [showPublishAllDialog, setShowPublishAllDialog] = useState(false)
+  const [showPublishDropdown, setShowPublishDropdown] = useState(false)
 
   // ── Save / action state ──
   const [saving, setSaving] = useState(false)
@@ -508,6 +581,9 @@ export function AircraftRoutesBuilder({
   const snapshotRef = useRef<{ form: RouteFormState; legs: LegWithOffsets[] } | null>(null)
   const isNewRouteRef = useRef(false)
   isNewRouteRef.current = isNewRoute
+  const autoInitAfterCreateRef = useRef(false)
+  const formStatusRef = useRef(form?.status || 'draft')
+  formStatusRef.current = form?.status || 'draft'
   const pendingActionRef = useRef<(() => void) | null>(null)
   const hasManualRouteNameRef = useRef(false)
 
@@ -551,6 +627,37 @@ export function AircraftRoutesBuilder({
     return m
   }, [airports])
 
+  const airportUtcMap = useMemo(() => {
+    const m = new Map<string, number>()
+    airports.forEach(a => {
+      if (!a.iata_code) return
+      if (a.utc_offset_hours != null) { m.set(a.iata_code, a.utc_offset_hours); return }
+      // Fallback: derive from IANA timezone string
+      if (a.timezone) {
+        const offset = getUtcOffsetFromTimezone(a.timezone)
+        if (offset != null) m.set(a.iata_code, offset)
+      }
+    })
+    return m
+  }, [airports])
+
+  // Home base UTC offset (first airport marked as home base, fallback to operator IATA hub)
+  const homeBaseUtcOffset = useMemo(() => {
+    const home = airports.find(a => a.is_home_base)
+    if (home) {
+      if (home.utc_offset_hours != null) return home.utc_offset_hours
+      if (home.timezone) { const o = getUtcOffsetFromTimezone(home.timezone); if (o != null) return o }
+    }
+    const hub = airports.find(a => a.iata_code === 'SGN')
+    if (hub) {
+      if (hub.utc_offset_hours != null) return hub.utc_offset_hours
+      if (hub.timezone) { const o = getUtcOffsetFromTimezone(hub.timezone); if (o != null) return o }
+    }
+    return 7 // default UTC+7
+  }, [airports])
+
+  const [timeDisplayMode, setTimeDisplayMode] = useState<TimeDisplayMode>('utc')
+
   const blockTimeMap = useMemo(() => {
     const m = new Map<string, number>()
     if (blockLookup) {
@@ -574,6 +681,17 @@ export function AircraftRoutesBuilder({
     countryCount.forEach((count, country) => { if (count > bestCount) { best = country; bestCount = count } })
     return best || 'VN'
   }, [routes, airportCountryMap])
+
+  // ── Publish workflow computed values ──
+  const readyRoutes = useMemo(() => routes.filter(r => r.status === 'ready'), [routes])
+  const readyCount = readyRoutes.length
+  const unpublishedRoutes = useMemo(() => routes.filter(r => r.status !== 'published'), [routes])
+  const unpublishedCount = unpublishedRoutes.length
+  const totalUnpublishedFlights = useMemo(() => unpublishedRoutes.reduce((sum, r) => sum + r.legs.length, 0), [unpublishedRoutes])
+  const draftSkipCount = useMemo(() => unpublishedRoutes.filter(r => r.status === 'draft').length, [unpublishedRoutes])
+  const allPublished = useMemo(() => routes.length > 0 && routes.every(r => r.status === 'published'), [routes])
+  const totalReadyFlights = useMemo(() => readyRoutes.reduce((sum, r) => sum + r.legs.length, 0), [readyRoutes])
+  const isPublished = form?.status === 'published'
 
   // ── Recalc helper ──
   const recalcLegs = useCallback((newLegs: LegWithOffsets[]): LegWithOffsets[] => {
@@ -750,8 +868,11 @@ export function AircraftRoutesBuilder({
 
     const dep = draft.depStation.toUpperCase()
     const arr = draft.arrStation.toUpperCase()
-    const stdNorm = normalizeTime(draft.stdLocal)
-    const staNorm = normalizeTime(draft.staLocal)
+    const stdRawV = normalizeTime(draft.stdLocal)
+    const staRawV = normalizeTime(draft.staLocal)
+    // Reverse-convert from display mode to UTC for validation
+    const stdNorm = reverseConvertTime(stdRawV, dep, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
+    const staNorm = reverseConvertTime(staRawV, arr, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
     const hasFlt = draft.flightNumber.length > 0
     const hasDep = dep.length === 3
     const hasArr = arr.length === 3
@@ -842,7 +963,7 @@ export function AircraftRoutesBuilder({
     else if (statuses.includes('warn')) v.overall = 'yellow'
 
     return v
-  }, [isAdding, draft, legs, form?.aircraftTypeId, acTypeMap, airportCountryMap, operatorCountry])
+  }, [isAdding, draft, legs, form?.aircraftTypeId, acTypeMap, airportCountryMap, operatorCountry, timeDisplayMode, airportUtcMap, homeBaseUtcOffset])
 
   const hasRedErrors = useMemo(() => legValidations.some(v => v.overall === 'red'), [legValidations])
 
@@ -924,16 +1045,20 @@ export function AircraftRoutesBuilder({
     setShowCreateScenario(false)
     setNewScenario({ name: '', from: '', to: '', season: '', description: '', isPrivate: false })
     setScenariosLoading(false)
+    autoInitAfterCreateRef.current = true
   }, [newScenario, selectScenario])
 
-  const handleDeleteScenario = useCallback(async (id: string) => {
+  const confirmDeleteScenario = useCallback(async () => {
+    if (!pendingDeleteScenarioId) return
+    const id = pendingDeleteScenarioId
+    setPendingDeleteScenarioId(null)
     const res = await deleteScenario(id)
     if (res.error) { toast.error(res.error); return }
     toast.success('Scenario deleted')
     const refreshed = await getScenarios()
     setScenarios(refreshed)
     if (selectedScenario?.id === id) selectScenario(null)
-  }, [selectedScenario, selectScenario])
+  }, [pendingDeleteScenarioId, selectedScenario, selectScenario])
 
   const openCreateScenarioDialog = useCallback(async () => {
     try { setNextScenarioNum(await getNextScenarioNumber()) } catch { setNextScenarioNum('XX-0001') }
@@ -1044,13 +1169,22 @@ export function AircraftRoutesBuilder({
     initNewRoute(template)
   }, [selectedScenario, isDirty, initNewRoute])
 
-  // ── Auto-init empty route when scenario is selected ──
+  // ── Always show the builder form (never show empty state) ──
   useEffect(() => {
-    if (!form && !selectedRouteId && selectedScenario) {
+    if (!form && !selectedRouteId) {
       initNewRoute()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, selectedRouteId, selectedSeason])
+  }, [form, selectedRouteId, selectedSeason, selectedScenario])
+
+  // ── Auto-open builder after scenario creation ──
+  useEffect(() => {
+    if (autoInitAfterCreateRef.current && selectedScenario) {
+      autoInitAfterCreateRef.current = false
+      initNewRoute()
+      setTimeout(() => document.getElementById('route-name-input')?.focus(), 150)
+    }
+  }, [selectedScenario, initNewRoute])
 
   // ── Route selection (with dirty guard) ──
   const handleSelectRoute = useCallback((routeId: string) => {
@@ -1254,9 +1388,11 @@ export function AircraftRoutesBuilder({
       setDraft(d => ({ ...d, _checking: false }))
     }
 
-    // Add the leg
-    const std = normalizeTime(draft.stdLocal)
-    const sta = normalizeTime(draft.staLocal)
+    // Add the leg — reverse-convert entered time from display mode to UTC for storage
+    const stdRaw = normalizeTime(draft.stdLocal)
+    const staRaw = normalizeTime(draft.staLocal)
+    const std = reverseConvertTime(stdRaw, dep, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
+    const sta = reverseConvertTime(staRaw, arr, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
     const block = computeBlockMinutes(std, sta)
 
     const newLeg: LegWithOffsets = {
@@ -1368,12 +1504,18 @@ export function AircraftRoutesBuilder({
         case 'arr_station': leg.arr_station = editValue.toUpperCase().slice(0, 3); break
         case 'std_local': {
           const t = normalizeTime(editValue)
-          if (isValidTime(t)) { leg.std_local = t; leg.block_minutes = computeBlockMinutes(t, leg.sta_local) }
+          if (isValidTime(t)) {
+            const utcT = reverseConvertTime(t, leg.dep_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
+            leg.std_local = utcT; leg.block_minutes = computeBlockMinutes(utcT, leg.sta_local)
+          }
           break
         }
         case 'sta_local': {
           const t = normalizeTime(editValue)
-          if (isValidTime(t)) { leg.sta_local = t; leg.block_minutes = computeBlockMinutes(leg.std_local, t) }
+          if (isValidTime(t)) {
+            const utcT = reverseConvertTime(t, leg.arr_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
+            leg.sta_local = utcT; leg.block_minutes = computeBlockMinutes(leg.std_local, utcT)
+          }
           break
         }
         case 'service_type': leg.service_type = editValue.toUpperCase().slice(0, 1) || 'J'; break
@@ -1398,7 +1540,7 @@ export function AircraftRoutesBuilder({
     })
     setEditingCell(null)
     setIsDirty(true)
-  }, [editingCell, editValue, operatorIataCode, recalcLegs, pushHistory])
+  }, [editingCell, editValue, operatorIataCode, recalcLegs, pushHistory, timeDisplayMode, airportUtcMap, homeBaseUtcOffset])
 
   const cancelEdit = useCallback(() => { setEditingCell(null) }, [])
 
@@ -1551,6 +1693,7 @@ export function AircraftRoutesBuilder({
 
   const executeSave = useCallback(async () => {
     if (!form) return
+    if (form.status === 'published') { toast.error('Cannot edit a published route'); return }
     setSaving(true); setShowWarningDialog(false)
 
     try {
@@ -1649,18 +1792,75 @@ export function AircraftRoutesBuilder({
   }, [selectedRouteId, form?.routeName, refresh, refreshTemplates])
 
   const handlePublishRoute = useCallback(async () => {
-    if (!selectedRouteId) return
-    const isPublished = form?.status === 'published'
+    // Now only handles unpublish (published → ready)
+    if (!selectedRouteId || form?.status !== 'published') return
     setSaving(true); setShowPublishDialog(false)
     try {
-      const res = await publishRouteAction(selectedRouteId, !isPublished)
+      const res = await publishRouteAction(selectedRouteId, false)
       if (res.error) { toast.error(friendlyError(res.error)); return }
-      toast.success(`Route ${isPublished ? 'unpublished' : 'published'}`)
-      setForm(prev => prev ? { ...prev, status: isPublished ? 'draft' : 'published' } : null)
+      toast.success('Route reverted to ready')
+      setForm(prev => prev ? { ...prev, status: 'ready' } : null)
       await Promise.all([refresh(), refreshTemplates()])
-    } catch { toast.error('Failed to update route status') }
+    } catch { toast.error('Failed to unpublish route') }
     finally { setSaving(false) }
   }, [selectedRouteId, form?.status, refresh, refreshTemplates])
+
+  const handleMarkReady = useCallback(async () => {
+    if (!selectedRouteId) return
+    setSaving(true)
+    try {
+      const res = await markRouteReadyAction(selectedRouteId, true)
+      if (res.error) { toast.error(friendlyError(res.error)); return }
+      toast.success('Route marked as ready')
+      setForm(prev => prev ? { ...prev, status: 'ready' } : null)
+      await refresh()
+    } catch { toast.error('Failed to mark route ready') }
+    finally { setSaving(false) }
+  }, [selectedRouteId, refresh])
+
+  const handleUnmarkReady = useCallback(async () => {
+    if (!selectedRouteId) return
+    setSaving(true)
+    try {
+      const res = await markRouteReadyAction(selectedRouteId, false)
+      if (res.error) { toast.error(friendlyError(res.error)); return }
+      toast.success('Route reverted to draft')
+      setForm(prev => prev ? { ...prev, status: 'draft' } : null)
+      await refresh()
+    } catch { toast.error('Failed to revert route') }
+    finally { setSaving(false) }
+  }, [selectedRouteId, refresh])
+
+  const handleBulkPublish = useCallback(async () => {
+    if (!selectedScenario) return
+    setSaving(true); setShowBulkPublishDialog(false)
+    try {
+      const res = await publishReadyRoutesAction(selectedScenario.id)
+      if (res.error) { toast.error(friendlyError(res.error)); return }
+      toast.success(`${res.publishedCount} route${res.publishedCount !== 1 ? 's' : ''} published`)
+      // If the currently selected route was ready, update its form status
+      if (form?.status === 'ready') {
+        setForm(prev => prev ? { ...prev, status: 'published' } : null)
+      }
+      await Promise.all([refresh(), refreshTemplates()])
+    } catch { toast.error('Failed to publish routes') }
+    finally { setSaving(false) }
+  }, [selectedScenario, form?.status, refresh, refreshTemplates])
+
+  const handleBulkPublishAll = useCallback(async () => {
+    if (!selectedScenario) return
+    setSaving(true); setShowPublishAllDialog(false)
+    try {
+      const res = await publishAllRoutesAction(selectedScenario.id)
+      if (res.error) { toast.error(friendlyError(res.error)); return }
+      toast.success(`${res.publishedCount} route${res.publishedCount !== 1 ? 's' : ''} published`)
+      if (form?.status === 'draft' || form?.status === 'ready') {
+        setForm(prev => prev ? { ...prev, status: 'published' } : null)
+      }
+      await Promise.all([refresh(), refreshTemplates()])
+    } catch { toast.error('Failed to publish routes') }
+    finally { setSaving(false) }
+  }, [selectedScenario, form?.status, refresh, refreshTemplates])
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -1779,31 +1979,33 @@ export function AircraftRoutesBuilder({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey
-      // Ctrl+S: Save
-      if (mod && e.key === 's') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.save(); return }
-      // Ctrl+Z: Undo
-      if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.undo(); return }
-      // Ctrl+Shift+Z / Ctrl+Y: Redo
-      if (mod && e.key === 'z' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.redo(); return }
-      if (mod && e.key === 'y') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.redo(); return }
+      const pub = formStatusRef.current === 'published'
+      // Ctrl+S: Save (blocked if published)
+      if (mod && e.key === 's') { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.save(); return }
+      // Ctrl+Z: Undo (blocked if published)
+      if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.undo(); return }
+      // Ctrl+Shift+Z / Ctrl+Y: Redo (blocked if published)
+      if (mod && e.key === 'z' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.redo(); return }
+      if (mod && e.key === 'y') { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.redo(); return }
       // Ctrl+N: New Route
       if (mod && e.key === 'n') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.newRoute(); return }
-      // Ctrl+D: Duplicate Leg
-      if (mod && e.key === 'd') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.duplicate(); return }
+      // Ctrl+D: Duplicate Leg (blocked if published)
+      if (mod && e.key === 'd') { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.duplicate(); return }
       // Ctrl+F: Focus search
       if (mod && e.key === 'f') { e.preventDefault(); e.stopPropagation(); document.getElementById('route-search')?.focus(); return }
-      // Ctrl+-: Delete selected row  |  Ctrl+=: Insert row below
+      // Ctrl+-: Delete selected row  |  Ctrl+=: Insert row below (blocked if published)
       if (mod && (e.key === '-' || e.key === '=' || e.key === '+')) {
         e.preventDefault(); e.stopPropagation()
+        if (pub) return
         if (e.key === '-') { shortcutRefs.current.deleteSelectedLeg() }
         else { shortcutRefs.current.addRow() }
         return
       }
-      // Delete: Remove selected leg (only when not typing in an input)
+      // Delete: Remove selected leg (only when not typing in an input, blocked if published)
       if (e.key === 'Delete') {
         const el = document.activeElement
         const isTyping = el?.tagName === 'INPUT' || el?.tagName === 'SELECT' || el?.tagName === 'TEXTAREA'
-        if (!isTyping) { e.preventDefault(); shortcutRefs.current.deleteSelectedLeg(); return }
+        if (!isTyping && !pub) { e.preventDefault(); shortcutRefs.current.deleteSelectedLeg(); return }
       }
       // Shift+Space: Select entire row  |  Ctrl+Space: Select entire column
       if (e.key === ' ') {
@@ -1967,7 +2169,64 @@ export function AircraftRoutesBuilder({
         </div>
 
         {selectedScenario && (
-          <div className="shrink-0 border-t border-black/[0.06] dark:border-white/[0.06] px-4 py-2.5">
+          <div className="shrink-0 border-t border-black/[0.06] dark:border-white/[0.06] px-4 py-2.5 space-y-2">
+            {/* Publish split button */}
+            {allPublished ? (
+              <button disabled
+                className="w-full h-10 flex items-center justify-center gap-2 rounded-lg bg-[#22c55e]/10 text-[#22c55e] text-sm font-medium cursor-default">
+                <Check className="h-4 w-4" /> All routes published
+              </button>
+            ) : routes.length === 0 ? (
+              <button disabled
+                className="w-full h-10 flex items-center justify-center gap-2 rounded-lg bg-[#991b1b]/20 text-[#991b1b]/40 text-sm font-medium cursor-not-allowed">
+                No routes to publish
+              </button>
+            ) : (
+              <div className="relative">
+                <div className="flex w-full">
+                  <button
+                    onClick={() => {
+                      if (readyCount > 0) setShowBulkPublishDialog(true)
+                      else setShowPublishAllDialog(true)
+                    }}
+                    disabled={saving}
+                    className="flex-1 h-10 flex items-center justify-center gap-2 rounded-l-lg bg-[#991b1b] text-white text-[13px] font-medium hover:bg-[#7f1d1d] transition-colors disabled:opacity-50">
+                    {readyCount > 0
+                      ? `Publish ${readyCount} Route${readyCount !== 1 ? 's' : ''}`
+                      : `Publish All ${unpublishedCount} Route${unpublishedCount !== 1 ? 's' : ''}`}
+                  </button>
+                  <button
+                    onClick={() => setShowPublishDropdown(prev => !prev)}
+                    disabled={saving}
+                    className="w-9 h-10 flex items-center justify-center rounded-r-lg bg-[#7f1d1d] text-white hover:bg-[#6b1717] transition-colors disabled:opacity-50"
+                    style={{ borderLeft: '1px solid rgba(255,255,255,0.2)' }}>
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {showPublishDropdown && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowPublishDropdown(false)} />
+                    <div className="absolute bottom-[48px] left-0 right-0 z-50 rounded-[10px] overflow-hidden"
+                      style={{ background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(20px)', boxShadow: '0 -8px 24px rgba(0,0,0,0.1)', border: '1px solid rgba(0,0,0,0.06)' }}>
+                      <button
+                        onClick={() => { setShowPublishDropdown(false); setShowBulkPublishDialog(true) }}
+                        disabled={readyCount === 0}
+                        className={cn('w-full h-9 px-3 text-left text-[13px] transition-colors',
+                          readyCount > 0 ? 'hover:bg-black/[0.04] text-foreground' : 'text-muted-foreground/40 cursor-not-allowed'
+                        )}>
+                        Publish Ready Routes ({readyCount})
+                      </button>
+                      <button
+                        onClick={() => { setShowPublishDropdown(false); setShowPublishAllDialog(true) }}
+                        disabled={unpublishedCount === 0}
+                        className="w-full h-9 px-3 text-left text-[13px] hover:bg-black/[0.04] text-foreground transition-colors border-t border-black/[0.04]">
+                        Publish All Routes ({unpublishedCount})
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">Unassigned Flights</span>
               <span className={cn('font-mono font-semibold tabular-nums', unassignedCount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground/50')}>
@@ -1986,16 +2245,17 @@ export function AircraftRoutesBuilder({
             <div className="shrink-0 glass rounded-2xl px-4 py-2 group/header">
               <div className="flex items-end gap-3">
                 <div>
-                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">Route No.</span>
-                  <input type="text" value={form.routeName} tabIndex={TAB_ROUTE_NO}
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5 text-center">Route No.</span>
+                  <input id="route-name-input" type="text" value={form.routeName} tabIndex={TAB_ROUTE_NO}
                     onChange={e => { hasManualRouteNameRef.current = true; updateForm({ routeName: e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase() }) }}
                     onFocus={e => e.target.select()}
+                    disabled={isPublished}
                     placeholder="SGNHAN01" maxLength={8}
-                    className={cn(inputClass, 'w-[90px] font-mono text-xs font-semibold h-[30px]')} />
+                    className={cn(inputClass, 'w-[90px] font-mono text-xs font-semibold h-[30px]', isPublished && 'opacity-60 cursor-not-allowed')} />
                 </div>
 
                 <div className="relative">
-                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">AC Type</span>
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5 text-center">AC Type</span>
                   <input ref={acTypeInputRef} type="text" value={acTypeSearch} tabIndex={TAB_AC_TYPE}
                     onChange={e => {
                       const v = e.target.value.toUpperCase()
@@ -2034,8 +2294,9 @@ export function AircraftRoutesBuilder({
                         setAcTypeOpen(false)
                       }
                     }}
+                    disabled={isPublished}
                     placeholder="A321" maxLength={8}
-                    className={cn(inputClass, 'w-[80px] text-xs font-mono h-[30px]', formErrors.aircraftType && 'border-red-500 ring-1 ring-red-500/30')} autoComplete="off" />
+                    className={cn(inputClass, 'w-[80px] text-xs font-mono h-[30px]', formErrors.aircraftType && 'border-red-500 ring-1 ring-red-500/30', isPublished && 'opacity-60 cursor-not-allowed')} autoComplete="off" />
                   {acTypeOpen && acTypeSearch && (() => {
                     const filtered = filterAndSortAcTypes(aircraftTypes, acTypeSearch)
                     return (
@@ -2063,7 +2324,7 @@ export function AircraftRoutesBuilder({
                 </div>
 
                 <div>
-                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">From</span>
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5 text-center">From</span>
                   <input type="text" value={fromDisplay} tabIndex={TAB_FROM}
                     onChange={e => {
                       const formatted = formatDateInput(e.target.value)
@@ -2077,14 +2338,15 @@ export function AircraftRoutesBuilder({
                       else if (!fromDisplay) updateForm({ periodStart: '' })
                     }}
                     onFocus={e => e.target.select()}
+                    disabled={isPublished}
                     placeholder="DD/MM/YYYY" maxLength={10}
-                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodStart && 'border-red-500 ring-1 ring-red-500/30')} />
+                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodStart && 'border-red-500 ring-1 ring-red-500/30', isPublished && 'opacity-60 cursor-not-allowed')} />
                 </div>
 
                 <span className="text-xs text-muted-foreground pb-[7px]">&mdash;</span>
 
                 <div>
-                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">To</span>
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5 text-center">To</span>
                   <input type="text" value={toDisplay} tabIndex={TAB_TO}
                     onChange={e => {
                       const formatted = formatDateInput(e.target.value)
@@ -2098,29 +2360,75 @@ export function AircraftRoutesBuilder({
                       else if (!toDisplay) updateForm({ periodEnd: '' })
                     }}
                     onFocus={e => e.target.select()}
+                    disabled={isPublished}
                     placeholder="DD/MM/YYYY" maxLength={10}
-                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodEnd && 'border-red-500 ring-1 ring-red-500/30')} />
+                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodEnd && 'border-red-500 ring-1 ring-red-500/30', isPublished && 'opacity-60 cursor-not-allowed')} />
                 </div>
 
                 <div>
-                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5">Day of Week</span>
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5 text-center">Day of Week</span>
                   <div className={cn('h-[30px] flex items-center rounded-lg px-1', formErrors.daysOfOperation && 'ring-1 ring-red-500/30')}>
-                    <DowCirclesInteractive value={form.daysOfOperation} onChange={v => updateForm({ daysOfOperation: v })} />
+                    <DowCirclesInteractive value={form.daysOfOperation} onChange={v => updateForm({ daysOfOperation: v })} disabled={isPublished} />
+                  </div>
+                </div>
+
+                {/* Time display mode pill */}
+                <div className="ml-2">
+                  <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5 text-center">Times in</span>
+                  <div className="flex items-center h-[30px] rounded-full bg-black/[0.04] dark:bg-white/[0.06] p-[3px]">
+                    {(['utc', 'base', 'local'] as TimeDisplayMode[]).map(mode => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setTimeDisplayMode(mode)}
+                        className={cn(
+                          'h-[24px] px-2.5 min-w-[80px] rounded-full text-[10px] font-semibold tracking-wider transition-all duration-200 select-none whitespace-nowrap',
+                          timeDisplayMode === mode
+                            ? 'bg-white dark:bg-white/20 text-foreground shadow-sm'
+                            : 'text-muted-foreground/60 hover:text-muted-foreground'
+                        )}
+                      >
+                        {mode === 'utc' ? 'UTC' : mode === 'base' ? 'Local Base' : 'Local Station'}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-1.5 ml-auto pb-[5px]">
-                  <div className={cn('w-2 h-2 rounded-full',
-                    form.status === 'published' ? 'bg-emerald-500'
-                    : isNewRoute ? 'bg-blue-500'
-                    : 'bg-gray-400'
-                  )} />
-                  <span className="text-xs font-medium capitalize">{isNewRoute ? 'New' : form.status}</span>
-                  {!isDirty && selectedRouteId && !isNewRoute && (
-                    <button onClick={() => setShowPublishDialog(true)} disabled={saving} tabIndex={-1}
-                      className="ml-1 text-[11px] text-primary/70 hover:text-primary underline underline-offset-2 transition-colors disabled:opacity-50">
-                      {form.status === 'published' ? 'Unpublish' : 'Publish'}
-                    </button>
+                  {form.status === 'published' ? (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-[#991b1b]" />
+                      <span className="text-xs font-medium text-[#991b1b]">Published</span>
+                      <Lock className="h-3 w-3 text-[#991b1b]/60 ml-0.5" />
+                      {!isDirty && selectedRouteId && !isNewRoute && (
+                        <button onClick={() => setShowPublishDialog(true)} disabled={saving} tabIndex={-1}
+                          className="ml-1 text-[11px] text-muted-foreground/60 hover:text-muted-foreground underline underline-offset-2 transition-colors disabled:opacity-50">
+                          Unpublish
+                        </button>
+                      )}
+                    </>
+                  ) : form.status === 'ready' ? (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-[#22c55e]" />
+                      <span className="text-xs font-medium text-[#22c55e]">Ready</span>
+                      {!isDirty && selectedRouteId && !isNewRoute && (
+                        <button onClick={handleUnmarkReady} disabled={saving} tabIndex={-1}
+                          className="ml-1 text-[11px] text-muted-foreground/50 hover:text-muted-foreground underline underline-offset-2 transition-colors disabled:opacity-50">
+                          Undo
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className={cn('w-2 h-2 rounded-full', isNewRoute ? 'bg-blue-500' : 'bg-gray-400')} />
+                      <span className="text-xs font-medium capitalize">{isNewRoute ? 'New' : 'Draft'}</span>
+                      {!isDirty && selectedRouteId && !isNewRoute && (
+                        <button onClick={handleMarkReady} disabled={saving} tabIndex={-1}
+                          className="ml-1 text-[11px] text-[#991b1b]/70 hover:text-[#991b1b] transition-colors disabled:opacity-50">
+                          Mark Ready &#10003;
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -2133,6 +2441,14 @@ export function AircraftRoutesBuilder({
                 )}
               </div>
             </div>
+
+            {/* ── PUBLISHED BANNER ── */}
+            {isPublished && (
+              <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 rounded-xl bg-[#991b1b]/5 text-[#991b1b]">
+                <Lock className="h-3.5 w-3.5" />
+                <span className="text-xs font-medium">Published route &mdash; read-only</span>
+              </div>
+            )}
 
             {/* ── LEGS GRID ── */}
             <div className="flex-1 glass rounded-2xl flex flex-col overflow-hidden min-h-0">
@@ -2160,8 +2476,8 @@ export function AircraftRoutesBuilder({
                           <th className={thBase} style={{ width: '10%', ...hlStyle(1) }}>Flt No</th>
                           <th className={thBase} style={{ width: '7%', ...hlStyle(2) }}>DEP</th>
                           <th className={thBase} style={{ width: '7%', ...hlStyle(3) }}>ARR</th>
-                          <th className={thBase} style={{ width: '10%', ...hlStyle(4) }}>STD</th>
-                          <th className={thBase} style={{ width: '10%', ...hlStyle(5) }}>STA</th>
+                          <th className={thBase} style={{ width: '10%', ...hlStyle(4) }}>STD<span className="text-[8px] ml-0.5 opacity-50">{timeDisplayMode === 'utc' ? 'z' : timeDisplayMode === 'base' ? 'b' : 's'}</span></th>
+                          <th className={thBase} style={{ width: '10%', ...hlStyle(5) }}>STA<span className="text-[8px] ml-0.5 opacity-50">{timeDisplayMode === 'utc' ? 'z' : timeDisplayMode === 'base' ? 'b' : 's'}</span></th>
                           <th className={thBase} style={{ width: '10%', ...hlStyle(6) }}>Block</th>
                           <th className={thBase} style={{ width: '5%', ...hlStyle(7) }}>Svc</th>
                           <th className={thBase} style={{ width: '5%' }}></th>
@@ -2185,34 +2501,38 @@ export function AircraftRoutesBuilder({
                           index={idx}
                           flightLabel={fltLabel}
                           validation={legValidations[idx]}
-                          editingCell={editingCell}
+                          editingCell={isPublished ? null : editingCell}
                           editValue={editValue}
-                          onStartEdit={startEdit}
+                          onStartEdit={isPublished ? () => {} : startEdit}
                           onEditChange={setEditValue}
                           onCommitEdit={commitEdit}
                           onCancelEdit={cancelEdit}
                           operatorIataCode={operatorIataCode}
                           airportIataSet={airportIataSet}
                           cellInputClass={cellInputClass}
-                          onDragStart={(e) => handleDragStart(e, idx)}
+                          onDragStart={isPublished ? ((e: React.DragEvent) => e.preventDefault()) : (e: React.DragEvent) => handleDragStart(e, idx)}
                           onDragEnd={handleDragEnd}
-                          onDragOver={(e) => handleDragOver(e, idx)}
-                          onDrop={() => handleDrop(idx)}
+                          onDragOver={isPublished ? ((e: React.DragEvent) => e.preventDefault()) : (e: React.DragEvent) => handleDragOver(e, idx)}
+                          onDrop={isPublished ? () => {} : () => handleDrop(idx)}
                           dropAbove={showDropAbove}
                           dropBelow={showDropBelow}
-                          isRowSelected={selectedRows.has(idx)}
-                          onRowSelect={() => { setSelectedRows(new Set([idx])); setSelectedCell(null); setHighlightedCol(null) }}
-                          selectedCol={selectedCell?.row === idx ? selectedCell.col : null}
-                          highlightedCol={highlightedCol}
-                          onSelectCell={(r, c) => { selectCell(r, c); setHighlightedCol(null) }}
+                          isRowSelected={isPublished ? false : selectedRows.has(idx)}
+                          onRowSelect={isPublished ? () => {} : () => { setSelectedRows(new Set([idx])); setSelectedCell(null); setHighlightedCol(null) }}
+                          selectedCol={isPublished ? null : (selectedCell?.row === idx ? selectedCell.col : null)}
+                          highlightedCol={isPublished ? null : highlightedCol}
+                          onSelectCell={isPublished ? () => {} : (r: number, c: number) => { selectCell(r, c); setHighlightedCol(null) }}
                           onDeselectCell={deselectCell}
-                          onClearCell={clearCellValue}
+                          onClearCell={isPublished ? () => {} : clearCellValue}
+                          readOnly={isPublished}
+                          timeDisplayMode={timeDisplayMode}
+                          airportUtcMap={airportUtcMap}
+                          homeBaseUtcOffset={homeBaseUtcOffset}
                         />
                       )
                     })}
 
-                    {/* Empty grid rows (8 always visible below last filled) */}
-                    {Array.from({ length: 8 }, (_, i) => {
+                    {/* Empty grid rows (8 always visible below last filled, hidden when published) */}
+                    {!isPublished && Array.from({ length: 8 }, (_, i) => {
                       const rowIdx = legs.length + i
                       const isActive = isAdding && activeEmptyRow === rowIdx
                       const isDisabled = hasRedErrors || (isAdding && activeEmptyRow !== rowIdx)
@@ -2254,7 +2574,8 @@ export function AircraftRoutesBuilder({
 
               </div>
 
-              {/* Action buttons */}
+              {/* Action buttons (hidden when published) */}
+              {!isPublished && (
               <div className="shrink-0 px-5 py-3 border-t border-black/[0.06] dark:border-white/[0.06] flex items-center gap-2">
                 <button
                   onClick={handleSaveRoute}
@@ -2282,6 +2603,7 @@ export function AircraftRoutesBuilder({
                   </span>
                 )}
               </div>
+              )}
             </div>
 
             {/* ── ROUTE TEMPLATES ── */}
@@ -2307,7 +2629,7 @@ export function AircraftRoutesBuilder({
 
       {/* ═══ CREATE SCENARIO DIALOG ═══ */}
       <Dialog open={showCreateScenario} onOpenChange={setShowCreateScenario}>
-        <DialogContent className="sm:max-w-[480px] p-0 border-0 bg-transparent shadow-none">
+        <DialogContent className="sm:max-w-[480px] p-0 border-0 bg-transparent shadow-none" hideClose>
           <div style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(40px) saturate(180%)', border: '1px solid rgba(255,255,255,0.5)', borderRadius: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.15)', padding: 32 }}>
             <DialogHeader className="mb-6"><DialogTitle className="text-lg font-semibold">Create New Scenario</DialogTitle></DialogHeader>
             <div className="space-y-5">
@@ -2331,12 +2653,12 @@ export function AircraftRoutesBuilder({
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-wider text-[#6b7280] mb-1.5">Period</label>
                 <div className="flex items-center gap-2">
-                  <input type="text" placeholder="DD/MM/YYYY" value={newScenario.from}
-                    onChange={e => setNewScenario(p => ({ ...p, from: e.target.value, season: '' }))}
+                  <input type="text" placeholder="DD/MM/YYYY" maxLength={10} value={newScenario.from}
+                    onChange={e => setNewScenario(p => ({ ...p, from: formatDateInput(e.target.value), season: '' }))}
                     className="flex-1 h-9 px-3 rounded-lg border border-black/[0.08] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
                   <span className="text-[#9ca3af] text-sm">—</span>
-                  <input type="text" placeholder="DD/MM/YYYY" value={newScenario.to}
-                    onChange={e => setNewScenario(p => ({ ...p, to: e.target.value, season: '' }))}
+                  <input type="text" placeholder="DD/MM/YYYY" maxLength={10} value={newScenario.to}
+                    onChange={e => setNewScenario(p => ({ ...p, to: formatDateInput(e.target.value), season: '' }))}
                     className="flex-1 h-9 px-3 rounded-lg border border-black/[0.08] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
                   <input type="text" placeholder="W25" maxLength={3} value={newScenario.season}
                     onChange={e => {
@@ -2364,8 +2686,8 @@ export function AircraftRoutesBuilder({
               <div className="flex items-center gap-3">
                 <span className="text-sm text-[#374151]">Private</span>
                 <button type="button" onClick={() => setNewScenario(p => ({ ...p, isPrivate: !p.isPrivate }))}
-                  className={cn('relative w-10 h-[22px] rounded-full transition-colors duration-200', newScenario.isPrivate ? 'bg-[#34d399]' : 'bg-black/[0.08]')}>
-                  <span className={cn('absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow-sm transition-transform duration-200', newScenario.isPrivate ? 'translate-x-[20px]' : 'translate-x-[2px]')} />
+                  className={cn('relative inline-flex w-[42px] h-[26px] rounded-full transition-colors duration-300 ease-in-out flex-shrink-0', newScenario.isPrivate ? 'bg-[#34d399]' : 'bg-black/[0.12] dark:bg-white/[0.16]')}>
+                  <span className={cn('absolute top-[3px] left-[3px] w-5 h-5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.15)] transition-transform duration-300 ease-in-out', newScenario.isPrivate ? 'translate-x-[16px]' : 'translate-x-0')} />
                 </button>
                 <span className="text-[12px] text-[#9ca3af]">Only you can see this scenario</span>
               </div>
@@ -2387,7 +2709,7 @@ export function AircraftRoutesBuilder({
 
       {/* ═══ SCENARIO LIST DIALOG ═══ */}
       <Dialog open={showScenarioList} onOpenChange={setShowScenarioList}>
-        <DialogContent className="sm:max-w-[600px] p-0 border-0 bg-transparent shadow-none">
+        <DialogContent className="sm:max-w-[600px] p-0 border-0 bg-transparent shadow-none" hideClose>
           <div style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(40px) saturate(180%)', border: '1px solid rgba(255,255,255,0.5)', borderRadius: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.15)', padding: 24 }}>
             <div className="flex items-center justify-between mb-4">
               <DialogTitle className="text-lg font-semibold">Scenarios</DialogTitle>
@@ -2428,7 +2750,7 @@ export function AircraftRoutesBuilder({
                           {s.is_private && <span title="Private" className="text-[10px]">🔒</span>}
                           <span className={cn('w-2 h-2 rounded-full', s.status === 'published' ? 'bg-emerald-400' : 'bg-gray-300')} />
                           {s.route_count === 0 && (
-                            <button onClick={e => { e.stopPropagation(); handleDeleteScenario(s.id) }}
+                            <button onClick={e => { e.stopPropagation(); setPendingDeleteScenarioId(s.id) }}
                               className="opacity-0 group-hover:opacity-100 h-5 w-5 flex items-center justify-center rounded hover:bg-red-50 transition-all" title="Delete">
                               <Trash2 className="h-3 w-3 text-red-400 hover:text-red-600" />
                             </button>
@@ -2452,6 +2774,20 @@ export function AircraftRoutesBuilder({
       </Dialog>
 
       {/* ═══ DIALOGS ═══ */}
+
+      {/* Delete scenario confirmation */}
+      <Dialog open={!!pendingDeleteScenarioId} onOpenChange={open => { if (!open) setPendingDeleteScenarioId(null) }}>
+        <DialogContent className="glass-heavy max-w-sm" hideClose>
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-red-500" />Delete Scenario?</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This scenario will be permanently deleted. This action cannot be undone.
+          </p>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <button onClick={() => setPendingDeleteScenarioId(null)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
+            <button onClick={confirmDeleteScenario} className="h-8 px-4 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors">Delete</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showUnsavedDialog} onOpenChange={setShowUnsavedDialog}>
         <DialogContent className="glass-heavy max-w-sm">
@@ -2511,21 +2847,87 @@ export function AircraftRoutesBuilder({
         </DialogContent>
       </Dialog>
 
+      {/* Unpublish dialog (published → ready) */}
       <Dialog open={showPublishDialog} onOpenChange={setShowPublishDialog}>
         <DialogContent className="glass-heavy max-w-sm">
           <DialogHeader><DialogTitle className="flex items-center gap-2">
-            {form?.status === 'published' ? <RotateCcw className="h-5 w-5 text-muted-foreground" /> : <Plane className="h-5 w-5 text-emerald-500" />}
-            {form?.status === 'published' ? 'Unpublish Route' : 'Publish Route'}
+            <RotateCcw className="h-5 w-5 text-muted-foreground" /> Unpublish Route
           </DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            {form?.status === 'published' ? 'Revert this route and its flights to draft status?' : 'Publish this route? Published routes are active in the schedule.'}
-          </p>
+          <p className="text-sm text-muted-foreground">Revert <span className="font-mono font-semibold">{form?.routeName || 'this route'}</span> to ready status?</p>
           <DialogFooter className="gap-2 sm:gap-2">
             <button onClick={() => setShowPublishDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
             <button onClick={handlePublishRoute} disabled={saving}
-              className={cn('h-8 px-4 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50',
-                form?.status === 'published' ? 'bg-gray-600 hover:bg-gray-700' : 'bg-emerald-600 hover:bg-emerald-700')}>
-              {saving ? 'Updating...' : form?.status === 'published' ? 'Unpublish' : 'Publish'}
+              className="h-8 px-4 rounded-lg bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium transition-colors disabled:opacity-50">
+              {saving ? 'Updating...' : 'Unpublish'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk publish dialog */}
+      <Dialog open={showBulkPublishDialog} onOpenChange={setShowBulkPublishDialog}>
+        <DialogContent className="glass-heavy max-w-md">
+          <DialogHeader><DialogTitle className="flex items-center gap-2">
+            <Plane className="h-5 w-5 text-[#991b1b]" /> Publish {readyCount} Route{readyCount !== 1 ? 's' : ''}
+          </DialogTitle></DialogHeader>
+          <div className="space-y-2 max-h-[200px] overflow-y-auto custom-scrollbar">
+            {readyRoutes.map(r => (
+              <div key={r.id} className="flex items-center justify-between text-sm py-1.5 px-2 rounded-lg bg-black/[0.02] dark:bg-white/[0.03]">
+                <span className="font-mono font-medium">{r.route_name || `Route ${r.route_number}`}</span>
+                <span className="text-xs text-muted-foreground">
+                  {r.chain ? r.chain.replace(/ \u2192 /g, '-') : ''} &middot; {r.legs.length} leg{r.legs.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">{totalReadyFlights} flight{totalReadyFlights !== 1 ? 's' : ''} will be published</p>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <button onClick={() => setShowBulkPublishDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
+            <button onClick={handleBulkPublish} disabled={saving}
+              className="h-8 px-4 rounded-lg bg-[#991b1b] hover:bg-[#7f1d1d] text-white text-sm font-medium transition-colors disabled:opacity-50">
+              {saving ? 'Publishing...' : 'Publish'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Publish All dialog */}
+      <Dialog open={showPublishAllDialog} onOpenChange={setShowPublishAllDialog}>
+        <DialogContent className="glass-heavy max-w-md">
+          <DialogHeader><DialogTitle className="flex items-center gap-2">
+            <Plane className="h-5 w-5 text-[#991b1b]" /> Publish All Routes
+          </DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Publishing ALL {unpublishedCount} route{unpublishedCount !== 1 ? 's' : ''} to the live schedule:
+          </p>
+          <div className="space-y-1.5 max-h-[200px] overflow-y-auto custom-scrollbar">
+            {unpublishedRoutes.map(r => (
+              <div key={r.id} className="flex items-center justify-between text-sm py-1.5 px-2 rounded-lg bg-black/[0.02] dark:bg-white/[0.03]">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-mono font-medium truncate">{r.route_name || `Route ${r.route_number}`}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {r.chain ? r.chain.replace(/ \u2192 /g, '-') : ''} ({r.legs.length} leg{r.legs.length !== 1 ? 's' : ''})
+                  </span>
+                </div>
+                <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
+                  r.status === 'ready' ? 'bg-[#22c55e]/10 text-[#22c55e]' : 'bg-gray-100 text-gray-500'
+                )}>
+                  {r.status === 'ready' ? 'Ready' : 'Draft'}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-1">
+            {draftSkipCount > 0 && (
+              <p className="text-xs text-amber-600">{draftSkipCount} draft route{draftSkipCount !== 1 ? 's' : ''} will skip the Ready step.</p>
+            )}
+            <p className="text-xs text-muted-foreground">All routes become read-only after publishing. {totalUnpublishedFlights} flight{totalUnpublishedFlights !== 1 ? 's' : ''} affected.</p>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <button onClick={() => setShowPublishAllDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
+            <button onClick={handleBulkPublishAll} disabled={saving}
+              className="h-8 px-4 rounded-lg bg-[#991b1b] hover:bg-[#7f1d1d] text-white text-sm font-medium transition-colors disabled:opacity-50">
+              {saving ? 'Publishing...' : 'Publish All'}
             </button>
           </DialogFooter>
         </DialogContent>
@@ -2590,6 +2992,8 @@ function LegRow({
   onDragStart, onDragEnd, onDragOver, onDrop, dropAbove, dropBelow,
   isRowSelected, onRowSelect,
   selectedCol, highlightedCol, onSelectCell, onDeselectCell, onClearCell,
+  readOnly,
+  timeDisplayMode, airportUtcMap, homeBaseUtcOffset,
 }: {
   leg: LegWithOffsets
   index: number
@@ -2617,6 +3021,10 @@ function LegRow({
   onSelectCell: (row: number, col: number) => void
   onDeselectCell: () => void
   onClearCell: (row: number, col: number) => void
+  readOnly?: boolean
+  timeDisplayMode: TimeDisplayMode
+  airportUtcMap: Map<string, number>
+  homeBaseUtcOffset: number
 }) {
   const isEditing = (field: string) => editingCell?.legId === leg.id && editingCell?.field === field
   const isCellSelected = (col: number) => selectedCol === col && !editingCell
@@ -2737,12 +3145,12 @@ function LegRow({
   return (
     <tr
       data-draggable-row
-      className={cn('group hover:bg-blue-50/50 dark:hover:bg-white/[0.02] transition-colors h-[36px] relative')}
+      className={cn('group hover:bg-blue-50/50 dark:hover:bg-white/[0.02] transition-colors h-[36px] relative', readOnly && 'cursor-default')}
       style={{
         ...(isRowSelected ? { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' } : {}),
         ...(dropAbove ? { boxShadow: 'inset 0 2px 0 0 #991b1b' } : dropBelow ? { boxShadow: 'inset 0 -2px 0 0 #991b1b' } : {}),
       }}
-      draggable onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDragOver} onDrop={onDrop}
+      draggable={!readOnly} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDragOver} onDrop={onDrop}
     >
       <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground tabular-nums cursor-pointer')}
         onClick={onRowSelect}>{index + 1}</td>
@@ -2760,10 +3168,10 @@ function LegRow({
         {renderEditableCell('arr_station', leg.arr_station, leg.arr_station, 3)}
       </td>
       <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(4, 'std_local')} onClick={e => cellClick(4, e)}>
-        {renderEditableCell('std_local', leg.std_local, leg.std_local, 4)}
+        {(() => { const dv = convertTimeDisplay(leg.std_local, leg.dep_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset); return renderEditableCell('std_local', dv, dv, 4) })()}
       </td>
       <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(5, 'sta_local')} onClick={e => cellClick(5, e)}>
-        {renderEditableCell('sta_local', leg.sta_local, leg.sta_local, 5)}
+        {(() => { const dv = convertTimeDisplay(leg.sta_local, leg.arr_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset); return renderEditableCell('sta_local', dv, dv, 5) })()}
         {!isEditing('sta_local') && !isCellSelected(5) && leg._arrivesNextDay && (
           <sup className="text-[9px] font-semibold text-amber-600 dark:text-amber-400 ml-0.5">+1</sup>
         )}
@@ -3123,13 +3531,15 @@ function RouteItem({ route, isSelected, onClick }: { route: AircraftRoute; isSel
     <button onClick={onClick}
       className={cn('w-full text-left rounded-xl px-2 py-2 transition-all duration-150',
         isSelected ? 'bg-[#991b1b]/10 dark:bg-[#991b1b]/20 border-l-[3px] border-l-[#991b1b]'
-          : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.05] border-l-[3px] border-l-transparent')}>
+          : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.05] border-l-[3px] border-l-transparent',
+        route.status === 'published' && !isSelected && 'opacity-70')}>
       <div className="flex items-center justify-between mb-0.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <span className={cn('text-[13px] font-semibold font-mono truncate', isSelected ? 'text-[#991b1b]' : 'text-[#111827] dark:text-foreground')}>
             {route.route_name || `Route ${route.route_number}`}
           </span>
-          {route.status === 'published' && <div className="w-[5px] h-[5px] rounded-full bg-emerald-500 shrink-0" title="Published" />}
+          {route.status === 'ready' && <span className="text-[10px] text-[#22c55e] shrink-0" title="Ready">&#10003;</span>}
+          {route.status === 'published' && <span className="text-[10px] shrink-0" title="Published">&#128274;</span>}
         </div>
         <div className="flex items-center gap-[2px] shrink-0 ml-2">
           {DOW_LABELS.map((label, i) => (

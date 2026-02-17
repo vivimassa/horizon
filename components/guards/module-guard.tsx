@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
 import { getCurrentOperator, hasModuleAccess } from '@/lib/operators'
 import { ModuleName } from '@/types/database'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,7 +21,18 @@ export async function ModuleGuard({
   const operator = await getCurrentOperator()
 
   if (!operator) {
-    redirect('/login')
+    // Check if user is actually unauthenticated vs a transient error
+    try {
+      const supabase = await createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        redirect('/login')
+      }
+    } catch {
+      // Network error — don't redirect, fall through to access denied
+    }
+    // User is authenticated but operator fetch failed — show access denied instead of redirect loop
+    redirect('/')
   }
 
   const hasAccess = hasModuleAccess(operator, module)

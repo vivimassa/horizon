@@ -14,41 +14,102 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 export async function getFlightNumbers(seasonId: string): Promise<FlightNumber[]> {
   const result = await pool.query(
     `SELECT
-       id, operator_id, season_id,
-       airline_code || flight_number::text AS flight_number,
-       suffix,
-       dep_airport_id AS departure_airport_id,
-       arr_airport_id AS arrival_airport_id,
-       dep_station AS departure_iata,
-       arr_station AS arrival_iata,
-       std_local::text, sta_local::text,
-       to_char(std_local, 'HH24MI') AS std,
-       to_char(sta_local, 'HH24MI') AS sta,
-       to_char(std_utc, 'HH24MI') AS std_utc,
-       to_char(sta_utc, 'HH24MI') AS sta_utc,
-       COALESCE(block_minutes, 0) AS block_minutes,
-       COALESCE(arrival_day_offset, CASE WHEN sta_local < std_local THEN 1 ELSE 0 END) AS arrival_day_offset,
-       days_of_operation,
-       days_of_operation AS days_of_week,
-       aircraft_type_id,
-       aircraft_type_icao,
-       cockpit_crew_required,
-       cabin_crew_required,
-       service_type,
-       connecting_flight,
-       COALESCE(status, 'draft') AS status,
-       COALESCE(is_etops, false) AS is_etops,
-       COALESCE(is_overwater, false) AS is_overwater,
-       COALESCE(is_active, true) AS is_active,
-       to_char(period_start, 'YYYY-MM-DD') AS effective_from,
-       to_char(period_end, 'YYYY-MM-DD') AS effective_until,
-       created_at,
-       updated_at,
-       source
-     FROM scheduled_flights
-     WHERE season_id = $1
-     ORDER BY flight_number`,
+       sf.id, sf.operator_id, sf.season_id,
+       sf.airline_code || sf.flight_number::text AS flight_number,
+       sf.suffix,
+       sf.dep_airport_id AS departure_airport_id,
+       sf.arr_airport_id AS arrival_airport_id,
+       sf.dep_station AS departure_iata,
+       sf.arr_station AS arrival_iata,
+       sf.std_local::text, sf.sta_local::text,
+       to_char(sf.std_local, 'HH24MI') AS std,
+       to_char(sf.sta_local, 'HH24MI') AS sta,
+       to_char(sf.std_utc, 'HH24MI') AS std_utc,
+       to_char(sf.sta_utc, 'HH24MI') AS sta_utc,
+       COALESCE(sf.block_minutes, 0) AS block_minutes,
+       COALESCE(sf.arrival_day_offset, CASE WHEN sf.sta_local < sf.std_local THEN 1 ELSE 0 END) AS arrival_day_offset,
+       sf.days_of_operation,
+       sf.days_of_operation AS days_of_week,
+       sf.aircraft_type_id,
+       sf.aircraft_type_icao,
+       sf.cockpit_crew_required,
+       sf.cabin_crew_required,
+       sf.service_type,
+       sf.connecting_flight,
+       COALESCE(sf.status, 'draft') AS status,
+       COALESCE(sf.is_etops, false) AS is_etops,
+       COALESCE(sf.is_overwater, false) AS is_overwater,
+       COALESCE(sf.is_active, true) AS is_active,
+       to_char(sf.period_start, 'YYYY-MM-DD') AS effective_from,
+       to_char(sf.period_end, 'YYYY-MM-DD') AS effective_until,
+       sf.created_at,
+       sf.updated_at,
+       sf.source,
+       sf.scenario_id,
+       ss.scenario_name,
+       ss.scenario_number,
+       sf.previous_status
+     FROM scheduled_flights sf
+     LEFT JOIN schedule_scenarios ss ON sf.scenario_id = ss.id
+     WHERE sf.season_id = $1
+     ORDER BY sf.flight_number`,
     [seasonId]
+  )
+  return result.rows as FlightNumber[]
+}
+
+/**
+ * Get flights overlapping a date range (period_start <= dateTo AND period_end >= dateFrom).
+ * Falls back to season_id match if period dates are NULL.
+ */
+export async function getFlightsByDateRange(dateFrom: string, dateTo: string): Promise<FlightNumber[]> {
+  const result = await pool.query(
+    `SELECT
+       sf.id, sf.operator_id, sf.season_id,
+       sf.airline_code || sf.flight_number::text AS flight_number,
+       sf.suffix,
+       sf.dep_airport_id AS departure_airport_id,
+       sf.arr_airport_id AS arrival_airport_id,
+       sf.dep_station AS departure_iata,
+       sf.arr_station AS arrival_iata,
+       sf.std_local::text, sf.sta_local::text,
+       to_char(sf.std_local, 'HH24MI') AS std,
+       to_char(sf.sta_local, 'HH24MI') AS sta,
+       to_char(sf.std_utc, 'HH24MI') AS std_utc,
+       to_char(sf.sta_utc, 'HH24MI') AS sta_utc,
+       COALESCE(sf.block_minutes, 0) AS block_minutes,
+       COALESCE(sf.arrival_day_offset, CASE WHEN sf.sta_local < sf.std_local THEN 1 ELSE 0 END) AS arrival_day_offset,
+       sf.days_of_operation,
+       sf.days_of_operation AS days_of_week,
+       sf.aircraft_type_id,
+       sf.aircraft_type_icao,
+       sf.cockpit_crew_required,
+       sf.cabin_crew_required,
+       sf.service_type,
+       sf.connecting_flight,
+       COALESCE(sf.status, 'draft') AS status,
+       COALESCE(sf.is_etops, false) AS is_etops,
+       COALESCE(sf.is_overwater, false) AS is_overwater,
+       COALESCE(sf.is_active, true) AS is_active,
+       to_char(sf.period_start, 'YYYY-MM-DD') AS effective_from,
+       to_char(sf.period_end, 'YYYY-MM-DD') AS effective_until,
+       sf.created_at,
+       sf.updated_at,
+       sf.source,
+       sf.scenario_id,
+       ss.scenario_name,
+       ss.scenario_number,
+       sf.previous_status
+     FROM scheduled_flights sf
+     LEFT JOIN schedule_scenarios ss ON sf.scenario_id = ss.id
+     WHERE (
+       (sf.period_start IS NOT NULL AND sf.period_end IS NOT NULL
+        AND sf.period_start <= $2::date AND sf.period_end >= $1::date)
+       OR
+       (sf.period_start IS NULL OR sf.period_end IS NULL)
+     )
+     ORDER BY sf.flight_number`,
+    [dateFrom, dateTo]
   )
   return result.rows as FlightNumber[]
 }
@@ -211,6 +272,91 @@ export async function bulkUpdateFlightNumbers(
       values
     )
     revalidatePath('/network/control/schedule-builder')
+    return {}
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Cancel a flight (soft delete — sets status to 'cancelled', stores previous_status for undo).
+ */
+export async function cancelFlight(id: string): Promise<{ error?: string }> {
+  try {
+    await pool.query(
+      `UPDATE scheduled_flights
+       SET previous_status = status, status = 'cancelled', updated_at = NOW()
+       WHERE id = $1 AND status != 'cancelled'`,
+      [id]
+    )
+    revalidatePath('/network/control/schedule-grid')
+    return {}
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Restore a cancelled flight to its previous status.
+ */
+export async function restoreFlight(id: string): Promise<{ error?: string }> {
+  try {
+    await pool.query(
+      `UPDATE scheduled_flights
+       SET status = COALESCE(previous_status, 'draft'), previous_status = NULL, updated_at = NOW()
+       WHERE id = $1 AND status = 'cancelled'`,
+      [id]
+    )
+    revalidatePath('/network/control/schedule-grid')
+    return {}
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Inline update a single flight field (for grid editing).
+ */
+export async function updateFlightInline(
+  id: string,
+  changes: Record<string, unknown>
+): Promise<{ error?: string }> {
+  const colMap: Record<string, string> = {
+    days_of_week: 'days_of_operation',
+    departure_iata: 'dep_station',
+    arrival_iata: 'arr_station',
+    effective_from: 'period_start',
+    effective_until: 'period_end',
+    std: 'std_local',
+    sta: 'sta_local',
+  }
+
+  const setClauses: string[] = []
+  const values: unknown[] = []
+  let idx = 1
+
+  for (const [key, val] of Object.entries(changes)) {
+    const col = colMap[key] || key
+    // Convert HHMM → HH:MM for time columns
+    if ((col === 'std_local' || col === 'sta_local') && typeof val === 'string' && val.length === 4) {
+      setClauses.push(`${col} = $${idx}::time`)
+      values.push(val.slice(0, 2) + ':' + val.slice(2))
+    } else {
+      setClauses.push(`${col} = $${idx}`)
+      values.push(val)
+    }
+    idx++
+  }
+
+  if (setClauses.length === 0) return {}
+  setClauses.push(`updated_at = NOW()`)
+  values.push(id)
+
+  try {
+    await pool.query(
+      `UPDATE scheduled_flights SET ${setClauses.join(', ')} WHERE id = $${idx}`,
+      values
+    )
     return {}
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }

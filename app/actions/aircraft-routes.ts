@@ -283,6 +283,11 @@ export interface SaveRouteInput {
 export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; error?: string }> {
   if (input.legs.length === 0) return { error: 'Cannot save route with no legs' }
 
+  // Guard: cannot save a published route
+  if (input.id && input.status === 'published') {
+    return { error: 'Cannot edit a published route. Unpublish it first.' }
+  }
+
   const operatorId = await getCurrentOperatorId()
   const client = await pool.connect()
 
@@ -473,7 +478,7 @@ export async function deleteRoute(routeId: string): Promise<{ error?: string }> 
 export async function publishRoute(routeId: string, publish: boolean): Promise<{ error?: string }> {
   const operatorId = await getCurrentOperatorId()
   const client = await pool.connect()
-  const newStatus = publish ? 'published' : 'draft'
+  const newStatus = publish ? 'published' : 'ready'
 
   try {
     await client.query('BEGIN')
@@ -569,6 +574,121 @@ export async function getRecentRoutes(): Promise<RecentRoute[]> {
       updated_at: r.updated_at?.toISOString?.() || r.updated_at,
     } as RecentRoute
   })
+}
+
+/**
+ * Mark a route as 'ready' or revert to 'draft'.
+ * Lightweight: only updates the route status, no flight sync.
+ */
+export async function markRouteReady(routeId: string, ready: boolean): Promise<{ error?: string }> {
+  const operatorId = await getCurrentOperatorId()
+  const newStatus = ready ? 'ready' : 'draft'
+
+  try {
+    await pool.query(
+      'UPDATE aircraft_routes SET status = $1, updated_at = NOW() WHERE id = $2 AND operator_id = $3',
+      [newStatus, routeId, operatorId]
+    )
+    return {}
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Bulk-publish all 'ready' routes in a scenario.
+ * Updates routes + syncs linked scheduled_flights to 'published'.
+ */
+export async function publishReadyRoutes(scenarioId: string): Promise<{ publishedCount?: number; error?: string }> {
+  const operatorId = await getCurrentOperatorId()
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    // Get all ready routes in scenario
+    const readyRes = await client.query(
+      `SELECT id FROM aircraft_routes WHERE scenario_id = $1 AND operator_id = $2 AND status = 'ready'`,
+      [scenarioId, operatorId]
+    )
+    const routeIds = readyRes.rows.map((r: { id: string }) => r.id)
+
+    if (routeIds.length === 0) {
+      await client.query('ROLLBACK')
+      return { publishedCount: 0 }
+    }
+
+    // Bulk update routes to published
+    await client.query(
+      `UPDATE aircraft_routes SET status = 'published', updated_at = NOW() WHERE id = ANY($1)`,
+      [routeIds]
+    )
+
+    // Bulk update linked flights to published
+    await client.query(`
+      UPDATE scheduled_flights SET status = 'published', updated_at = NOW()
+      WHERE id IN (
+        SELECT flight_id FROM aircraft_route_legs
+        WHERE route_id = ANY($1) AND flight_id IS NOT NULL
+      )
+    `, [routeIds])
+
+    await client.query('COMMIT')
+    return { publishedCount: routeIds.length }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    return { error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * Bulk-publish ALL non-published routes in a scenario (draft + ready → published).
+ * Skips the ready step for drafts.
+ */
+export async function publishAllRoutes(scenarioId: string): Promise<{ publishedCount?: number; error?: string }> {
+  const operatorId = await getCurrentOperatorId()
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    // Get all non-published routes in scenario
+    const res = await client.query(
+      `SELECT id FROM aircraft_routes WHERE scenario_id = $1 AND operator_id = $2 AND status IN ('draft', 'ready')`,
+      [scenarioId, operatorId]
+    )
+    const routeIds = res.rows.map((r: { id: string }) => r.id)
+
+    if (routeIds.length === 0) {
+      await client.query('ROLLBACK')
+      return { publishedCount: 0 }
+    }
+
+    // Bulk update routes to published
+    await client.query(
+      `UPDATE aircraft_routes SET status = 'published', updated_at = NOW() WHERE id = ANY($1)`,
+      [routeIds]
+    )
+
+    // Bulk update linked flights to published
+    await client.query(`
+      UPDATE scheduled_flights SET status = 'published', updated_at = NOW()
+      WHERE id IN (
+        SELECT flight_id FROM aircraft_route_legs
+        WHERE route_id = ANY($1) AND flight_id IS NOT NULL
+      )
+    `, [routeIds])
+
+    await client.query('COMMIT')
+    return { publishedCount: routeIds.length }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    return { error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    client.release()
+  }
 }
 
 // ─── Route Templates ─────────────────────────────────────────

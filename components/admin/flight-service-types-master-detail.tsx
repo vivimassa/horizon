@@ -224,7 +224,6 @@ function InlineField({
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
   const [saving, setSaving] = useState(false)
-  const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setEditValue(value) }, [value])
@@ -239,8 +238,6 @@ function InlineField({
       alert(result.error)
       setEditValue(value)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
@@ -252,7 +249,7 @@ function InlineField({
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       {editing ? (
         <Input
@@ -285,21 +282,17 @@ function InlineToggle({
 }: {
   label: string; field: string; value: boolean; id: string; onSaved: () => void
 }) {
-  const [flashClass, setFlashClass] = useState('')
-
   const handleChange = async (checked: boolean) => {
     const result = await updateFlightServiceTypeField(id, field, checked)
     if (result?.error) {
       alert(result.error)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5 flex items-center justify-between', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5 flex items-center justify-between')}>
       <div className="text-xs text-muted-foreground">{label}</div>
       <Switch checked={value} onCheckedChange={handleChange} />
     </div>
@@ -311,22 +304,18 @@ function ColorField({
 }: {
   label: string; value: string; id: string; onSaved: () => void
 }) {
-  const [flashClass, setFlashClass] = useState('')
-
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const newColor = e.target.value
     const result = await updateFlightServiceTypeField(id, 'color', newColor)
     if (result?.error) {
       alert(result.error)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5 flex items-center justify-between', flashClass)}>
+    <div className={cn('py-2.5 border-b border-white/5 flex items-center justify-between')}>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="flex items-center gap-2">
         <span className="text-xs font-mono text-muted-foreground">{value}</span>

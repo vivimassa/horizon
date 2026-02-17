@@ -1,6 +1,7 @@
 'use client'
 
 import { useUserPreferences } from '@/hooks/use-user-preferences'
+import { ZoomTransition } from '@/components/navigation/zoom-transition'
 import { cn } from '@/lib/utils'
 
 export function MainContent({ children }: { children: React.ReactNode }) {
@@ -17,7 +18,7 @@ export function MainContent({ children }: { children: React.ReactNode }) {
       )}
       style={{ opacity: isLoaded ? 1 : 0, transition: 'opacity 150ms' }}
     >
-      {children}
+      <ZoomTransition>{children}</ZoomTransition>
     </main>
   )
 }

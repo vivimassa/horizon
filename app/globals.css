@@ -50,6 +50,31 @@
     --info: 220 100% 50%;
     --info-foreground: 0 0% 100%;
 
+    /* ── Gantt chart bar colors ── */
+    --gantt-bar-bg: #ffffff;
+    --gantt-bar-bg-unassigned: #DBEAFE;
+    --gantt-bar-bg-assigned: #3B82F6;
+    --gantt-bar-text-unassigned: #1e40af;
+    --gantt-bar-text-assigned: #ffffff;
+    --gantt-bar-border-pub: #d1d5db;
+    --gantt-bar-border-pub-assigned: #2563EB;
+    --gantt-bar-border-draft: #d97706;
+    --gantt-bar-text-pub: #374151;
+    --gantt-bar-text-draft: #92400e;
+    --gantt-tooltip-bg: rgba(255, 255, 255, 0.85);
+    --gantt-tooltip-border: rgba(0, 0, 0, 0.08);
+    --gantt-tooltip-heading: #1f2937;
+    --gantt-tooltip-body: #6b7280;
+    --gantt-tooltip-muted: #9ca3af;
+    --gantt-histogram-bar: rgba(153, 27, 27, 0.2);
+    --gantt-histogram-label: #9ca3af;
+    --gantt-eod-bg: #f0f0f2;
+    --gantt-eod-text: #9ca3af;
+    --gantt-eod-border: #e5e5e7;
+    --gantt-ai-bg: linear-gradient(135deg, #faf5ff, #f0f0ff);
+    --gantt-ai-border: #e9d5ff;
+    --gantt-ai-accent: #7c3aed;
+
     /* ── Glass (cards, sidebars, tabs) ──
        Light: white/70, subtle border, soft shadow */
     --glass-bg: rgba(255, 255, 255, 0.7);
@@ -106,6 +131,31 @@
     --warning-foreground: 0 0% 100%;
     --info: 210 56% 60%;
     --info-foreground: 0 0% 100%;
+
+    /* ── Gantt chart bar colors (dark) ── */
+    --gantt-bar-bg: #232323;
+    --gantt-bar-bg-unassigned: #1E293B;
+    --gantt-bar-bg-assigned: #1E40AF;
+    --gantt-bar-text-unassigned: #93c5fd;
+    --gantt-bar-text-assigned: #E0E7FF;
+    --gantt-bar-border-pub: #4b5563;
+    --gantt-bar-border-pub-assigned: #3B82F6;
+    --gantt-bar-border-draft: #fbbf24;
+    --gantt-bar-text-pub: #d4d4d8;
+    --gantt-bar-text-draft: #fcd34d;
+    --gantt-tooltip-bg: rgba(35, 35, 35, 0.9);
+    --gantt-tooltip-border: rgba(255, 255, 255, 0.1);
+    --gantt-tooltip-heading: #e5e7eb;
+    --gantt-tooltip-body: #9ca3af;
+    --gantt-tooltip-muted: #6b7280;
+    --gantt-histogram-bar: rgba(153, 27, 27, 0.6);
+    --gantt-histogram-label: #6b7280;
+    --gantt-eod-bg: #1a1a1a;
+    --gantt-eod-text: #6b7280;
+    --gantt-eod-border: #2a2a2a;
+    --gantt-ai-bg: linear-gradient(135deg, #1a1025, #15101e);
+    --gantt-ai-border: #2d1f4e;
+    --gantt-ai-accent: #a78bfa;
 
     /* ── Glass (cards, sidebars, tabs) — Level 2 ──
        No shadow. Elevation from brightness + thin border */
@@ -196,14 +246,6 @@
   }
 }
 
-@keyframes flash-green {
-  0% {
-    background-color: hsl(var(--success) / 0.2);
-  }
-  100% {
-    background-color: transparent;
-  }
-}
 
 @keyframes spring-hover {
   0% {

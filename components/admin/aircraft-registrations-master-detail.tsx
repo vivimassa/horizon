@@ -443,7 +443,6 @@ function InlineField({
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
   const [saving, setSaving] = useState(false)
-  const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setEditValue(value) }, [value])
@@ -459,8 +458,6 @@ function InlineField({
       alert(result.error)
       setEditValue(value)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
@@ -472,7 +469,7 @@ function InlineField({
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className="py-2.5 border-b border-white/5">
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       {editing ? (
         <div className="flex items-center gap-2">
@@ -513,21 +510,17 @@ function InlineSelectField({
   options: { value: string; label: string }[]; onSaved: () => void
   displayMap?: Record<string, { color?: string }>
 }) {
-  const [flashClass, setFlashClass] = useState('')
-
   const handleChange = async (newValue: string) => {
     if (newValue === value) return
     const result = await updateAircraftField(acId, field, newValue)
     if (result?.error) alert(result.error)
     else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className="py-2.5 border-b border-white/5">
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       <Select value={value || ''} onValueChange={handleChange}>
         <SelectTrigger className="h-8 text-sm">
@@ -553,7 +546,6 @@ function InlineDateField({
 }) {
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
-  const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setEditValue(value) }, [value])
@@ -566,8 +558,6 @@ function InlineDateField({
       alert(result.error)
       setEditValue(value)
     } else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
@@ -576,7 +566,7 @@ function InlineDateField({
   const warning = warningFn && value ? warningFn(value) : null
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className="py-2.5 border-b border-white/5">
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       {editing ? (
         <Input
@@ -999,7 +989,6 @@ function OverrideField({ label, suffix, field, typeDefault, overrideValue, acId,
   const hasOverride = overrideValue !== null && overrideValue !== undefined
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(overrideValue?.toString() || '')
-  const [flashClass, setFlashClass] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setEditValue(overrideValue?.toString() || '') }, [overrideValue])
@@ -1011,8 +1000,6 @@ function OverrideField({ label, suffix, field, typeDefault, overrideValue, acId,
     const result = await updateAircraftField(acId, field, newVal)
     if (result?.error) alert(result.error)
     else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
     setEditing(false)
@@ -1025,7 +1012,7 @@ function OverrideField({ label, suffix, field, typeDefault, overrideValue, acId,
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className="py-2.5 border-b border-white/5">
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       <div className="text-[11px] text-muted-foreground/60 mb-1">
         Type default: {typeDefault != null ? `${typeDefault.toLocaleString()}${suffix ? ` ${suffix}` : ''}` : '—'}
@@ -1070,21 +1057,18 @@ function OverrideSelectField({ label, field, typeDefault, overrideValue, options
   options: readonly string[]; acId: string; onSaved: () => void
 }) {
   const hasOverride = overrideValue !== null && overrideValue !== undefined
-  const [flashClass, setFlashClass] = useState('')
 
   const handleChange = async (newValue: string) => {
     const val = newValue === '__inherit__' ? null : newValue
     const result = await updateAircraftField(acId, field, val)
     if (result?.error) alert(result.error)
     else {
-      setFlashClass('animate-[flash-green_0.8s_ease-out]')
-      setTimeout(() => setFlashClass(''), 800)
       onSaved()
     }
   }
 
   return (
-    <div className={cn('py-2.5 border-b border-white/5', flashClass)}>
+    <div className="py-2.5 border-b border-white/5">
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       <div className="text-[11px] text-muted-foreground/60 mb-1">
         Type default: {typeDefault}
