@@ -1596,23 +1596,34 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   {Array.from({ length: zoomConfig.days }, (_, d) => {
                     const date = addDays(startDate, d)
                     const x = d * 24 * pixelsPerHour
+                    const dayWidth = 24 * pixelsPerHour
                     const localDate = timeMode !== 'utc' ? getLocalDate(date, tzOffset) : date
                     const displayDate = timeMode === 'utc' ? date : localDate
                     const wkend = timeMode === 'utc' ? isWeekend(date) : isLocalWeekend(date, tzOffset)
                     const weekendHighlights = ganttSettings.display?.weekendHighlights ?? true
+                    const isWkActive = wkend && weekendHighlights
 
                     return (
                       <div key={d}>
-                        {/* Day label */}
+                        {/* Weekend column background (header only) */}
+                        {isWkActive && (
+                          <div
+                            className="absolute top-0"
+                            style={{
+                              left: x, width: dayWidth, height: headerH,
+                              background: isDark ? '#7F1D1D' : '#991B1B',
+                            }}
+                          />
+                        )}
+                        {/* Day label (centered in column) */}
                         <div
-                          className="absolute top-0 text-[9px] font-medium pl-1 select-none"
+                          className="absolute top-0 text-[9px] font-medium select-none text-center"
                           style={{
                             left: x,
-                            color: wkend && weekendHighlights ? '#ffffff' : undefined,
-                            background: wkend && weekendHighlights ? '#991B1B' : undefined,
-                            borderRadius: wkend && weekendHighlights ? '0 0 3px 0' : undefined,
-                            fontWeight: wkend && weekendHighlights ? 700 : 500,
-                            padding: wkend && weekendHighlights ? '0 4px 1px 4px' : undefined,
+                            width: dayWidth,
+                            color: isWkActive ? '#ffffff' : undefined,
+                            fontWeight: isWkActive ? 700 : 500,
+                            padding: '0 4px 1px 4px',
                             zIndex: 2,
                           }}
                         >
@@ -1632,13 +1643,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                               if (hour === 0) return null
                               const hx = x + hour * pixelsPerHour
                               const localHour = utcToLocal(hour, tzOffset)
-                              const isWkendHour = wkend && weekendHighlights
 
                               return (
                                 <div key={`${d}-${h}`}>
                                   <div
-                                    className="absolute bottom-0 border-l border-black/[0.03] dark:border-white/[0.03]"
-                                    style={{ left: hx, height: timeMode === 'dual' ? 12 : 8 }}
+                                    className="absolute bottom-0"
+                                    style={{
+                                      left: hx, height: timeMode === 'dual' ? 12 : 8,
+                                      borderLeft: isWkActive
+                                        ? '1px solid rgba(255,255,255,0.2)'
+                                        : '1px solid var(--border-subtle, rgba(0,0,0,0.03))',
+                                    }}
                                   />
                                   {pixelsPerHour >= 8 && (
                                     timeMode === 'dual' ? (
@@ -1649,10 +1664,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                           style={{
                                             top: 14,
                                             fontSize: '7px',
-                                            color: isWkendHour
-                                              ? (isDark ? '#FCA5A5' : '#991B1B')
-                                              : 'var(--muted-foreground-raw, rgba(113,113,122,0.5))',
-                                            opacity: 0.6,
+                                            color: isWkActive ? 'rgba(255,255,255,0.6)' : 'var(--muted-foreground-raw, rgba(113,113,122,0.5))',
+                                            opacity: isWkActive ? 1 : 0.6,
+                                            fontWeight: isWkActive ? 700 : undefined,
                                           }}
                                         >
                                           {String(hour).padStart(2, '0')}Z
@@ -1663,10 +1677,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                           style={{
                                             top: 26,
                                             fontSize: '8px',
-                                            fontWeight: 600,
-                                            color: isWkendHour
-                                              ? (isDark ? '#FCA5A5' : '#991B1B')
-                                              : undefined,
+                                            fontWeight: isWkActive ? 700 : 600,
+                                            color: isWkActive ? '#ffffff' : undefined,
                                           }}
                                         >
                                           {String(localHour).padStart(2, '0')}
@@ -1674,12 +1686,12 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                       </div>
                                     ) : (
                                       <div
-                                        className="absolute bottom-1 text-[7px] text-muted-foreground/50 pl-0.5 select-none"
+                                        className="absolute bottom-1 text-[7px] pl-0.5 select-none"
                                         style={{
                                           left: hx,
-                                          color: isWkendHour
-                                            ? (isDark ? '#FCA5A5' : '#991B1B')
-                                            : undefined,
+                                          color: isWkActive ? '#ffffff' : undefined,
+                                          fontWeight: isWkActive ? 700 : undefined,
+                                          opacity: isWkActive ? 0.9 : 0.5,
                                         }}
                                       >
                                         {timeMode === 'utc'
@@ -1822,28 +1834,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             }}
           >
             <div className="relative" style={{ width: totalWidth, height: bodyHeight }}>
-              {/* Background: midnight lines, weekend tint, hour grid */}
+              {/* Background: midnight lines, hour grid (no weekend tint — header only) */}
               {(() => {
-                const tzOff = ganttSettings.baseTimezoneOffset ?? 7
-                const wkHighlights = ganttSettings.display?.weekendHighlights ?? true
                 return Array.from({ length: zoomConfig.days }, (_, d) => {
                   const date = addDays(startDate, d)
                   const x = d * 24 * pixelsPerHour
-                  const dayWidth = 24 * pixelsPerHour
-                  const weekend = isLocalWeekend(date, tzOff)
-                  const isSaturday = getLocalDate(date, tzOff).getDay() === 6
                   return (
                     <div key={`bg-${d}`}>
-                      {weekend && wkHighlights && (
-                        <div
-                          className="absolute top-0"
-                          style={{
-                            left: x, width: dayWidth, height: bodyHeight,
-                            background: isDark ? 'rgba(153, 27, 27, 0.15)' : '#FEE2E2',
-                            borderLeft: isSaturday ? '2px solid #991B1B' : undefined,
-                          }}
-                        />
-                      )}
                       <div
                         className="absolute top-0 border-l border-black/[0.06] dark:border-white/[0.06]"
                         style={{ left: x, height: bodyHeight }}
