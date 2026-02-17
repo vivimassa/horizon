@@ -420,11 +420,16 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   }, [selectedFlights.size, deleteModalOpen, miniBuilderOpen, assignModalOpen, contextMenu])
 
   // ─── Scroll Sync ───────────────────────────────────────────────────
+  // Use transform on inner content for header/histogram sync (more reliable than scrollLeft)
+  const headerInnerRef = useRef<HTMLDivElement>(null)
+  const histogramInnerRef = useRef<HTMLDivElement>(null)
+
   const handleBodyScroll = useCallback(() => {
     const s = bodyRef.current
     if (!s) return
-    if (headerRef.current) headerRef.current.scrollLeft = s.scrollLeft
-    if (histogramRef.current) histogramRef.current.scrollLeft = s.scrollLeft
+    const sl = s.scrollLeft
+    if (headerInnerRef.current) headerInnerRef.current.style.transform = `translateX(-${sl}px)`
+    if (histogramInnerRef.current) histogramInnerRef.current.style.transform = `translateX(-${sl}px)`
     if (leftPanelRef.current) leftPanelRef.current.scrollTop = s.scrollTop
   }, [])
 
@@ -1291,6 +1296,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   // ─── DOW circles helper ───────────────────────────────────────────
   const DOW_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 
+  // ─── Derived header settings ────────────────────────────────────────
+  const timeMode = ganttSettings.timeDisplay ?? 'dual'
+  const tzOffset = ganttSettings.baseTimezoneOffset ?? 7
+  const headerH = timeMode === 'dual' ? 48 : 36
+
   // ─── Render ────────────────────────────────────────────────────────
   return (
     <div className="h-full flex flex-col overflow-hidden relative">
@@ -1582,17 +1592,12 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         {/* ── CENTER PANEL ───────────────────────────────────────── */}
         <div ref={centerPanelRef} className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* Timeline header */}
-          {(() => {
-            const timeMode = ganttSettings.timeDisplay ?? 'dual'
-            const tzOffset = ganttSettings.baseTimezoneOffset ?? 7
-            const headerH = timeMode === 'dual' ? 48 : 36
-            return (
-              <div
-                ref={headerRef}
-                className="shrink-0 border-b overflow-hidden"
-                style={{ height: headerH }}
-              >
-                <div className="relative" style={{ width: totalWidth, height: headerH }}>
+          <div
+            ref={headerRef}
+            className="shrink-0 border-b overflow-hidden"
+            style={{ height: headerH }}
+          >
+                <div ref={headerInnerRef} className="relative" style={{ width: totalWidth, height: headerH }}>
                   {Array.from({ length: zoomConfig.days }, (_, d) => {
                     const date = addDays(startDate, d)
                     const x = d * 24 * pixelsPerHour
@@ -1709,9 +1714,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                     )
                   })}
                 </div>
-              </div>
-            )
-          })()}
+          </div>
 
           {/* Histogram (34px) or collapsed spacer */}
           {(ganttSettings.display?.histogram ?? true) ? (
@@ -1719,7 +1722,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
               ref={histogramRef}
               className="h-[34px] shrink-0 border-b overflow-hidden"
             >
-              <div className="relative" style={{ width: totalWidth, height: 34 }}>
+              <div ref={histogramInnerRef} className="relative" style={{ width: totalWidth, height: 34 }}>
                 {histogram.buckets.map((bucket, i) => {
                   if (bucket.count === 0) return null
                   const barHeight = Math.round((bucket.count / histogram.max) * 22)
