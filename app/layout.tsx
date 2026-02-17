@@ -10,6 +10,7 @@ import { SchemeProvider } from '@/components/scheme-provider'
 import { CommandPalette } from '@/components/search/command-palette'
 import { StatusBar } from '@/components/status-bar'
 import { ToastProvider } from '@/components/ui/visionos-toast'
+import { LogoWatermark } from '@/components/logo-watermark'
 
 const inter = Inter({
   subsets: ["latin"],
@@ -47,6 +48,8 @@ export default async function RootLayout({
           <SchemeProvider>
             {/* Fixed background — supports optional --app-bg-image */}
             <div className="fixed inset-0 app-bg -z-10" />
+
+            <LogoWatermark />
 
             <MainContent>
               {children}

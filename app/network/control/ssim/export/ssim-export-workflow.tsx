@@ -5,13 +5,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { MultiSelect, type MultiSelectOption } from '@/components/ui/multi-select'
 import {
   Download,
   FileText,
@@ -19,15 +13,13 @@ import {
   Plane,
   MapPin,
   Route,
-  Filter,
-  Eye,
   ChevronRight,
   RotateCcw,
   CheckCircle,
   Copy,
   Check,
 } from 'lucide-react'
-import { SERVICE_TYPE_LABELS, SERVICE_TYPE_GROUPS, getServiceTypeColor } from '@/lib/utils/ssim-parser'
+import { SERVICE_TYPE_LABELS, getServiceTypeColor } from '@/lib/utils/ssim-parser'
 import {
   getExportPreview,
   generateExportFile,
@@ -49,23 +41,139 @@ interface Season {
 
 interface Props {
   seasons: Season[]
+  airports: MultiSelectOption[]
+  serviceTypes: MultiSelectOption[]
+}
+
+// ─── Season code parser ─────────────────────────────────────────────
+
+function getLastSundayOfOctober(year: number): Date {
+  const d = new Date(year, 9, 31)
+  d.setDate(d.getDate() - d.getDay())
+  return d
+}
+function getLastSaturdayOfMarch(year: number): Date {
+  const d = new Date(year, 2, 31)
+  d.setDate(d.getDate() - ((d.getDay() + 1) % 7))
+  return d
+}
+function getLastSundayOfMarch(year: number): Date {
+  const d = new Date(year, 2, 31)
+  d.setDate(d.getDate() - d.getDay())
+  return d
+}
+function getLastSaturdayOfOctober(year: number): Date {
+  const d = new Date(year, 9, 31)
+  d.setDate(d.getDate() - ((d.getDay() + 1) % 7))
+  return d
+}
+
+function fmtDateISO(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function fmtDateDisplay(iso: string): string {
+  if (!iso) return ''
+  const [y, m, d] = iso.split('-')
+  return `${d}/${m}/${y}`
+}
+
+function parseSeasonCode(code: string): { start: string; end: string; seasonId?: string } | null {
+  const match = code.toUpperCase().match(/^([WS])(\d{2})$/)
+  if (!match) return null
+  const type = match[1]
+  const year = 2000 + parseInt(match[2])
+  if (type === 'W') {
+    return { start: fmtDateISO(getLastSundayOfOctober(year)), end: fmtDateISO(getLastSaturdayOfMarch(year + 1)) }
+  }
+  if (type === 'S') {
+    return { start: fmtDateISO(getLastSundayOfMarch(year)), end: fmtDateISO(getLastSaturdayOfOctober(year)) }
+  }
+  return null
+}
+
+/** Auto-format date input: typing "26102025" → "26/10/2025" */
+function handleDateInput(value: string, setter: (v: string) => void, isoSetter: (v: string) => void) {
+  // Strip non-digits
+  const digits = value.replace(/\D/g, '')
+  let display = digits
+  if (digits.length >= 2) display = digits.slice(0, 2) + '/' + digits.slice(2)
+  if (digits.length >= 4) display = digits.slice(0, 2) + '/' + digits.slice(2, 4) + '/' + digits.slice(4, 8)
+  setter(display)
+
+  // Convert to ISO if complete
+  if (digits.length === 8) {
+    const dd = digits.slice(0, 2)
+    const mm = digits.slice(2, 4)
+    const yyyy = digits.slice(4, 8)
+    isoSetter(`${yyyy}-${mm}-${dd}`)
+  } else {
+    isoSetter('')
+  }
+}
+
+// ─── Step Indicator (matches Import style) ──────────────────────────
+
+const STEPS: { key: Step; label: string }[] = [
+  { key: 'options', label: 'Export Options' },
+  { key: 'preview', label: 'Preview' },
+  { key: 'download', label: 'Download' },
+]
+
+function StepIndicator({ current }: { current: Step }) {
+  const currentIdx = STEPS.findIndex(s => s.key === current)
+  return (
+    <div className="flex items-center gap-2">
+      {STEPS.map((s, i) => (
+        <div key={s.key} className="flex items-center gap-2">
+          <div className={cn(
+            'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors',
+            i === currentIdx
+              ? 'bg-primary/15 text-primary'
+              : i < currentIdx
+                ? 'text-muted-foreground'
+                : 'text-muted-foreground/50'
+          )}>
+            {i < currentIdx ? (
+              <CheckCircle className="h-3.5 w-3.5" />
+            ) : (
+              <span className={cn(
+                'w-4 h-4 rounded-full border flex items-center justify-center text-[10px]',
+                i === currentIdx && 'border-primary bg-primary text-primary-foreground'
+              )}>
+                {i + 1}
+              </span>
+            )}
+            {s.label}
+          </div>
+          {i < STEPS.length - 1 && (
+            <ChevronRight className="h-3 w-3 text-muted-foreground/30" />
+          )}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 // ─── Component ─────────────────────────────────────────────────────
 
-export function SsimExportWorkflow({ seasons }: Props) {
+export function SsimExportWorkflow({ seasons, airports, serviceTypes }: Props) {
   const [step, setStep] = useState<Step>('options')
 
-  // Filter state
-  const [seasonId, setSeasonId] = useState('')
+  // Period state
+  const [dateFromDisplay, setDateFromDisplay] = useState('')
+  const [dateToDisplay, setDateToDisplay] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [seasonInput, setSeasonInput] = useState('')
+  const [matchedSeasonId, setMatchedSeasonId] = useState('')
+
+  // Filter state
   const [selectedServiceTypes, setSelectedServiceTypes] = useState<string[]>([])
   const [flightNumberFrom, setFlightNumberFrom] = useState('')
   const [flightNumberTo, setFlightNumberTo] = useState('')
-  const [depStations, setDepStations] = useState('')
-  const [arrStations, setArrStations] = useState('')
-  const [actionCode, setActionCode] = useState('H')
+  const [depStations, setDepStations] = useState<string[]>([])
+  const [arrStations, setArrStations] = useState<string[]>([])
 
   // Preview state
   const [preview, setPreview] = useState<ExportPreview | null>(null)
@@ -75,30 +183,60 @@ export function SsimExportWorkflow({ seasons }: Props) {
   const [ssimContent, setSsimContent] = useState('')
   const [copied, setCopied] = useState(false)
 
+  // ─── Season shortcut ──────────────────────────────────────────────
+
+  const handleSeasonInput = (val: string) => {
+    setSeasonInput(val.toUpperCase())
+    const parsed = parseSeasonCode(val)
+    if (parsed) {
+      setDateFrom(parsed.start)
+      setDateTo(parsed.end)
+      setDateFromDisplay(fmtDateDisplay(parsed.start))
+      setDateToDisplay(fmtDateDisplay(parsed.end))
+      // Try to match a season from the DB
+      const match = seasons.find(s =>
+        s.start_date === parsed.start && s.end_date === parsed.end
+      )
+      setMatchedSeasonId(match?.id || '')
+    }
+  }
+
+  // ─── Find the best matching season for the date range ─────────────
+
+  const resolveSeasonId = useCallback((): string => {
+    if (matchedSeasonId) return matchedSeasonId
+    // Find the season whose range overlaps the selected dates
+    if (!dateFrom || !dateTo) return ''
+    const match = seasons.find(s =>
+      s.start_date <= dateTo && s.end_date >= dateFrom
+    )
+    return match?.id || ''
+  }, [matchedSeasonId, dateFrom, dateTo, seasons])
+
+  // ─── Filters ──────────────────────────────────────────────────────
+
   const buildFilters = useCallback((): ExportFilters => {
+    const sid = resolveSeasonId()
     return {
-      seasonId,
+      seasonId: sid,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
       serviceTypes: selectedServiceTypes.length > 0 ? selectedServiceTypes : undefined,
       flightNumberFrom: flightNumberFrom ? parseInt(flightNumberFrom, 10) : undefined,
       flightNumberTo: flightNumberTo ? parseInt(flightNumberTo, 10) : undefined,
-      depStations: depStations
-        ? depStations.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-        : undefined,
-      arrStations: arrStations
-        ? arrStations.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-        : undefined,
-      actionCode,
+      depStations: depStations.length > 0 ? depStations : undefined,
+      arrStations: arrStations.length > 0 ? arrStations : undefined,
+      actionCode: 'H',
     }
-  }, [seasonId, dateFrom, dateTo, selectedServiceTypes, flightNumberFrom, flightNumberTo, depStations, arrStations, actionCode])
+  }, [resolveSeasonId, dateFrom, dateTo, selectedServiceTypes, flightNumberFrom, flightNumberTo, depStations, arrStations])
+
+  const canPreview = !!resolveSeasonId() && !!dateFrom && !!dateTo
 
   const handlePreview = async () => {
-    if (!seasonId) return
+    if (!canPreview) return
     setLoading(true)
     try {
-      const filters = buildFilters()
-      const result = await getExportPreview(filters)
+      const result = await getExportPreview(buildFilters())
       setPreview(result)
       setStep('preview')
     } finally {
@@ -109,8 +247,7 @@ export function SsimExportWorkflow({ seasons }: Props) {
   const handleGenerate = async () => {
     setLoading(true)
     try {
-      const filters = buildFilters()
-      const content = await generateExportFile(filters)
+      const content = await generateExportFile(buildFilters())
       setSsimContent(content)
       setStep('download')
     } finally {
@@ -122,8 +259,7 @@ export function SsimExportWorkflow({ seasons }: Props) {
     const blob = new Blob([ssimContent], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    const season = seasons.find(s => s.id === seasonId)
-    const filename = `SSIM_${season?.code || 'export'}_${new Date().toISOString().split('T')[0]}.ssim`
+    const filename = `SSIM_${seasonInput || 'export'}_${new Date().toISOString().split('T')[0]}.ssim`
     a.href = url
     a.download = filename
     a.click()
@@ -142,216 +278,160 @@ export function SsimExportWorkflow({ seasons }: Props) {
     setSsimContent('')
   }
 
-  const toggleServiceType = (type: string) => {
-    setSelectedServiceTypes(prev =>
-      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
-    )
-  }
+  // ─── Validation ───────────────────────────────────────────────────
 
-  // ─── Step Indicator ───────────────────────────────────────────────
+  const flightRangeError =
+    flightNumberFrom && flightNumberTo &&
+    parseInt(flightNumberFrom, 10) > parseInt(flightNumberTo, 10)
+      ? 'From must be less than or equal to To'
+      : ''
 
-  const steps = [
-    { id: 'options', label: 'Export Options', icon: Filter },
-    { id: 'preview', label: 'Preview', icon: Eye },
-    { id: 'download', label: 'Download', icon: Download },
-  ]
+  // ─── Render ───────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6">
       {/* Step indicator */}
-      <div className="flex items-center gap-2">
-        {steps.map((s, i) => {
-          const Icon = s.icon
-          const isActive = s.id === step
-          const isPast =
-            (s.id === 'options' && (step === 'preview' || step === 'download')) ||
-            (s.id === 'preview' && step === 'download')
+      <StepIndicator current={step} />
 
-          return (
-            <div key={s.id} className="flex items-center gap-2">
-              {i > 0 && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-              <div
-                className={cn(
-                  'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-primary/15 text-primary'
-                    : isPast
-                      ? 'text-primary/60'
-                      : 'text-muted-foreground'
-                )}
-              >
-                {isPast ? (
-                  <CheckCircle className="h-4 w-4" />
-                ) : (
-                  <Icon className="h-4 w-4" />
-                )}
-                {s.label}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Step: Options */}
+      {/* ─── Step 1: Export Options ─────────────────────────────────── */}
       {step === 'options' && (
         <div className="glass rounded-2xl p-6 space-y-6">
           <h2 className="text-lg font-semibold">Export Options</h2>
 
-          {/* Season selector */}
+          {/* Period */}
           <div className="space-y-2">
-            <Label>Schedule Season *</Label>
-            <Select value={seasonId} onValueChange={setSeasonId}>
-              <SelectTrigger className="glass-float">
-                <SelectValue placeholder="Select a season" />
-              </SelectTrigger>
-              <SelectContent>
-                {seasons.map(s => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.code} — {s.name} ({s.start_date} to {s.end_date})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Filters grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Date range */}
-            <div className="space-y-2">
-              <Label>Date Range (optional)</Label>
-              <div className="flex gap-2">
+            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Period *</Label>
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
                 <Input
-                  type="date"
-                  value={dateFrom}
-                  onChange={e => setDateFrom(e.target.value)}
-                  className="glass-float"
-                  placeholder="From"
+                  value={dateFromDisplay}
+                  onChange={e => handleDateInput(e.target.value, setDateFromDisplay, setDateFrom)}
+                  className="glass-float font-mono"
+                  placeholder="DD/MM/YYYY"
+                  maxLength={10}
                 />
+                <span className="text-[10px] text-muted-foreground mt-0.5 block">From</span>
+              </div>
+              <span className="text-muted-foreground mt-[-16px]">—</span>
+              <div className="flex-1">
                 <Input
-                  type="date"
-                  value={dateTo}
-                  onChange={e => setDateTo(e.target.value)}
-                  className="glass-float"
-                  placeholder="To"
+                  value={dateToDisplay}
+                  onChange={e => handleDateInput(e.target.value, setDateToDisplay, setDateTo)}
+                  className="glass-float font-mono"
+                  placeholder="DD/MM/YYYY"
+                  maxLength={10}
                 />
+                <span className="text-[10px] text-muted-foreground mt-0.5 block">To</span>
+              </div>
+              <div className="w-[72px]">
+                <Input
+                  value={seasonInput}
+                  onChange={e => handleSeasonInput(e.target.value)}
+                  className="glass-float font-mono text-center uppercase"
+                  placeholder="W25"
+                  maxLength={3}
+                />
+                <span className="text-[10px] text-muted-foreground mt-0.5 block">Season</span>
               </div>
             </div>
+            {!canPreview && dateFrom && dateTo && (
+              <p className="text-[11px] text-destructive">
+                No matching season found for this date range. Use a season shortcut like W25 or S26.
+              </p>
+            )}
+          </div>
 
-            {/* Flight number range */}
-            <div className="space-y-2">
-              <Label>Flight Number Range (optional)</Label>
-              <div className="flex gap-2">
+          {/* Flight Number Range */}
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Flight Number Range
+            </Label>
+            <div className="flex items-center gap-3 max-w-sm">
+              <div className="flex-1">
                 <Input
                   type="number"
                   value={flightNumberFrom}
                   onChange={e => setFlightNumberFrom(e.target.value)}
                   className="glass-float"
                   placeholder="From"
+                  min={1}
                 />
+              </div>
+              <span className="text-muted-foreground">—</span>
+              <div className="flex-1">
                 <Input
                   type="number"
                   value={flightNumberTo}
                   onChange={e => setFlightNumberTo(e.target.value)}
                   className="glass-float"
                   placeholder="To"
+                  min={1}
                 />
               </div>
             </div>
+            {flightRangeError && (
+              <p className="text-[11px] text-destructive">{flightRangeError}</p>
+            )}
+            <p className="text-[10px] text-muted-foreground">Optional — leave empty for all flights</p>
+          </div>
 
-            {/* Departure stations */}
-            <div className="space-y-2">
-              <Label>Departure Stations (optional)</Label>
-              <Input
-                value={depStations}
-                onChange={e => setDepStations(e.target.value)}
-                className="glass-float"
-                placeholder="SGN, HAN, DAD"
-              />
-              <p className="text-xs text-muted-foreground">Comma-separated IATA codes</p>
-            </div>
-
-            {/* Arrival stations */}
-            <div className="space-y-2">
-              <Label>Arrival Stations (optional)</Label>
-              <Input
-                value={arrStations}
-                onChange={e => setArrStations(e.target.value)}
-                className="glass-float"
-                placeholder="SGN, HAN, DAD"
-              />
-              <p className="text-xs text-muted-foreground">Comma-separated IATA codes</p>
+          {/* Stations — side by side */}
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Stations</Label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <MultiSelect
+                  options={airports}
+                  selected={depStations}
+                  onChange={setDepStations}
+                  placeholder="All departures"
+                  searchable
+                />
+                <span className="text-[10px] text-muted-foreground mt-0.5 block">Departure</span>
+              </div>
+              <div>
+                <MultiSelect
+                  options={airports}
+                  selected={arrStations}
+                  onChange={setArrStations}
+                  placeholder="All arrivals"
+                  searchable
+                />
+                <span className="text-[10px] text-muted-foreground mt-0.5 block">Arrival</span>
+              </div>
             </div>
           </div>
 
-          {/* Service types — grouped by application */}
+          {/* Service Types */}
           <div className="space-y-2">
-            <Label>Service Types (optional — all if none selected)</Label>
-            <div className="space-y-3">
-              {SERVICE_TYPE_GROUPS.map(group => (
-                <div key={group.label}>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: group.color }} />
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      {group.label}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 ml-4">
-                    {group.codes.map(code => (
-                      <button
-                        key={code}
-                        onClick={() => toggleServiceType(code)}
-                        className={cn(
-                          'px-2.5 py-1 rounded-lg text-xs font-medium transition-all border',
-                          selectedServiceTypes.includes(code)
-                            ? 'border-primary/30 text-primary'
-                            : 'glass-float text-muted-foreground border-transparent hover:text-foreground'
-                        )}
-                        style={selectedServiceTypes.includes(code) ? { backgroundColor: group.color + '20' } : undefined}
-                      >
-                        <span className="font-mono">{code}</span> {SERVICE_TYPE_LABELS[code]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Action code */}
-          <div className="space-y-2">
-            <Label>Action Code</Label>
-            <Select value={actionCode} onValueChange={setActionCode}>
-              <SelectTrigger className="glass-float w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="H">H — New</SelectItem>
-                <SelectItem value="R">R — Replace</SelectItem>
-                <SelectItem value="C">C — Cancel</SelectItem>
-                <SelectItem value="U">U — Update</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Service Types</Label>
+            <MultiSelect
+              options={serviceTypes}
+              selected={selectedServiceTypes}
+              onChange={setSelectedServiceTypes}
+              placeholder="All service types"
+              searchable={false}
+            />
+            <p className="text-[10px] text-muted-foreground">Optional — leave empty for all types</p>
           </div>
 
           {/* Actions */}
-          <div className="flex justify-end pt-2">
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="outline" onClick={handleReset}>Cancel</Button>
             <Button
               onClick={handlePreview}
-              disabled={!seasonId || loading}
+              disabled={!canPreview || loading || !!flightRangeError}
               className="gap-2"
             >
-              {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Eye className="h-4 w-4" />
-              )}
-              Preview Export
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              Next: Preview
+              <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
       )}
 
-      {/* Step: Preview */}
+      {/* ─── Step 2: Preview ───────────────────────────────────────── */}
       {step === 'preview' && preview && (
         <div className="space-y-6">
           {/* Stats cards */}
@@ -378,10 +458,9 @@ export function SsimExportWorkflow({ seasons }: Props) {
             </div>
           </div>
 
-          {/* Info */}
+          {/* Export Summary */}
           <div className="glass rounded-2xl p-6 space-y-4">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">Export Summary</h3>
-
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
                 <span className="text-muted-foreground">Date Range:</span>{' '}
@@ -444,7 +523,7 @@ export function SsimExportWorkflow({ seasons }: Props) {
         </div>
       )}
 
-      {/* Step: Download */}
+      {/* ─── Step 3: Download ──────────────────────────────────────── */}
       {step === 'download' && (
         <div className="space-y-6">
           <div className="glass rounded-2xl p-6 space-y-4">

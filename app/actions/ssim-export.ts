@@ -12,6 +12,37 @@ import {
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
+// ─── Lookup Data ────────────────────────────────────────────────────
+
+export async function getAirportOptions(): Promise<{ value: string; label: string }[]> {
+  const supabase = createAdminClient()
+  const operatorId = await getCurrentOperatorId()
+  const { data } = await supabase
+    .from('airports')
+    .select('iata_code, name')
+    .eq('operator_id', operatorId)
+    .not('iata_code', 'is', null)
+    .order('iata_code')
+  return (data || []).map(a => ({
+    value: a.iata_code!,
+    label: `${a.iata_code} — ${a.name}`,
+  }))
+}
+
+export async function getServiceTypeOptions(): Promise<{ value: string; label: string }[]> {
+  const supabase = createAdminClient()
+  const operatorId = await getCurrentOperatorId()
+  const { data } = await supabase
+    .from('flight_service_types')
+    .select('code, name')
+    .eq('operator_id', operatorId)
+    .order('code')
+  return (data || []).map(t => ({
+    value: t.code,
+    label: `${t.code} — ${t.name}`,
+  }))
+}
+
 // ─── Types ─────────────────────────────────────────────────────────
 
 export interface ExportFilters {

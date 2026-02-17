@@ -24,8 +24,6 @@ import {
   MoreHorizontal,
   X,
 } from 'lucide-react'
-import { HorizonLogo } from '@/components/horizon-logo'
-
 interface ResponsiveDockProps {
   operator: OperatorWithRole | null
   accessibleModules: string[]
@@ -69,25 +67,6 @@ export function ResponsiveDock({ operator, accessibleModules }: ResponsiveDockPr
     return (
       <div className="fixed z-50 bottom-12 left-1/2 -translate-x-1/2">
         <div className="flex items-center gap-1 rounded-3xl p-2 glass-float">
-          {/* Logo */}
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  href="/"
-                  className="flex items-center justify-center rounded-2xl transition-all duration-300 bg-gradient-to-br from-primary to-primary/85 hover:scale-105 hover:shadow-glass-glow backdrop-blur-sm h-11 w-11 p-1.5"
-                >
-                  <HorizonLogo variant="dock" dockPosition="left" />
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="glass-heavy rounded-xl">
-                <p className="font-medium">HORIZON</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          <div className="h-10 w-px bg-border mx-0.5" />
-
           {/* Module Icons (no labels) */}
           <TooltipProvider delayDuration={200}>
             <div className="flex gap-1">

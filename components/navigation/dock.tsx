@@ -19,8 +19,6 @@ import {
 } from 'lucide-react'
 import { OperatorWithRole } from '@/lib/operators'
 import { type DockPosition } from '@/hooks/use-user-preferences'
-import { HorizonLogo } from '@/components/horizon-logo'
-
 interface DockProps {
   operator: OperatorWithRole | null
   accessibleModules: string[]
@@ -101,35 +99,6 @@ export function Dock({ accessibleModules, dockPosition = 'bottom' }: DockProps) 
   return (
     <div className={containerClasses}>
       <div className={dockClasses}>
-        {/* Horizon Logo */}
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Link
-                href="/"
-                className={cn(
-                  'flex items-center justify-center rounded-2xl transition-all duration-300',
-                  'bg-gradient-to-br from-primary to-primary/85',
-                  'hover:scale-105 hover:shadow-glass-glow',
-                  'backdrop-blur-sm',
-                  isVertical ? 'h-12 w-12 p-1.5' : 'h-12 px-3 py-1.5'
-                )}
-              >
-                <HorizonLogo variant="dock" dockPosition={position} />
-              </Link>
-            </TooltipTrigger>
-            <TooltipContent side={isVertical ? 'right' : 'top'} className="glass-heavy rounded-xl">
-              <p className="font-medium">HORIZON</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-
-        {/* Divider */}
-        <div className={cn(
-          'bg-border',
-          isVertical ? 'h-px w-10 mx-auto my-0.5' : 'h-10 w-px my-auto mx-0.5'
-        )} />
-
         {/* Module Icons */}
         <TooltipProvider delayDuration={200}>
           <div className={cn('flex gap-1', isVertical && 'flex-col')}>
