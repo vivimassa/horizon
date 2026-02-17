@@ -25,8 +25,8 @@ import {
   ArrowRight,
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
-import { AircraftType, AircraftSeatingConfig, CabinEntry } from '@/types/database'
-import { getGanttFlights, GanttFlight, getRouteWithLegs, deleteSingleFlight, assignFlightsToAircraft, unassignFlightsTail, type GanttRouteData } from '@/app/actions/gantt'
+import { AircraftType, AircraftSeatingConfig, CabinEntry, Airport, FlightServiceType } from '@/types/database'
+import { getGanttFlights, GanttFlight, getRouteWithLegs, deleteSingleFlight, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, type GanttRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/gantt'
 import { deleteRoute } from '@/app/actions/aircraft-routes'
 import { toast } from '@/components/ui/visionos-toast'
 import { friendlyError } from '@/lib/utils/error-handler'
@@ -34,6 +34,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { MiniBuilderModal } from './gantt-mini-builder'
 import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult } from '@/lib/utils/tail-assignment'
 import { useGanttSettings } from '@/lib/hooks/use-gantt-settings'
+import { type GanttSettingsData } from '@/lib/constants/gantt-settings'
+import { getBarTextColor } from '@/lib/utils/color-helpers'
 import { GanttSettingsPanel } from './gantt-settings-panel'
 import { useGanttClipboard } from '@/lib/hooks/use-gantt-clipboard'
 import { useGanttDrag, type RowLayoutItem, type PendingDrop } from '@/lib/hooks/use-gantt-drag'
@@ -46,29 +48,34 @@ import { GanttWorkspaceIndicator } from './gantt-workspace-indicator'
 
 type ZoomLevel = '1D' | '2D' | '3D' | '4D' | '5D' | '6D' | '7D' | '14D' | '28D' | 'M' | '3M' | '6M' | '1Y'
 
-const ZOOM_CONFIG: Record<ZoomLevel, { pixelsPerHour: number; hoursPerTick: number; days: number }> = {
-  '1D':  { pixelsPerHour: 60,   hoursPerTick: 1,  days: 1 },
-  '2D':  { pixelsPerHour: 30,   hoursPerTick: 2,  days: 2 },
-  '3D':  { pixelsPerHour: 20,   hoursPerTick: 3,  days: 3 },
-  '4D':  { pixelsPerHour: 15,   hoursPerTick: 3,  days: 4 },
-  '5D':  { pixelsPerHour: 12,   hoursPerTick: 6,  days: 5 },
-  '6D':  { pixelsPerHour: 10,   hoursPerTick: 6,  days: 6 },
-  '7D':  { pixelsPerHour: 8,    hoursPerTick: 6,  days: 7 },
-  '14D': { pixelsPerHour: 4,    hoursPerTick: 12, days: 14 },
-  '28D': { pixelsPerHour: 2,    hoursPerTick: 24, days: 28 },
-  'M':   { pixelsPerHour: 1.8,  hoursPerTick: 24, days: 31 },
-  '3M':  { pixelsPerHour: 0.6,  hoursPerTick: 24, days: 91 },
-  '6M':  { pixelsPerHour: 0.45, hoursPerTick: 24, days: 182 },
-  '1Y':  { pixelsPerHour: 0.22, hoursPerTick: 24, days: 365 },
+const ZOOM_CONFIG: Record<ZoomLevel, { hoursPerTick: number; days: number }> = {
+  '1D':  { hoursPerTick: 1,  days: 1 },
+  '2D':  { hoursPerTick: 2,  days: 2 },
+  '3D':  { hoursPerTick: 2,  days: 3 },
+  '4D':  { hoursPerTick: 3,  days: 4 },
+  '5D':  { hoursPerTick: 4,  days: 5 },
+  '6D':  { hoursPerTick: 6,  days: 6 },
+  '7D':  { hoursPerTick: 6,  days: 7 },
+  '14D': { hoursPerTick: 12, days: 14 },
+  '28D': { hoursPerTick: 24, days: 28 },
+  'M':   { hoursPerTick: 24, days: 31 },
+  '3M':  { hoursPerTick: 168, days: 91 },
+  '6M':  { hoursPerTick: 336, days: 182 },
+  '1Y':  { hoursPerTick: 720, days: 365 },
 }
 
 const ZOOM_GROUP_DAYS: ZoomLevel[] = ['1D', '2D', '3D', '4D', '5D', '6D', '7D']
 const ZOOM_GROUP_WIDE: ZoomLevel[] = ['14D', '28D', 'M', '3M', '6M', '1Y']
 
-const ROW_HEIGHT = 38
-const GROUP_HEADER_HEIGHT = 26
-const BAR_HEIGHT = 26
-const BAR_TOP = (ROW_HEIGHT - BAR_HEIGHT) / 2
+// ─── Row height levels (vertical zoom) ────────────────────────────────
+const ROW_HEIGHT_LEVELS = [
+  { label: 'compact', rowH: 28, barH: 18, fontSize: 8 },
+  { label: 'default', rowH: 38, barH: 26, fontSize: 9.5 },
+  { label: 'large',   rowH: 52, barH: 36, fontSize: 11 },
+  { label: 'xlarge',  rowH: 68, barH: 48, fontSize: 12 },
+] as const
+
+const MIN_PPH = 0.3 // minimum pixels-per-hour to keep bars visible
 
 interface ExpandedFlight {
   id: string
@@ -96,6 +103,7 @@ interface ExpandedFlight {
   dayOffset: number
   /** Virtual tail assignment — null if overflow */
   assignedReg: string | null
+  serviceType: string
 }
 
 const OVERFLOW_ROW_ID_PREFIX = '__overflow__'
@@ -158,6 +166,33 @@ function isWeekend(d: Date): boolean {
   return dow === 0 || dow === 6
 }
 
+/** Convert a UTC hour to a local hour using the given offset. */
+function utcToLocal(utcHour: number, offset: number): number {
+  return ((utcHour + offset) % 24 + 24) % 24
+}
+
+/** Check if a UTC date at a given offset would be a weekend in local time. */
+function isLocalWeekend(date: Date, offset: number): boolean {
+  // If offset shifts past midnight, the local date may be different
+  const localDate = getLocalDate(date, offset)
+  const dow = localDate.getDay()
+  return dow === 0 || dow === 6
+}
+
+/** Get the local date for a UTC date with a timezone offset. */
+function getLocalDate(date: Date, offset: number): Date {
+  const d = new Date(date)
+  d.setHours(d.getHours() + offset)
+  return d
+}
+
+/** Format block time as BH: HH:MM */
+function formatBlockTimeBH(minutes: number): string {
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return `BH: ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
 function parseCabinConfig(config: unknown): CabinEntry[] {
   if (Array.isArray(config)) {
     return config.filter(
@@ -190,6 +225,38 @@ function isRouteDomestic(routeType: string | null): boolean {
   return routeType.toLowerCase() === 'domestic'
 }
 
+/** Get bar color based on color mode setting. */
+function getBarColor(
+  ef: ExpandedFlight,
+  colorMode: GanttSettingsData['colorMode'],
+  settings: GanttSettingsData,
+  isDbAssigned: boolean,
+  isDark: boolean,
+): { bg: string; text: string; useVars: boolean } {
+  if (colorMode === 'assignment') {
+    return {
+      bg: isDbAssigned ? 'var(--gantt-bar-bg-assigned)' : 'var(--gantt-bar-bg-unassigned)',
+      text: isDbAssigned ? 'var(--gantt-bar-text-assigned)' : '',
+      useVars: true,
+    }
+  }
+
+  let bg = '#3B82F6'
+  if (colorMode === 'ac_type') {
+    bg = settings.colorAcType[ef.aircraftTypeIcao || ''] || '#3B82F6'
+  } else if (colorMode === 'service_type') {
+    bg = settings.colorServiceType[ef.serviceType] || '#3B82F6'
+  } else if (colorMode === 'destination_type') {
+    bg = isRouteDomestic(ef.routeType) ? settings.colorDestType.domestic : settings.colorDestType.international
+  }
+
+  return {
+    bg,
+    text: getBarTextColor(bg, isDark),
+    useVars: false,
+  }
+}
+
 function getTatMinutes(
   acType: AircraftType | undefined,
   arrivingDomestic: boolean,
@@ -209,9 +276,11 @@ interface GanttChartProps {
   registrations: AircraftWithRelations[]
   aircraftTypes: AircraftType[]
   seatingConfigs: AircraftSeatingConfig[]
+  airports: Airport[]
+  serviceTypes: FlightServiceType[]
 }
 
-export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: GanttChartProps) {
+export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airports, serviceTypes }: GanttChartProps) {
   // ─── State ──────────────────────────────────────────────────────────
   const [startDate, setStartDate] = useState(() => startOfDay(new Date()))
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('7D')
@@ -221,9 +290,35 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
   const [selectedFlights, setSelectedFlights] = useState<Set<string>>(new Set())
   const [hoveredFlightId, setHoveredFlightId] = useState<string | null>(null)
   const tooltipPosRef = useRef({ x: 0, y: 0 })
-  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set())
+  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set<string>()
+    try {
+      const stored = localStorage.getItem('horizon_gantt_collapsed')
+      if (stored) return new Set(JSON.parse(stored))
+    } catch { /* ignore */ }
+    return new Set<string>()
+  })
   const [flights, setFlights] = useState<GanttFlight[]>([])
   const [loading, setLoading] = useState(false)
+
+  // Dark mode tracking
+  const [isDark, setIsDark] = useState(() =>
+    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  )
+
+  // Persist collapsed state to localStorage
+  useEffect(() => {
+    try { localStorage.setItem('horizon_gantt_collapsed', JSON.stringify(Array.from(collapsedTypes))) } catch { /* ignore */ }
+  }, [collapsedTypes])
+
+  // Track dark mode changes
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setIsDark(document.documentElement.classList.contains('dark'))
+    })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [])
 
   // Delete modal state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
@@ -234,7 +329,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false)
   const {
     settings: ganttSettings,
-    updateDisplay, updateBarColors, updateSettings: updateGanttSettings,
+    updateDisplay, updateColorAssignment, updateColorAcType, updateColorServiceType,
+    updateTooltip, updateSettings: updateGanttSettings,
     updateUtilTarget, resetUtilTarget,
     updateTatOverride, resetTatOverride,
     resetAll: resetAllSettings, saveStatus,
@@ -258,6 +354,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
   // Unassign confirmation modal state
   const [unassignModalOpen, setUnassignModalOpen] = useState(false)
 
+  // Row height zoom
+  const [rowHeightLevel, setRowHeightLevel] = useState(1) // default
+  const rowConfig = ROW_HEIGHT_LEVELS[rowHeightLevel]
+  const ROW_HEIGHT = rowConfig.rowH
+  const BAR_HEIGHT = rowConfig.barH
+  const BAR_TOP = (ROW_HEIGHT - BAR_HEIGHT) / 2
+  const BAR_FONT = rowConfig.fontSize
+  const GROUP_HEADER_HEIGHT = Math.max(24, Math.round(ROW_HEIGHT * 0.68))
+  const zoomRowIn = useCallback(() => setRowHeightLevel(prev => Math.min(prev + 1, ROW_HEIGHT_LEVELS.length - 1)), [])
+  const zoomRowOut = useCallback(() => setRowHeightLevel(prev => Math.max(prev - 1, 0)), [])
+
   // ─── Refs ───────────────────────────────────────────────────────────
   const bodyRef = useRef<HTMLDivElement>(null)
   const headerRef = useRef<HTMLDivElement>(null)
@@ -265,10 +372,36 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
   const leftPanelRef = useRef<HTMLDivElement>(null)
   const lastTapRef = useRef<{ id: string; time: number } | null>(null)
   const longTapRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const centerPanelRef = useRef<HTMLDivElement>(null)
+
+  // ─── Responsive container width ─────────────────────────────────────
+  const [containerWidth, setContainerWidth] = useState(0)
+
+  useEffect(() => {
+    const el = centerPanelRef.current
+    if (!el) return
+    const update = () => setContainerWidth(el.clientWidth)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   // ─── Derived ────────────────────────────────────────────────────────
   const zoomConfig = ZOOM_CONFIG[zoomLevel]
-  const totalWidth = zoomConfig.days * 24 * zoomConfig.pixelsPerHour
+  const totalHours = zoomConfig.days * 24
+  const rawPPH = containerWidth > 0 ? containerWidth / totalHours : 12
+  const pixelsPerHour = Math.max(rawPPH, MIN_PPH)
+  const totalWidth = totalHours * pixelsPerHour
+
+  // Auto-adjust tick spacing based on effective pixels-per-hour
+  const autoTickHours = pixelsPerHour > 40 ? 1
+    : pixelsPerHour > 15 ? 2
+    : pixelsPerHour > 8 ? 6
+    : pixelsPerHour > 3 ? 12
+    : pixelsPerHour > 1 ? 24
+    : 168
+  const hoursPerTick = Math.min(zoomConfig.hoursPerTick, autoTickHours)
 
   // ─── Keyboard handlers (Escape + Delete) ───────────────────────────
   useEffect(() => {
@@ -295,26 +428,51 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
     if (leftPanelRef.current) leftPanelRef.current.scrollTop = s.scrollTop
   }, [])
 
+  // ─── Per-date tail assignments ─────────────────────────────────────
+  // Map key = "flightId__YYYY-MM-DD", value = aircraft_reg
+  const [tailAssignments, setTailAssignments] = useState<Map<string, string>>(new Map())
+
   // ─── Data Fetch ────────────────────────────────────────────────────
   const refreshFlights = useCallback(async () => {
     const rangeStart = formatISO(startDate)
     const rangeEnd = formatISO(addDays(startDate, zoomConfig.days))
     setLoading(true)
-    const f = await getGanttFlights(rangeStart, rangeEnd)
+    const [f, ta] = await Promise.all([
+      getGanttFlights(rangeStart, rangeEnd),
+      getFlightTailAssignments(rangeStart, rangeEnd),
+    ])
     setFlights(f)
+    // Build lookup map for per-date assignments
+    const taMap = new Map<string, string>()
+    for (const row of ta) {
+      taMap.set(`${row.scheduledFlightId}__${row.flightDate}`, row.aircraftReg)
+    }
+    setTailAssignments(taMap)
     setLoading(false)
   }, [startDate, zoomConfig.days])
 
   useEffect(() => { refreshFlights() }, [refreshFlights])
 
-  const applyOptimisticAssign = useCallback((flightIds: string[], reg: string) => {
-    const idSet = new Set(flightIds)
-    setFlights(prev => prev.map(f => idSet.has(f.id) ? { ...f, aircraftReg: reg } : f))
+  /** Optimistic assign: update per-date tail assignment map */
+  const applyOptimisticAssign = useCallback((items: FlightDateItem[], reg: string) => {
+    setTailAssignments(prev => {
+      const next = new Map(prev)
+      for (const item of items) {
+        next.set(`${item.flightId}__${item.flightDate}`, reg)
+      }
+      return next
+    })
   }, [])
 
-  const applyOptimisticUnassign = useCallback((flightIds: string[]) => {
-    const idSet = new Set(flightIds)
-    setFlights(prev => prev.map(f => idSet.has(f.id) ? { ...f, aircraftReg: null } : f))
+  /** Optimistic unassign: remove per-date tail assignments */
+  const applyOptimisticUnassign = useCallback((items: FlightDateItem[]) => {
+    setTailAssignments(prev => {
+      const next = new Map(prev)
+      for (const item of items) {
+        next.delete(`${item.flightId}__${item.flightDate}`)
+      }
+      return next
+    })
   }, [])
 
   // ─── Seating config lookup ────────────────────────────────────────
@@ -386,8 +544,12 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
         const dow = getDayOfWeek(date)
         if (!f.daysOfOperation.includes(String(dow))) continue
 
+        // Per-date tail assignment takes priority over scheduled_flights.aircraft_reg
+        const dateStr = formatISO(date)
+        const perDateReg = tailAssignments.get(`${f.id}__${dateStr}`) || null
+
         result.push({
-          id: `${f.id}_${formatISO(date)}`,
+          id: `${f.id}_${dateStr}`,
           flightId: f.id,
           flightNumber: f.flightNumber,
           depStation: f.depStation,
@@ -406,14 +568,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
           routeType: f.routeType,
           routeId: f.routeId,
           seasonId: f.seasonId,
-          aircraftReg: f.aircraftReg,
+          aircraftReg: perDateReg,
           dayOffset: f.dayOffset ?? 0,
           assignedReg: null, // set by tail assignment engine
+          serviceType: f.serviceType || 'J',
         })
       }
     }
     return result
-  }, [flights, startDate, zoomConfig.days, showPublished, showDrafts])
+  }, [flights, startDate, zoomConfig.days, showPublished, showDrafts, tailAssignments])
 
   // ─── Route cycle mate lookup ──────────────────────────────────────
   const routeCycleMap = useMemo(() => {
@@ -470,10 +633,12 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
   const flightsByReg = useMemo(() => {
     const map = new Map<string, ExpandedFlight[]>()
     for (const ef of assignedFlights) {
-      if (!ef.assignedReg) continue
-      const list = map.get(ef.assignedReg) || []
+      // DB assignment (aircraftReg) takes absolute priority over auto-assignment
+      const reg = ef.aircraftReg || ef.assignedReg
+      if (!reg) continue
+      const list = map.get(reg) || []
       list.push(ef)
-      map.set(ef.assignedReg, list)
+      map.set(reg, list)
     }
     return map
   }, [assignedFlights])
@@ -482,9 +647,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
   const overflowByType = useMemo(() => {
     const map = new Map<string, ExpandedFlight[]>()
     for (const of_ of assignmentResult.overflow) {
-      const key = of_.aircraftTypeIcao || 'UNKN'
       const ef = assignedFlights.find(f => f.id === of_.id)
-      if (!ef) continue
+      // DB-assigned flights are pinned to their row — never overflow
+      if (!ef || ef.aircraftReg) continue
+      const key = of_.aircraftTypeIcao || 'UNKN'
       const list = map.get(key) || []
       list.push(ef)
       map.set(key, list)
@@ -525,7 +691,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
   // ─── Histogram data (variable buckets) ────────────────────────────
   const histogram = useMemo(() => {
     const buckets: { count: number; xPx: number; widthPx: number }[] = []
-    const pph = zoomConfig.pixelsPerHour
+    const pph = pixelsPerHour
 
     if (histogramMode === 'hourly') {
       const totalSlots = zoomConfig.days * 24
@@ -567,7 +733,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
 
     const max = Math.max(1, ...buckets.map((b) => b.count))
     return { buckets, max }
-  }, [assignedFlights, zoomConfig.days, zoomConfig.pixelsPerHour, startDate, histogramMode])
+  }, [assignedFlights, zoomConfig.days, pixelsPerHour, startDate, histogramMode, totalWidth])
 
   // ─── EOD location per registration per day ─────────────────────────
   const showEodBadges = ganttSettings.display?.eodBadges ?? true
@@ -578,8 +744,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
     if (!showEodBadges) return new Map<string, { station: string; mismatch: boolean }>()
 
     // Collect last-arrival and first-departure per registration per day
-    const lastArr = new Map<string, { station: string; staMin: number }>()
-    const firstDep = new Map<string, { station: string; stdMin: number }>()
+    // Track whether the flight is DB-assigned
+    const lastArr = new Map<string, { station: string; staMin: number; isDbAssigned: boolean }>()
+    const firstDep = new Map<string, { station: string; stdMin: number; isDbAssigned: boolean }>()
 
     for (const ef of assignedFlights) {
       const reg = ef.aircraftReg || ef.assignedReg
@@ -589,12 +756,12 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
 
       const prev = lastArr.get(key)
       if (!prev || ef.staMinutes > prev.staMin) {
-        lastArr.set(key, { station: ef.arrStation, staMin: ef.staMinutes })
+        lastArr.set(key, { station: ef.arrStation, staMin: ef.staMinutes, isDbAssigned: !!ef.aircraftReg })
       }
 
       const prevDep = firstDep.get(key)
       if (!prevDep || ef.stdMinutes < prevDep.stdMin) {
-        firstDep.set(key, { station: ef.depStation, stdMin: ef.stdMinutes })
+        firstDep.set(key, { station: ef.depStation, stdMin: ef.stdMinutes, isDbAssigned: !!ef.aircraftReg })
       }
     }
 
@@ -604,7 +771,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
       const nextDate = addDays(new Date(dateStr + 'T00:00:00'), 1)
       const nextKey = `${reg}|${formatISO(nextDate)}`
       const nextDep = firstDep.get(nextKey)
-      const mismatch = nextDep ? nextDep.station !== val.station : false
+      // Only flag mismatch if both the arriving and departing flights are DB-assigned
+      const mismatch = nextDep && val.isDbAssigned && nextDep.isDbAssigned
+        ? nextDep.station !== val.station
+        : false
       result.set(key, { station: val.station, mismatch })
     })
 
@@ -754,12 +924,20 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
       return { ...f, tatToNext, routeBlockStart }
     })
 
+    // Check if any flight in the rotation is auto-assigned (not DB-assigned)
+    const hasAutoAssigned = rotation.some(f => !f.aircraftReg)
+
     // Detect conflicts — only between route blocks, not within
+    // Only flag conflicts between DB-assigned flight pairs
     const conflicts: ConflictInfo[] = []
     for (let i = 0; i < rotation.length - 1; i++) {
       const curr = rotation[i]
       const next = rotation[i + 1]
       const sameRoute = curr.routeId && next.routeId && curr.routeId === next.routeId
+      const bothDbAssigned = !!curr.aircraftReg && !!next.aircraftReg
+
+      // Only report conflicts between DB-assigned pairs
+      if (!bothDbAssigned) continue
 
       // Time overlap: next STD < current STA (always flag, even within route)
       if (next.stdMinutes < curr.staMinutes) {
@@ -806,6 +984,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
       homeBase,
       rotation,
       conflicts,
+      hasAutoAssigned,
       totalBlock,
       flightCount: dayFlights.length,
       targetHours,
@@ -929,8 +1108,31 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
     | { type: 'aircraft'; reg: AircraftWithRelations; cabin: string }
     | { type: 'overflow'; icaoType: string; overflowCount: number }
 
+  // Utilization per registration (for type_util sort)
+  const utilByReg = useMemo(() => {
+    const map = new Map<string, number>()
+    flightsByReg.forEach((flights, reg) => {
+      let totalMin = 0
+      for (const f of flights) totalMin += f.blockMinutes
+      map.set(reg, totalMin)
+    })
+    return map
+  }, [flightsByReg])
+
   const rows = useMemo<RowItem[]>(() => {
+    const sortOrder = ganttSettings.fleetSortOrder ?? 'type_reg'
     const result: RowItem[] = []
+
+    if (sortOrder === 'reg_only') {
+      // Flat list: all registrations sorted alphabetically, no groups
+      const allRegs = groups.flatMap(g => g.registrations)
+      allRegs.sort((a, b) => a.registration.localeCompare(b.registration))
+      for (const reg of allRegs) {
+        result.push({ type: 'aircraft', reg, cabin: getCabinString(reg) })
+      }
+      return result
+    }
+
     for (const g of groups) {
       const overflowFlights = overflowByType.get(g.icaoType)
       const overflowCount = overflowFlights?.length || 0
@@ -941,7 +1143,12 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
         count: g.registrations.length + (overflowCount > 0 ? 1 : 0),
       })
       if (!collapsedTypes.has(g.icaoType)) {
-        for (const reg of g.registrations) {
+        // Sort registrations within group
+        const sortedRegs = [...g.registrations]
+        if (sortOrder === 'type_util') {
+          sortedRegs.sort((a, b) => (utilByReg.get(b.registration) ?? 0) - (utilByReg.get(a.registration) ?? 0))
+        }
+        for (const reg of sortedRegs) {
           result.push({
             type: 'aircraft',
             reg,
@@ -960,7 +1167,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
     }
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, collapsedTypes, seatingByAircraft, acTypeMap, overflowByType])
+  }, [groups, collapsedTypes, seatingByAircraft, acTypeMap, overflowByType, ganttSettings.fleetSortOrder, utilByReg])
 
   const bodyHeight = rows.reduce(
     (h, r) => h + (r.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT), 0
@@ -989,13 +1196,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
     const dayOffset = Math.floor(
       (ef.date.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
     )
-    return (dayOffset * 1440 + ef.stdMinutes) * zoomConfig.pixelsPerHour / 60
+    return (dayOffset * 1440 + ef.stdMinutes) * pixelsPerHour / 60
   }
 
   const getFlightWidth = (ef: ExpandedFlight): number => {
     // Use staMinutes - stdMinutes (already overnight-adjusted) for accurate width
     const durationMinutes = ef.staMinutes - ef.stdMinutes
-    return Math.max(2, durationMinutes * zoomConfig.pixelsPerHour / 60)
+    return Math.max(2, durationMinutes * pixelsPerHour / 60)
   }
 
   // ─── TAT calculation between two consecutive flights ──────────────
@@ -1119,7 +1326,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
             </div>
           </div>
 
-          {/* Zoom pills + Settings gear */}
+          {/* Zoom pills + Row height zoom + Settings gear */}
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5">
               {ZOOM_GROUP_DAYS.map((z) => (
@@ -1149,6 +1356,24 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                   {z}
                 </button>
               ))}
+              {/* Vertical divider + Row height zoom */}
+              <div className="w-px h-4 bg-border/60 mx-0.5" />
+              <button
+                onClick={zoomRowOut}
+                disabled={rowHeightLevel === 0}
+                className="w-[26px] h-[26px] flex items-center justify-center rounded-[7px] border border-border/60 text-muted-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-default"
+                title="Decrease row height"
+              >
+                <span className="text-xs font-bold leading-none">−</span>
+              </button>
+              <button
+                onClick={zoomRowIn}
+                disabled={rowHeightLevel === ROW_HEIGHT_LEVELS.length - 1}
+                className="w-[26px] h-[26px] flex items-center justify-center rounded-[7px] border border-border/60 text-muted-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-default"
+                title="Increase row height"
+              >
+                <span className="text-xs font-bold leading-none">+</span>
+              </button>
             </div>
             <button
               onClick={() => setSettingsPanelOpen(v => !v)}
@@ -1355,58 +1580,126 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
         </div>
 
         {/* ── CENTER PANEL ───────────────────────────────────────── */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* Timeline header (36px) */}
-          <div
-            ref={headerRef}
-            className="h-9 shrink-0 border-b overflow-hidden"
-          >
-            <div className="relative" style={{ width: totalWidth, height: 36 }}>
-              {Array.from({ length: zoomConfig.days }, (_, d) => {
-                const date = addDays(startDate, d)
-                const x = d * 24 * zoomConfig.pixelsPerHour
-                return (
-                  <div key={d}>
-                    <div
-                      className="absolute top-0 text-[9px] text-muted-foreground font-medium pl-1 select-none"
-                      style={{ left: x }}
-                    >
-                      {formatDateShort(date)}
-                    </div>
-                    <div
-                      className="absolute top-0 bottom-0 border-l border-black/[0.06] dark:border-white/[0.06]"
-                      style={{ left: x }}
-                    />
-                    {zoomConfig.hoursPerTick <= 12 &&
-                      Array.from(
-                        { length: Math.floor(24 / zoomConfig.hoursPerTick) },
-                        (_, h) => {
-                          const hour = h * zoomConfig.hoursPerTick
-                          if (hour === 0) return null
-                          const hx = x + hour * zoomConfig.pixelsPerHour
-                          return (
-                            <div key={`${d}-${h}`}>
-                              <div
-                                className="absolute bottom-0 border-l border-black/[0.03] dark:border-white/[0.03]"
-                                style={{ left: hx, height: 8 }}
-                              />
-                              {zoomConfig.pixelsPerHour >= 8 && (
-                                <div
-                                  className="absolute bottom-1 text-[7px] text-muted-foreground/50 pl-0.5 select-none"
-                                  style={{ left: hx }}
-                                >
-                                  {String(hour).padStart(2, '0')}
+        <div ref={centerPanelRef} className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Timeline header */}
+          {(() => {
+            const timeMode = ganttSettings.timeDisplay ?? 'dual'
+            const tzOffset = ganttSettings.baseTimezoneOffset ?? 7
+            const headerH = timeMode === 'dual' ? 48 : 36
+            return (
+              <div
+                ref={headerRef}
+                className="shrink-0 border-b overflow-hidden"
+                style={{ height: headerH }}
+              >
+                <div className="relative" style={{ width: totalWidth, height: headerH }}>
+                  {Array.from({ length: zoomConfig.days }, (_, d) => {
+                    const date = addDays(startDate, d)
+                    const x = d * 24 * pixelsPerHour
+                    const localDate = timeMode !== 'utc' ? getLocalDate(date, tzOffset) : date
+                    const displayDate = timeMode === 'utc' ? date : localDate
+                    const wkend = timeMode === 'utc' ? isWeekend(date) : isLocalWeekend(date, tzOffset)
+                    const weekendHighlights = ganttSettings.display?.weekendHighlights ?? true
+
+                    return (
+                      <div key={d}>
+                        {/* Day label */}
+                        <div
+                          className="absolute top-0 text-[9px] font-medium pl-1 select-none"
+                          style={{
+                            left: x,
+                            color: wkend && weekendHighlights ? '#ffffff' : undefined,
+                            background: wkend && weekendHighlights ? '#991B1B' : undefined,
+                            borderRadius: wkend && weekendHighlights ? '0 0 3px 0' : undefined,
+                            fontWeight: wkend && weekendHighlights ? 700 : 500,
+                            padding: wkend && weekendHighlights ? '0 4px 1px 4px' : undefined,
+                            zIndex: 2,
+                          }}
+                        >
+                          {formatDateShort(displayDate)}
+                        </div>
+                        {/* Day separator line */}
+                        <div
+                          className="absolute top-0 bottom-0 border-l border-black/[0.06] dark:border-white/[0.06]"
+                          style={{ left: x }}
+                        />
+                        {/* Hour ticks */}
+                        {hoursPerTick <= 12 &&
+                          Array.from(
+                            { length: Math.floor(24 / hoursPerTick) },
+                            (_, h) => {
+                              const hour = h * hoursPerTick
+                              if (hour === 0) return null
+                              const hx = x + hour * pixelsPerHour
+                              const localHour = utcToLocal(hour, tzOffset)
+                              const isWkendHour = wkend && weekendHighlights
+
+                              return (
+                                <div key={`${d}-${h}`}>
+                                  <div
+                                    className="absolute bottom-0 border-l border-black/[0.03] dark:border-white/[0.03]"
+                                    style={{ left: hx, height: timeMode === 'dual' ? 12 : 8 }}
+                                  />
+                                  {pixelsPerHour >= 8 && (
+                                    timeMode === 'dual' ? (
+                                      <div className="absolute select-none" style={{ left: hx }}>
+                                        {/* UTC row (top) */}
+                                        <div
+                                          className="absolute pl-0.5"
+                                          style={{
+                                            top: 14,
+                                            fontSize: '7px',
+                                            color: isWkendHour
+                                              ? (isDark ? '#FCA5A5' : '#991B1B')
+                                              : 'var(--muted-foreground-raw, rgba(113,113,122,0.5))',
+                                            opacity: 0.6,
+                                          }}
+                                        >
+                                          {String(hour).padStart(2, '0')}Z
+                                        </div>
+                                        {/* Local row (bottom) */}
+                                        <div
+                                          className="absolute pl-0.5"
+                                          style={{
+                                            top: 26,
+                                            fontSize: '8px',
+                                            fontWeight: 600,
+                                            color: isWkendHour
+                                              ? (isDark ? '#FCA5A5' : '#991B1B')
+                                              : undefined,
+                                          }}
+                                        >
+                                          {String(localHour).padStart(2, '0')}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div
+                                        className="absolute bottom-1 text-[7px] text-muted-foreground/50 pl-0.5 select-none"
+                                        style={{
+                                          left: hx,
+                                          color: isWkendHour
+                                            ? (isDark ? '#FCA5A5' : '#991B1B')
+                                            : undefined,
+                                        }}
+                                      >
+                                        {timeMode === 'utc'
+                                          ? `${String(hour).padStart(2, '0')}Z`
+                                          : String(localHour).padStart(2, '0')
+                                        }
+                                      </div>
+                                    )
+                                  )}
                                 </div>
-                              )}
-                            </div>
-                          )
-                        }
-                      )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+                              )
+                            }
+                          )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Histogram (34px) or collapsed spacer */}
           {(ganttSettings.display?.histogram ?? true) ? (
@@ -1530,44 +1823,53 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
           >
             <div className="relative" style={{ width: totalWidth, height: bodyHeight }}>
               {/* Background: midnight lines, weekend tint, hour grid */}
-              {Array.from({ length: zoomConfig.days }, (_, d) => {
-                const date = addDays(startDate, d)
-                const x = d * 24 * zoomConfig.pixelsPerHour
-                const dayWidth = 24 * zoomConfig.pixelsPerHour
-                const weekend = isWeekend(date)
-                return (
-                  <div key={`bg-${d}`}>
-                    {weekend && (
-                      <div
-                        className="absolute top-0 bg-black/[0.012] dark:bg-white/[0.012]"
-                        style={{ left: x, width: dayWidth, height: bodyHeight }}
-                      />
-                    )}
-                    <div
-                      className="absolute top-0 border-l border-black/[0.06] dark:border-white/[0.06]"
-                      style={{ left: x, height: bodyHeight }}
-                    />
-                    {zoomConfig.hoursPerTick <= 6 &&
-                      Array.from(
-                        { length: Math.floor(24 / zoomConfig.hoursPerTick) },
-                        (_, h) => {
-                          const hour = h * zoomConfig.hoursPerTick
-                          if (hour === 0) return null
-                          return (
-                            <div
-                              key={`grid-${d}-${h}`}
-                              className="absolute top-0 border-l border-black/[0.02] dark:border-white/[0.02]"
-                              style={{
-                                left: x + hour * zoomConfig.pixelsPerHour,
-                                height: bodyHeight,
-                              }}
-                            />
-                          )
-                        }
+              {(() => {
+                const tzOff = ganttSettings.baseTimezoneOffset ?? 7
+                const wkHighlights = ganttSettings.display?.weekendHighlights ?? true
+                return Array.from({ length: zoomConfig.days }, (_, d) => {
+                  const date = addDays(startDate, d)
+                  const x = d * 24 * pixelsPerHour
+                  const dayWidth = 24 * pixelsPerHour
+                  const weekend = isLocalWeekend(date, tzOff)
+                  const isSaturday = getLocalDate(date, tzOff).getDay() === 6
+                  return (
+                    <div key={`bg-${d}`}>
+                      {weekend && wkHighlights && (
+                        <div
+                          className="absolute top-0"
+                          style={{
+                            left: x, width: dayWidth, height: bodyHeight,
+                            background: isDark ? 'rgba(153, 27, 27, 0.15)' : '#FEE2E2',
+                            borderLeft: isSaturday ? '2px solid #991B1B' : undefined,
+                          }}
+                        />
                       )}
-                  </div>
-                )
-              })}
+                      <div
+                        className="absolute top-0 border-l border-black/[0.06] dark:border-white/[0.06]"
+                        style={{ left: x, height: bodyHeight }}
+                      />
+                      {hoursPerTick <= 6 &&
+                        Array.from(
+                          { length: Math.floor(24 / hoursPerTick) },
+                          (_, h) => {
+                            const hour = h * hoursPerTick
+                            if (hour === 0) return null
+                            return (
+                              <div
+                                key={`grid-${d}-${h}`}
+                                className="absolute top-0 border-l border-black/[0.02] dark:border-white/[0.02]"
+                                style={{
+                                  left: x + hour * pixelsPerHour,
+                                  height: bodyHeight,
+                                }}
+                              />
+                            )
+                          }
+                        )}
+                    </div>
+                  )
+                })
+              })()}
 
               {/* Flight bars + TAT labels */}
               {(() => {
@@ -1585,39 +1887,34 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                     const isPublished = ef.status === 'published'
                     const isDbAssigned = !!ef.aircraftReg
 
-                    // Assignment-based colors via CSS vars
-                    const barBg = isDbAssigned
-                      ? 'var(--gantt-bar-bg-assigned)'
-                      : 'var(--gantt-bar-bg-unassigned)'
-                    const barText = isDbAssigned
-                      ? 'var(--gantt-bar-text-assigned)'
-                      : isPublished
-                        ? 'var(--gantt-bar-text-pub)'
-                        : 'var(--gantt-bar-text-draft)'
+                    // Color mode
+                    const barColor = getBarColor(ef, ganttSettings.colorMode, ganttSettings, isDbAssigned, isDark)
+                    const barBg = barColor.bg
+                    const barText = barColor.useVars
+                      ? (isDbAssigned
+                          ? 'var(--gantt-bar-text-assigned)'
+                          : isPublished
+                            ? 'var(--gantt-bar-text-pub)'
+                            : 'var(--gantt-bar-text-draft)')
+                      : barColor.text
 
-                    // Adaptive content based on bar label format setting
+                    // Adaptive content based on bar label checkboxes
+                    const bl = ganttSettings.barLabels
                     let content: React.ReactNode = null
-                    const fmt = ganttSettings.barLabelFormat ?? 'full'
+                    const buildParts = (): string[] => {
+                      const parts = [num]
+                      if (bl.sector) parts.push(`${ef.depStation}-${ef.arrStation}`)
+                      if (bl.times) parts.push(`${ef.stdLocal}-${ef.staLocal}`)
+                      if (bl.blockTime) parts.push(formatBlockTimeBH(ef.blockMinutes))
+                      return parts
+                    }
                     if (w >= 105) {
-                      if (fmt === 'full') {
-                        content = <span className="truncate">{num} · {ef.depStation} → {ef.arrStation} · {ef.stdLocal}-{ef.staLocal}</span>
-                      } else if (fmt === 'number_sector') {
-                        content = <span className="truncate">{num} · {ef.depStation}-{ef.arrStation}</span>
-                      } else if (fmt === 'number') {
-                        content = <span className="truncate">{num}</span>
-                      } else {
-                        content = <span className="truncate">{ef.depStation} → {ef.arrStation}</span>
-                      }
+                      content = <span className="truncate">{buildParts().join(' \u00B7 ')}</span>
                     } else if (w >= 50) {
-                      if (fmt === 'sector') {
-                        content = <span className="truncate">{ef.depStation}-{ef.arrStation}</span>
-                      } else if (fmt === 'number') {
-                        content = <span className="truncate">{num}</span>
-                      } else {
-                        content = <span className="truncate">{num} · {ef.depStation}-{ef.arrStation}</span>
-                      }
+                      const parts = buildParts()
+                      content = <span className="truncate">{parts.length > 1 ? `${parts[0]} \u00B7 ${parts[1]}` : parts[0]}</span>
                     } else if (w >= 22) {
-                      content = <span className="truncate">{fmt === 'sector' ? `${ef.depStation}` : num}</span>
+                      content = <span className="truncate">{num}</span>
                     }
 
                     // TAT gap label
@@ -1630,14 +1927,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                           const gapX = x + w
                           const gapW = getFlightX(next) - gapX
                           if (gapW >= 18) {
+                            // Only show red warning color if both flights are DB-assigned
+                            const bothDbAssigned = !!ef.aircraftReg && !!next.aircraftReg
+                            const showWarning = bothDbAssigned && !tat.ok
                             tatLabel = (
                               <div
                                 key={`tat-${ef.id}`}
                                 className="absolute flex items-center justify-center pointer-events-none select-none"
                                 style={{ left: gapX, width: gapW, top: 0, height: ROW_HEIGHT }}
                               >
-                                <span className="font-semibold" style={{ fontSize: '7.5px', color: tat.ok ? undefined : '#ef4444' }}>
-                                  <span className={tat.ok ? 'text-muted-foreground' : ''}>{tat.gapMinutes}m</span>
+                                <span className="font-semibold" style={{ fontSize: '7.5px', color: showWarning ? '#ef4444' : undefined }}>
+                                  <span className={showWarning ? '' : 'text-muted-foreground'}>{tat.gapMinutes}m</span>
                                 </span>
                               </div>
                             )
@@ -1726,7 +2026,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                                   : '1.5px solid var(--gantt-bar-border-pub)',
                               fontStyle: isPublished ? 'normal' : 'italic',
                               color: barText,
-                              fontSize: '9px',
+                              fontSize: BAR_FONT + 'px',
                               boxShadow: barIsDragged
                                 ? '0 8px 24px rgba(0,0,0,0.15)'
                                 : isSelected
@@ -1829,7 +2129,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                             const eod = eodLocations.get(`${regKey}|${dateKey}`)
                             const station = eod?.station ?? base
                             if (!station) return null
-                            const dayEndX = (d + 1) * 24 * zoomConfig.pixelsPerHour
+                            const dayEndX = (d + 1) * 24 * pixelsPerHour
                             const mismatch = eod?.mismatch ?? false
                             return (
                               <div
@@ -1859,7 +2159,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                           }
                           const station = lastStation ?? base
                           if (!station) return null
-                          const rightEdgeX = zoomConfig.days * 24 * zoomConfig.pixelsPerHour
+                          const rightEdgeX = zoomConfig.days * 24 * pixelsPerHour
                           return (
                             <div
                               key="eod-end"
@@ -1963,6 +2263,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                     <div className="text-[10px] font-medium text-muted-foreground mb-1.5">
                       Daily Rotation · {panelData.dateStr}
                     </div>
+                    {panelData.hasAutoAssigned && (
+                      <div className="text-[10px] italic text-muted-foreground/60 mb-1.5">
+                        Auto-assigned rotation preview
+                      </div>
+                    )}
                     <div className="space-y-0">
                       {panelData.rotation.map((rf, i) => {
                         const isSel = rf.id === selectedFlight.id
@@ -2010,8 +2315,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
 
                             {/* TAT indicator between flights */}
                             {rf.tatToNext && nextFlight && (() => {
-                              // Station mismatch — only show between different routes
-                              if (!sameRouteAsNext && rf.arrStation !== nextFlight.depStation) {
+                              const bothDbAssigned = !!rf.aircraftReg && !!nextFlight.aircraftReg
+                              // Station mismatch — only warn between DB-assigned different routes
+                              if (bothDbAssigned && !sameRouteAsNext && rf.arrStation !== nextFlight.depStation) {
                                 return (
                                   <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-amber-500/10 text-amber-700 dark:text-amber-400">
                                     <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
@@ -2019,8 +2325,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                                   </div>
                                 )
                               }
-                              // Insufficient TAT — only show between different routes
-                              if (!sameRouteAsNext && !rf.tatToNext!.ok) {
+                              // Insufficient TAT — only warn between DB-assigned different routes
+                              if (bothDbAssigned && !sameRouteAsNext && !rf.tatToNext!.ok) {
                                 return (
                                   <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-red-500/10 text-red-700 dark:text-red-400">
                                     <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
@@ -2028,7 +2334,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                                   </div>
                                 )
                               }
-                              // Normal TAT
+                              // Informational TAT duration (always shown, no warning styling)
                               return (
                                 <div className="mx-2 my-0.5 text-[8px] text-muted-foreground/60 text-center">
                                   TAT: {rf.tatToNext!.gapMinutes}min
@@ -2038,7 +2344,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
 
                             {/* Station mismatch without TAT (when calcTat returns null but stations differ) */}
                             {!rf.tatToNext && nextFlight && !sameRouteAsNext && (() => {
-                              if (rf.arrStation !== nextFlight.depStation) {
+                              const bothDbAssigned = !!rf.aircraftReg && !!nextFlight.aircraftReg
+                              if (bothDbAssigned && rf.arrStation !== nextFlight.depStation) {
                                 return (
                                   <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-amber-500/10 text-amber-700 dark:text-amber-400">
                                     <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
@@ -2046,7 +2353,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
                                   </div>
                                 )
                               }
-                              // Gap info
+                              // Gap info (informational)
                               const gap = nextFlight.stdMinutes - rf.staMinutes
                               if (gap > 0) {
                                 return (
@@ -2385,10 +2692,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
           seatingConfigs={seatingConfigs}
           flightsByReg={flightsByReg}
           acTypeByIcao={acTypeByIcao}
-          onAssigned={(flightIds, registration) => {
+          onAssigned={(items, registration) => {
             setAssignModalOpen(false)
             setSelectedFlights(new Set())
-            applyOptimisticAssign(flightIds, registration)
+            applyOptimisticAssign(items, registration)
             refreshFlights()
           }}
         />
@@ -2399,11 +2706,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
         open={unassignModalOpen}
         onClose={() => setUnassignModalOpen(false)}
         selectedFlightObjects={selectedFlightObjects}
-        onConfirm={async (finalIds) => {
-          const res = await unassignFlightsTail(finalIds)
+        onConfirm={async (finalItems) => {
+          const res = await unassignFlightsTail(finalItems)
           if (res.error) { toast.error(friendlyError(res.error)); return }
-          toast.success(`${finalIds.length} flight${finalIds.length > 1 ? 's' : ''} unassigned`)
-          applyOptimisticUnassign(finalIds)
+          toast.success(`${finalItems.length} flight${finalItems.length > 1 ? 's' : ''} unassigned`)
+          applyOptimisticUnassign(finalItems)
           setUnassignModalOpen(false)
           setSelectedFlights(new Set())
           refreshFlights()
@@ -2457,15 +2764,20 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
         />
       )}
 
-      {/* ── SETTINGS PANEL (slide-out drawer) ────────────────── */}
+      {/* ── SETTINGS MODAL ──────────────────────────────────── */}
       <GanttSettingsPanel
         open={settingsPanelOpen}
         onClose={() => setSettingsPanelOpen(false)}
         settings={ganttSettings}
         aircraftTypes={aircraftTypes}
+        airports={airports}
+        serviceTypes={serviceTypes}
         saveStatus={saveStatus}
         onUpdateDisplay={updateDisplay}
-        onUpdateBarColors={updateBarColors}
+        onUpdateColorAssignment={updateColorAssignment}
+        onUpdateColorAcType={updateColorAcType}
+        onUpdateColorServiceType={updateColorServiceType}
+        onUpdateTooltip={updateTooltip}
         onUpdateSettings={updateGanttSettings}
         onUpdateUtilTarget={updateUtilTarget}
         onResetUtilTarget={resetUtilTarget}
@@ -2482,6 +2794,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs }: Gan
           cabinConfig={hoveredTooltipInfo.cabin}
           regCode={hoveredTooltipInfo.regCode}
           cursorRef={tooltipPosRef}
+          tooltipSettings={ganttSettings.tooltip}
         />
       )}
 
@@ -2497,12 +2810,14 @@ function FlightTooltip({
   cabinConfig,
   regCode,
   cursorRef,
+  tooltipSettings,
 }: {
   flight: ExpandedFlight
   tat: TatInfo | null
   cabinConfig: string
   regCode: string | null
   cursorRef: React.MutableRefObject<{ x: number; y: number }>
+  tooltipSettings: GanttSettingsData['tooltip']
 }) {
   const isPublished = flight.status === 'published'
   const dateStr = flight.date.toLocaleDateString('en-GB', {
@@ -2587,75 +2902,89 @@ function FlightTooltip({
         }}
       >
         {/* Header: badge + status */}
-        <div className="flex items-center justify-between">
-          <span
-            className="font-bold text-xs px-1.5 py-0.5 rounded"
-            style={{
-              background: isPublished
-                ? 'color-mix(in srgb, var(--gantt-bar-border-pub) 12%, transparent)'
-                : 'color-mix(in srgb, var(--gantt-bar-border-draft) 12%, transparent)',
-              color: isPublished ? 'var(--gantt-bar-border-pub)' : 'var(--gantt-bar-text-draft)',
-            }}
-          >
-            {flight.flightNumber}
-          </span>
-          <span
-            className="text-[9px] font-medium uppercase tracking-wider"
-            style={{ color: isPublished ? '#16a34a' : '#d97706' }}
-          >
-            {flight.status}
-          </span>
-        </div>
+        {tooltipSettings.flightNumber && (
+          <div className="flex items-center justify-between">
+            <span
+              className="font-bold text-xs px-1.5 py-0.5 rounded"
+              style={{
+                background: isPublished
+                  ? 'color-mix(in srgb, var(--gantt-bar-border-pub) 12%, transparent)'
+                  : 'color-mix(in srgb, var(--gantt-bar-border-draft) 12%, transparent)',
+                color: isPublished ? 'var(--gantt-bar-border-pub)' : 'var(--gantt-bar-text-draft)',
+              }}
+            >
+              {flight.flightNumber}
+            </span>
+            <span
+              className="text-[9px] font-medium uppercase tracking-wider"
+              style={{ color: isPublished ? '#16a34a' : '#d97706' }}
+            >
+              {flight.status}
+            </span>
+          </div>
+        )}
 
         {/* Route */}
-        <div className="flex items-center justify-between">
-          <div className="text-center">
-            <div className="text-sm font-bold" style={{ color: 'var(--gantt-tooltip-heading)' }}>
-              {flight.depStation}
+        {tooltipSettings.stations && (
+          <div className="flex items-center justify-between">
+            <div className="text-center">
+              <div className="text-sm font-bold" style={{ color: 'var(--gantt-tooltip-heading)' }}>
+                {flight.depStation}
+              </div>
+              {tooltipSettings.times && (
+                <div className="text-[9px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
+                  {flight.stdLocal}
+                </div>
+              )}
             </div>
-            <div className="text-[9px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
-              {flight.stdLocal}
+            <div className="flex-1 flex items-center justify-center px-2">
+              <div className="flex-1 h-px bg-border" />
+              <span className="px-1.5 text-[9px]" style={{ color: 'var(--gantt-tooltip-muted)' }}>→</span>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+            <div className="text-center">
+              <div className="text-sm font-bold" style={{ color: 'var(--gantt-tooltip-heading)' }}>
+                {flight.arrStation}
+              </div>
+              {tooltipSettings.times && (
+                <div className="text-[9px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
+                  {flight.staLocal}
+                </div>
+              )}
             </div>
           </div>
-          <div className="flex-1 flex items-center justify-center px-2">
-            <div className="flex-1 h-px bg-border" />
-            <span className="px-1.5 text-[9px]" style={{ color: 'var(--gantt-tooltip-muted)' }}>→</span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-          <div className="text-center">
-            <div className="text-sm font-bold" style={{ color: 'var(--gantt-tooltip-heading)' }}>
-              {flight.arrStation}
-            </div>
-            <div className="text-[9px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
-              {flight.staLocal}
-            </div>
-          </div>
-        </div>
+        )}
 
         {/* Block time */}
-        <div className="text-center text-[10px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
-          {formatBlockTime(flight.blockMinutes)}
-        </div>
+        {tooltipSettings.blockTime && (
+          <div className="text-center text-[10px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
+            {formatBlockTime(flight.blockMinutes)}
+          </div>
+        )}
 
         {/* AC info + date */}
-        <div className="flex items-center justify-between pt-1 border-t border-border/30">
-          <div className="text-[10px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
-            {flight.aircraftTypeIcao || '—'} · {regCode || <span style={{ color: 'var(--gantt-tooltip-muted)', fontStyle: 'italic' }}>Tail not assigned</span>}
-          </div>
-          <div className="text-right">
-            <div className="text-[10px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
-              {dateStr}
-            </div>
-            {cabinConfig && (
-              <div className="text-[9px]" style={{ color: 'var(--gantt-tooltip-muted)' }}>
-                {cabinConfig}
+        {(tooltipSettings.aircraft || tooltipSettings.cabin) && (
+          <div className="flex items-center justify-between pt-1 border-t border-border/30">
+            {tooltipSettings.aircraft && (
+              <div className="text-[10px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
+                {flight.aircraftTypeIcao || '—'} · {regCode || <span style={{ color: 'var(--gantt-tooltip-muted)', fontStyle: 'italic' }}>Tail not assigned</span>}
               </div>
             )}
+            <div className="text-right">
+              <div className="text-[10px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
+                {dateStr}
+              </div>
+              {tooltipSettings.cabin && cabinConfig && (
+                <div className="text-[9px]" style={{ color: 'var(--gantt-tooltip-muted)' }}>
+                  {cabinConfig}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* TAT info */}
-        {tat && (
+        {tooltipSettings.tat && tat && (
           <div className="flex items-center gap-1.5 pt-1 border-t border-border/30">
             <Check
               className="h-3 w-3 shrink-0"
@@ -2752,7 +3081,7 @@ function UnassignModal({
   open: boolean
   onClose: () => void
   selectedFlightObjects: ExpandedFlight[]
-  onConfirm: (flightIds: string[]) => Promise<void>
+  onConfirm: (items: FlightDateItem[]) => Promise<void>
 }) {
   const [unassigning, setUnassigning] = useState(false)
 
@@ -2766,7 +3095,10 @@ function UnassignModal({
     if (unassigning) return
     setUnassigning(true)
     try {
-      await onConfirm(assignedSelected.map(f => f.flightId))
+      await onConfirm(assignedSelected.map(f => ({
+        flightId: f.flightId,
+        flightDate: formatISO(f.date),
+      })))
     } finally {
       setUnassigning(false)
     }
@@ -2826,14 +3158,13 @@ interface AssignModalProps {
   seatingConfigs: AircraftSeatingConfig[]
   flightsByReg: Map<string, ExpandedFlight[]>
   acTypeByIcao: Map<string, AircraftType>
-  onAssigned: (flightIds: string[], registration: string) => void
+  onAssigned: (items: FlightDateItem[], registration: string) => void
 }
 
 function AssignToAircraftModal({
   open, onClose, selectedFlights, registrations,
   aircraftTypes, seatingConfigs, flightsByReg, acTypeByIcao, onAssigned,
 }: AssignModalProps) {
-  const [search, setSearch] = useState('')
   const [selectedReg, setSelectedReg] = useState<string | null>(null)
   const [assigning, setAssigning] = useState(false)
   const [warningState, setWarningState] = useState<'none' | 'category' | 'family'>('none')
@@ -2841,7 +3172,6 @@ function AssignToAircraftModal({
   // Reset state when opened
   useEffect(() => {
     if (open) {
-      setSearch('')
       setSelectedReg(null)
       setAssigning(false)
       setWarningState('none')
@@ -2853,7 +3183,7 @@ function AssignToAircraftModal({
   const primaryIcao = flightIcaoTypes[0] || null
   const primaryAcType = primaryIcao ? acTypeByIcao.get(primaryIcao) : undefined
 
-  // Group registrations: same type, same family, other
+  // Group registrations: same type, same family, other (keyed by family/type)
   const grouped = useMemo(() => {
     const sameType: AircraftWithRelations[] = []
     const sameFamily: AircraftWithRelations[] = []
@@ -2864,31 +3194,25 @@ function AssignToAircraftModal({
     for (const reg of registrations) {
       if (reg.status !== 'active' && reg.status !== 'operational') continue
       const regIcao = reg.aircraft_types?.icao_type || ''
-      const regFullType = regIcao ? acTypeByIcao.get(regIcao) : undefined
-      const regFamily = regFullType?.family || null
-
-      // Filter by search
-      if (search) {
-        const q = search.toLowerCase()
-        const matchReg = reg.registration.toLowerCase().includes(q)
-        const matchType = regIcao.toLowerCase().includes(q)
-        if (!matchReg && !matchType) continue
-      }
 
       if (primaryIcao && regIcao === primaryIcao) {
         sameType.push(reg)
-      } else if (primaryFamily && regFamily === primaryFamily) {
-        sameFamily.push(reg)
       } else {
-        const key = regFamily || regIcao || 'Other'
-        const list = other.get(key) || []
-        list.push(reg)
-        other.set(key, list)
+        const regFullType = regIcao ? acTypeByIcao.get(regIcao) : undefined
+        const regFamily = regFullType?.family || null
+        if (primaryFamily && regFamily === primaryFamily) {
+          sameFamily.push(reg)
+        } else {
+          const key = regFamily || regIcao || 'Other'
+          const list = other.get(key) || []
+          list.push(reg)
+          other.set(key, list)
+        }
       }
     }
 
     return { sameType, sameFamily, other }
-  }, [registrations, primaryIcao, primaryAcType, search, acTypeByIcao])
+  }, [registrations, primaryIcao, primaryAcType, acTypeByIcao])
 
   // Get cabin config for a reg
   const getCabin = (reg: AircraftWithRelations) => {
@@ -2900,7 +3224,7 @@ function AssignToAircraftModal({
     return ''
   }
 
-  // Get flight count for this registration today
+  // Get flight count for this registration
   const getRegFlightCount = (registration: string) => {
     return (flightsByReg.get(registration) || []).length
   }
@@ -2915,6 +3239,34 @@ function AssignToAircraftModal({
     const isWide = acType?.category === 'widebody'
     const target = isWide ? 14 : 12
     return Math.round((totalBlock / 60 / target) * 100)
+  }
+
+  // Build dropdown option label for a registration
+  const buildRegLabel = (reg: AircraftWithRelations) => {
+    const cabin = getCabin(reg)
+    const flts = getRegFlightCount(reg.registration)
+    const util = getRegUtil(reg.registration)
+    return `${reg.registration}${cabin ? ` ${cabin}` : ''}  —  ${flts} flt${flts !== 1 ? 's' : ''}  ${util}%`
+  }
+
+  // Render a dropdown for a group of registrations
+  const renderGroupDropdown = (regs: AircraftWithRelations[], groupKey: string) => {
+    // Check if selectedReg is within this group
+    const currentInGroup = regs.find(r => r.registration === selectedReg)
+    return (
+      <select
+        value={currentInGroup ? selectedReg! : ''}
+        onChange={e => { setSelectedReg(e.target.value || null); setWarningState('none') }}
+        className="w-full px-3 py-2 rounded-lg text-[11px] glass outline-none focus:ring-2 focus:ring-primary/30 bg-background border border-border"
+      >
+        <option value="">Select registration...</option>
+        {regs.map(reg => (
+          <option key={reg.id} value={reg.registration}>
+            {buildRegLabel(reg)}
+          </option>
+        ))}
+      </select>
+    )
   }
 
   // On assign click
@@ -2938,58 +3290,41 @@ function AssignToAircraftModal({
     }
 
     setAssigning(true)
-    const flightIds = selectedFlights.map(f => f.flightId)
-    const res = await assignFlightsToAircraft(flightIds, selectedReg)
+    const items: FlightDateItem[] = selectedFlights.map(f => ({
+      flightId: f.flightId,
+      flightDate: formatISO(f.date),
+    }))
+    const res = await assignFlightsToAircraft(items, selectedReg)
     if (res.error) {
       toast.error(friendlyError(res.error))
       setAssigning(false)
       return
     }
-    toast.success(`${flightIds.length} flight${flightIds.length > 1 ? 's' : ''} assigned to ${selectedReg}`)
+    toast.success(`${items.length} flight${items.length > 1 ? 's' : ''} assigned to ${selectedReg}`)
     setAssigning(false)
-    onAssigned(flightIds, selectedReg)
+    onAssigned(items, selectedReg)
   }, [selectedReg, assigning, selectedFlights, registrations, acTypeByIcao, primaryAcType, warningState, onAssigned])
 
-  // Registration row renderer
-  const renderRegRow = (reg: AircraftWithRelations) => {
-    const isActive = selectedReg === reg.registration
-    const cabin = getCabin(reg)
-    const flightCount = getRegFlightCount(reg.registration)
-    const util = getRegUtil(reg.registration)
+  // ── Build flight summary line ──
+  const flightNumbers = Array.from(new Set(selectedFlights.map(f => f.flightNumber)))
+  const flightSummary = selectedFlights.length === 1
+    ? `1 flight: ${flightNumbers[0]}`
+    : `${selectedFlights.length} flights: ${flightNumbers.slice(0, 6).join(', ')}${flightNumbers.length > 6 ? '...' : ''}`
 
-    return (
-      <label
-        key={reg.id}
-        className={`flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
-          isActive ? 'bg-primary/8 border border-primary/30' : 'hover:bg-muted/30 border border-transparent'
-        }`}
-        onClick={() => { setSelectedReg(reg.registration); setWarningState('none') }}
-      >
-        <input
-          type="radio"
-          name="assignReg"
-          checked={isActive}
-          onChange={() => { setSelectedReg(reg.registration); setWarningState('none') }}
-          className="accent-primary"
-        />
-        <div className="flex-1 min-w-0 flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[12px] font-semibold">{reg.registration}</span>
-            {cabin && <span className="text-[10px] text-muted-foreground">{cabin}</span>}
-          </div>
-          <div className="flex items-center gap-2 shrink-0 text-[10px] text-muted-foreground">
-            <span>{flightCount} flt{flightCount !== 1 ? 's' : ''}</span>
-            <span>{util}%</span>
-          </div>
-        </div>
-      </label>
-    )
+  // ── Build date display (DD/MM/YYYY) ──
+  const uniqueDates = Array.from(new Set(selectedFlights.map(f => formatISO(f.date)))).sort()
+  const formatDMY = (iso: string) => {
+    const [y, m, d] = iso.split('-')
+    return `${d}/${m}/${y}`
   }
-
-  // Build flight summary
-  const summary = selectedFlights.length === 1
-    ? `${selectedFlights[0].flightNumber} ${selectedFlights[0].depStation}→${selectedFlights[0].arrStation} ${selectedFlights[0].stdLocal}-${selectedFlights[0].staLocal}`
-    : `${selectedFlights.length} flights: ${selectedFlights.slice(0, 4).map(f => f.flightNumber).join(', ')}${selectedFlights.length > 4 ? '...' : ''}`
+  let dateDisplay: string
+  if (uniqueDates.length === 1) {
+    dateDisplay = formatDMY(uniqueDates[0])
+  } else if (uniqueDates.length <= 3) {
+    dateDisplay = uniqueDates.map(formatDMY).join(', ')
+  } else {
+    dateDisplay = `From ${formatDMY(uniqueDates[0])} To ${formatDMY(uniqueDates[uniqueDates.length - 1])}`
+  }
 
   const typeLabel = flightIcaoTypes.length === 1
     ? flightIcaoTypes[0]
@@ -3016,60 +3351,44 @@ function AssignToAircraftModal({
         </div>
 
         {/* Flight summary */}
-        <div className="px-4 py-2.5 border-b bg-muted/20">
-          <div className="text-[11px] font-medium">{summary}</div>
-          <div className="text-[10px] text-muted-foreground mt-0.5">Aircraft type: {typeLabel}</div>
+        <div className="px-4 py-2.5 border-b bg-muted/20 space-y-0.5">
+          <div className="text-[11px] font-medium">{flightSummary}</div>
+          <div className="text-[10px] text-muted-foreground">Date: {dateDisplay}</div>
+          <div className="text-[10px] text-muted-foreground">Aircraft Type: {typeLabel}</div>
         </div>
 
-        {/* Search */}
-        <div className="px-4 py-2 border-b">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search registration..."
-              className="w-full pl-8 pr-3 py-1.5 rounded-lg text-[11px] glass outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/50"
-            />
-          </div>
-        </div>
-
-        {/* Aircraft list */}
-        <div className="px-4 py-2 max-h-[280px] overflow-y-auto custom-scrollbar space-y-3">
-          {/* Same type group */}
+        {/* Aircraft groups with dropdowns */}
+        <div className="px-4 py-3 max-h-[300px] overflow-y-auto custom-scrollbar space-y-3">
+          {/* Same type group — expanded by default */}
           {grouped.sameType.length > 0 && (
-            <div>
-              <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
-                {primaryIcao} — Same type
-              </div>
-              <div className="space-y-0.5">
-                {grouped.sameType.map(renderRegRow)}
-              </div>
-            </div>
+            <details open>
+              <summary className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 cursor-pointer select-none list-none flex items-center gap-1.5">
+                <ChevronDown className="h-3 w-3 transition-transform [details:not([open])>&]:-rotate-90" />
+                {primaryIcao} — Same type ({grouped.sameType.length})
+              </summary>
+              {renderGroupDropdown(grouped.sameType, 'same-type')}
+            </details>
           )}
 
-          {/* Same family group */}
+          {/* Same family group — collapsed by default */}
           {grouped.sameFamily.length > 0 && (
-            <div>
-              <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
-                {primaryAcType?.family || 'Family'} — Same family
-              </div>
-              <div className="space-y-0.5">
-                {grouped.sameFamily.map(renderRegRow)}
-              </div>
-            </div>
+            <details>
+              <summary className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 cursor-pointer select-none list-none flex items-center gap-1.5">
+                <ChevronDown className="h-3 w-3 transition-transform [details:not([open])>&]:-rotate-90" />
+                {primaryAcType?.family || 'Family'} — Same family ({grouped.sameFamily.length})
+              </summary>
+              {renderGroupDropdown(grouped.sameFamily, 'same-family')}
+            </details>
           )}
 
-          {/* Other families */}
+          {/* Other families — collapsed by default */}
           {Array.from(grouped.other.entries()).map(([family, regs]) => (
             <details key={family}>
-              <summary className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 cursor-pointer select-none">
+              <summary className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 cursor-pointer select-none list-none flex items-center gap-1.5">
+                <ChevronDown className="h-3 w-3 transition-transform [details:not([open])>&]:-rotate-90" />
                 {family} ({regs.length})
               </summary>
-              <div className="space-y-0.5 mt-1">
-                {regs.map(renderRegRow)}
-              </div>
+              {renderGroupDropdown(regs, family)}
             </details>
           ))}
 

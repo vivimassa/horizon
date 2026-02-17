@@ -24,6 +24,7 @@ export interface GanttFlight {
   aircraftReg: string | null
   /** Departure day offset within route (0 = first day, 1 = next day, etc.) */
   dayOffset: number
+  serviceType: string
 }
 
 export async function getGanttFlights(
@@ -49,7 +50,8 @@ export async function getGanttFlights(
        sf.aircraft_reg,
        cp.route_type,
        arl.route_id,
-       COALESCE(arl.day_offset, 0) AS day_offset
+       COALESCE(arl.day_offset, 0) AS day_offset,
+       COALESCE(sf.service_type, 'J') AS service_type
      FROM scheduled_flights sf
      LEFT JOIN aircraft_types at ON sf.aircraft_type_id = at.id
      LEFT JOIN city_pairs cp ON cp.departure_airport = sf.dep_station
@@ -85,6 +87,7 @@ export async function getGanttFlights(
     seasonId: (r.season_id as string) || null,
     aircraftReg: (r.aircraft_reg as string) || null,
     dayOffset: Number(r.day_offset ?? 0),
+    serviceType: (r.service_type as string) || 'J',
   }))
 }
 
@@ -255,17 +258,35 @@ export async function deleteSingleFlight(
   }
 }
 
-// ─── Assign flights to an aircraft registration ──────────────
+// ─── Per-date tail assignment interface ──────────────────────
+
+export interface FlightDateItem {
+  flightId: string
+  flightDate: string // YYYY-MM-DD
+}
+
+// ─── Assign flights to an aircraft registration (per date) ───
 
 export async function assignFlightsToAircraft(
-  flightIds: string[],
+  items: FlightDateItem[],
   registration: string
 ): Promise<{ error?: string }> {
-  if (flightIds.length === 0) return {}
+  if (items.length === 0) return {}
   try {
+    // Upsert into flight_tail_assignments for each (flight, date) pair
+    const values: string[] = []
+    const params: unknown[] = [registration]
+    for (let i = 0; i < items.length; i++) {
+      const pi = i * 2 + 2
+      values.push(`($${pi}::uuid, $${pi + 1}::date, $1)`)
+      params.push(items[i].flightId, items[i].flightDate)
+    }
     await pool.query(
-      `UPDATE scheduled_flights SET aircraft_reg = $1 WHERE id = ANY($2::uuid[])`,
-      [registration, flightIds]
+      `INSERT INTO flight_tail_assignments (scheduled_flight_id, flight_date, aircraft_reg)
+       VALUES ${values.join(', ')}
+       ON CONFLICT (scheduled_flight_id, flight_date)
+       DO UPDATE SET aircraft_reg = EXCLUDED.aircraft_reg`,
+      params
     )
     return {}
   } catch (err) {
@@ -273,21 +294,54 @@ export async function assignFlightsToAircraft(
   }
 }
 
-// ─── Unassign tail from flights ──────────────────────────────
+// ─── Unassign tail from flights (per date) ───────────────────
 
 export async function unassignFlightsTail(
-  flightIds: string[]
+  items: FlightDateItem[]
 ): Promise<{ error?: string }> {
-  if (flightIds.length === 0) return {}
+  if (items.length === 0) return {}
   try {
+    // Build WHERE clause for each (flight, date) pair
+    const conditions: string[] = []
+    const params: unknown[] = []
+    for (let i = 0; i < items.length; i++) {
+      const pi = i * 2 + 1
+      conditions.push(`(scheduled_flight_id = $${pi}::uuid AND flight_date = $${pi + 1}::date)`)
+      params.push(items[i].flightId, items[i].flightDate)
+    }
     await pool.query(
-      `UPDATE scheduled_flights SET aircraft_reg = NULL WHERE id = ANY($1::uuid[])`,
-      [flightIds]
+      `DELETE FROM flight_tail_assignments WHERE ${conditions.join(' OR ')}`,
+      params
     )
     return {}
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+// ─── Load per-date tail assignments for a date range ─────────
+
+export interface TailAssignmentRow {
+  scheduledFlightId: string
+  flightDate: string
+  aircraftReg: string
+}
+
+export async function getFlightTailAssignments(
+  rangeStart: string,
+  rangeEnd: string
+): Promise<TailAssignmentRow[]> {
+  const result = await pool.query(
+    `SELECT scheduled_flight_id, to_char(flight_date, 'YYYY-MM-DD') AS flight_date, aircraft_reg
+     FROM flight_tail_assignments
+     WHERE flight_date >= $1::date AND flight_date <= $2::date`,
+    [rangeStart, rangeEnd]
+  )
+  return result.rows.map((r: Record<string, unknown>) => ({
+    scheduledFlightId: r.scheduled_flight_id as string,
+    flightDate: r.flight_date as string,
+    aircraftReg: r.aircraft_reg as string,
+  }))
 }
 
 // ─── Batch route fetch for clipboard ─────────────────────────

@@ -15,12 +15,48 @@ type SaveStatus = 'idle' | 'saving' | 'saved'
 
 /** Merge partial stored data with defaults so every key is guaranteed present. */
 function mergeWithDefaults(partial: Record<string, unknown>): GanttSettingsData {
+  const d = DEFAULT_GANTT_SETTINGS
+
+  // Migration: barColors → colorAssignment
+  let colorAssignment = d.colorAssignment
+  if (partial.colorAssignment && typeof partial.colorAssignment === 'object') {
+    colorAssignment = { ...d.colorAssignment, ...(partial.colorAssignment as object) }
+  } else if (partial.barColors && typeof partial.barColors === 'object') {
+    colorAssignment = { ...d.colorAssignment, ...(partial.barColors as object) }
+  }
+
+  // Migration: barLabelFormat → barLabels
+  let barLabels = d.barLabels
+  if (partial.barLabels && typeof partial.barLabels === 'object') {
+    barLabels = { ...d.barLabels, ...(partial.barLabels as object) }
+  } else if (partial.barLabelFormat && typeof partial.barLabelFormat === 'string') {
+    const fmt = partial.barLabelFormat as string
+    if (fmt === 'full') barLabels = { sector: true, times: true, blockTime: false }
+    else if (fmt === 'number_sector') barLabels = { sector: true, times: false, blockTime: false }
+    else if (fmt === 'number') barLabels = { sector: false, times: false, blockTime: false }
+    else if (fmt === 'sector') barLabels = { sector: true, times: false, blockTime: false }
+  }
+
   return {
-    utilizationTargets: (partial.utilizationTargets as Record<string, number> | undefined) ?? { ...DEFAULT_GANTT_SETTINGS.utilizationTargets },
-    tatOverrides: (partial.tatOverrides as GanttSettingsData['tatOverrides'] | undefined) ?? { ...DEFAULT_GANTT_SETTINGS.tatOverrides },
-    barColors: { ...DEFAULT_GANTT_SETTINGS.barColors, ...(partial.barColors as object | undefined) },
-    display: { ...DEFAULT_GANTT_SETTINGS.display, ...(partial.display as object | undefined) },
-    barLabelFormat: (partial.barLabelFormat as GanttSettingsData['barLabelFormat'] | undefined) ?? DEFAULT_GANTT_SETTINGS.barLabelFormat,
+    assignmentMethod: (partial.assignmentMethod as GanttSettingsData['assignmentMethod'] | undefined) ?? d.assignmentMethod,
+    timeDisplay: (partial.timeDisplay as GanttSettingsData['timeDisplay'] | undefined) ?? d.timeDisplay,
+    baseTimezoneOffset: typeof partial.baseTimezoneOffset === 'number' ? partial.baseTimezoneOffset : d.baseTimezoneOffset,
+    baseStation: (partial.baseStation as string | undefined) ?? d.baseStation,
+    barLabels,
+    fleetSortOrder: (partial.fleetSortOrder as GanttSettingsData['fleetSortOrder'] | undefined) ?? d.fleetSortOrder,
+
+    display: { ...d.display, ...(partial.display as object | undefined) },
+
+    colorMode: (partial.colorMode as GanttSettingsData['colorMode'] | undefined) ?? d.colorMode,
+    colorAssignment,
+    colorAcType: (partial.colorAcType as Record<string, string> | undefined) ?? { ...d.colorAcType },
+    colorServiceType: (partial.colorServiceType as Record<string, string> | undefined) ?? { ...d.colorServiceType },
+    colorDestType: { ...d.colorDestType, ...(partial.colorDestType as object | undefined) },
+
+    tooltip: { ...d.tooltip, ...(partial.tooltip as object | undefined) },
+
+    tatOverrides: (partial.tatOverrides as GanttSettingsData['tatOverrides'] | undefined) ?? { ...d.tatOverrides },
+    utilizationTargets: (partial.utilizationTargets as Record<string, number> | undefined) ?? { ...d.utilizationTargets },
   }
 }
 
@@ -35,12 +71,12 @@ function loadFromStorage(): GanttSettingsData {
       const parsed = mergeWithDefaults(JSON.parse(stored))
       // Migrate old pastel bar colors → new vivid defaults
       let migrated = false
-      if (OLD_PASTEL_COLORS.has(parsed.barColors.unassigned)) {
-        parsed.barColors.unassigned = DEFAULT_GANTT_SETTINGS.barColors.unassigned
+      if (OLD_PASTEL_COLORS.has(parsed.colorAssignment.unassigned)) {
+        parsed.colorAssignment.unassigned = DEFAULT_GANTT_SETTINGS.colorAssignment.unassigned
         migrated = true
       }
-      if (OLD_PASTEL_COLORS.has(parsed.barColors.assigned)) {
-        parsed.barColors.assigned = DEFAULT_GANTT_SETTINGS.barColors.assigned
+      if (OLD_PASTEL_COLORS.has(parsed.colorAssignment.assigned)) {
+        parsed.colorAssignment.assigned = DEFAULT_GANTT_SETTINGS.colorAssignment.assigned
         migrated = true
       }
       if (migrated) saveToStorage(parsed)
@@ -50,7 +86,7 @@ function loadFromStorage(): GanttSettingsData {
     const oldColors = localStorage.getItem(OLD_BAR_COLORS_KEY)
     if (oldColors) {
       const colors = JSON.parse(oldColors)
-      const migrated = mergeWithDefaults({ barColors: colors })
+      const migrated = mergeWithDefaults({ colorAssignment: colors })
       localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated))
       localStorage.removeItem(OLD_BAR_COLORS_KEY)
       return migrated
@@ -63,9 +99,7 @@ function saveToStorage(settings: GanttSettingsData) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)) } catch { /* ignore */ }
 }
 
-/** Dark-mode companion for the assigned bar color. The generic lightToDark
- *  works for pastel fills but not for vivid mid-tone blues like #3B82F6,
- *  so we provide a hardcoded mapping for the default and derive the rest. */
+/** Dark-mode companion for the assigned bar color. */
 function assignedDark(lightHex: string): string {
   if (lightHex.toUpperCase() === '#3B82F6') return '#1E40AF'
   return lightToDark(lightHex)
@@ -81,12 +115,12 @@ function applyCssVars(settings: GanttSettingsData) {
   if (typeof document === 'undefined') return
   const root = document.documentElement
   const isDark = root.classList.contains('dark')
-  const barColors = settings.barColors ?? DEFAULT_GANTT_SETTINGS.barColors
+  const colors = settings.colorAssignment ?? DEFAULT_GANTT_SETTINGS.colorAssignment
 
-  root.style.setProperty('--gantt-bar-bg-unassigned', isDark ? unassignedDark(barColors.unassigned) : barColors.unassigned)
-  root.style.setProperty('--gantt-bar-bg-assigned', isDark ? assignedDark(barColors.assigned) : barColors.assigned)
-  root.style.setProperty('--gantt-bar-text-unassigned', getBarTextColor(barColors.unassigned, isDark))
-  root.style.setProperty('--gantt-bar-text-assigned', getBarTextColor(barColors.assigned, isDark))
+  root.style.setProperty('--gantt-bar-bg-unassigned', isDark ? unassignedDark(colors.unassigned) : colors.unassigned)
+  root.style.setProperty('--gantt-bar-bg-assigned', isDark ? assignedDark(colors.assigned) : colors.assigned)
+  root.style.setProperty('--gantt-bar-text-unassigned', getBarTextColor(colors.unassigned, isDark))
+  root.style.setProperty('--gantt-bar-text-assigned', getBarTextColor(colors.assigned, isDark))
 }
 
 export function useGanttSettings() {
@@ -121,7 +155,12 @@ export function useGanttSettings() {
           ...prev,
           ...remote,
           display: { ...prev.display, ...(remote.display ?? {}) },
-          barColors: { ...prev.barColors, ...(remote.barColors ?? {}) },
+          colorAssignment: { ...prev.colorAssignment, ...(remote.colorAssignment ?? remote.barColors ?? {}) },
+          colorAcType: { ...(prev.colorAcType ?? {}), ...(remote.colorAcType ?? {}) },
+          colorServiceType: { ...(prev.colorServiceType ?? {}), ...(remote.colorServiceType ?? {}) },
+          colorDestType: { ...prev.colorDestType, ...(remote.colorDestType ?? {}) },
+          tooltip: { ...prev.tooltip, ...(remote.tooltip ?? {}) },
+          barLabels: { ...prev.barLabels, ...(remote.barLabels ?? {}) },
           utilizationTargets: { ...(prev.utilizationTargets ?? {}), ...(remote.utilizationTargets ?? {}) },
           tatOverrides: { ...(prev.tatOverrides ?? {}), ...(remote.tatOverrides ?? {}) },
         })
@@ -171,8 +210,20 @@ export function useGanttSettings() {
     applyUpdate(prev => ({ ...prev, display: { ...prev.display, [key]: value } }))
   }, [applyUpdate])
 
-  const updateBarColors = useCallback((colors: Partial<GanttSettingsData['barColors']>) => {
-    applyUpdate(prev => ({ ...prev, barColors: { ...prev.barColors, ...colors } }))
+  const updateColorAssignment = useCallback((colors: Partial<GanttSettingsData['colorAssignment']>) => {
+    applyUpdate(prev => ({ ...prev, colorAssignment: { ...prev.colorAssignment, ...colors } }))
+  }, [applyUpdate])
+
+  const updateColorAcType = useCallback((typeColors: Record<string, string>) => {
+    applyUpdate(prev => ({ ...prev, colorAcType: { ...prev.colorAcType, ...typeColors } }))
+  }, [applyUpdate])
+
+  const updateColorServiceType = useCallback((serviceColors: Record<string, string>) => {
+    applyUpdate(prev => ({ ...prev, colorServiceType: { ...prev.colorServiceType, ...serviceColors } }))
+  }, [applyUpdate])
+
+  const updateTooltip = useCallback((key: keyof GanttSettingsData['tooltip'], value: boolean) => {
+    applyUpdate(prev => ({ ...prev, tooltip: { ...prev.tooltip, [key]: value } }))
   }, [applyUpdate])
 
   const updateUtilTarget = useCallback((icaoType: string, hours: number) => {
@@ -216,7 +267,10 @@ export function useGanttSettings() {
     settings,
     updateSettings,
     updateDisplay,
-    updateBarColors,
+    updateColorAssignment,
+    updateColorAcType,
+    updateColorServiceType,
+    updateTooltip,
     updateUtilTarget,
     resetUtilTarget,
     updateTatOverride,
