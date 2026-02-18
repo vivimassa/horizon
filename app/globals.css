@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Gantt fullscreen — override browser default black backdrop */
+.gantt-fullscreen-target:fullscreen {
+  background-color: hsl(var(--background));
+}
+.gantt-fullscreen-target:fullscreen::backdrop {
+  background-color: hsl(var(--background));
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

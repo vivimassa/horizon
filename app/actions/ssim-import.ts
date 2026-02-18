@@ -411,18 +411,63 @@ export async function clearSeasonFlights(
   const operatorId = await getCurrentOperatorId()
   console.log('SSIM Import: Clearing flights for season', seasonId, 'operator', operatorId, dateRange ? `(${dateRange.from} to ${dateRange.to})` : '(all)')
 
-  let result
-  if (dateRange) {
-    result = await pool.query(
-      'DELETE FROM scheduled_flights WHERE operator_id = $1 AND season_id = $2 AND period_start <= $3 AND period_end >= $4',
-      [operatorId, seasonId, dateRange.to, dateRange.from]
-    )
-  } else {
-    result = await pool.query(
-      'DELETE FROM scheduled_flights WHERE operator_id = $1 AND season_id = $2',
-      [operatorId, seasonId]
-    )
+  // 1. Collect flight IDs to delete
+  const whereClause = dateRange
+    ? 'operator_id = $1 AND season_id = $2 AND period_start <= $3 AND period_end >= $4'
+    : 'operator_id = $1 AND season_id = $2'
+  const params = dateRange
+    ? [operatorId, seasonId, dateRange.to, dateRange.from]
+    : [operatorId, seasonId]
+
+  const idsResult = await pool.query(
+    `SELECT id FROM scheduled_flights WHERE ${whereClause}`,
+    params
+  )
+  const flightIds: string[] = idsResult.rows.map((r: { id: string }) => r.id)
+
+  if (flightIds.length === 0) {
+    console.log('SSIM Import: No flights to clear')
+    return { deleted: 0 }
   }
+
+  console.log('SSIM Import: Found', flightIds.length, 'flights to clear, deleting child records first...')
+
+  // 2. Clear self-referential replaces_flight_id pointers
+  const r0 = await pool.query(
+    `UPDATE scheduled_flights SET replaces_flight_id = NULL WHERE replaces_flight_id = ANY($1::uuid[])`,
+    [flightIds]
+  )
+  if ((r0.rowCount || 0) > 0) console.log('SSIM Import: Cleared', r0.rowCount, 'replaces_flight_id references')
+
+  // 3. Delete child: flight_tail_assignments
+  const r1 = await pool.query(
+    `DELETE FROM flight_tail_assignments WHERE scheduled_flight_id = ANY($1::uuid[])`,
+    [flightIds]
+  )
+  if ((r1.rowCount || 0) > 0) console.log('SSIM Import: Deleted', r1.rowCount, 'flight_tail_assignments')
+
+  // 4. Delete child: aircraft_route_legs
+  const r2 = await pool.query(
+    `DELETE FROM aircraft_route_legs WHERE flight_id = ANY($1::uuid[])`,
+    [flightIds]
+  )
+  if ((r2.rowCount || 0) > 0) console.log('SSIM Import: Deleted', r2.rowCount, 'aircraft_route_legs')
+
+  // 5. Clean up orphaned aircraft_routes (routes with no remaining legs)
+  await pool.query(
+    `DELETE FROM aircraft_routes WHERE id IN (
+      SELECT ar.id FROM aircraft_routes ar
+      LEFT JOIN aircraft_route_legs arl ON arl.route_id = ar.id
+      WHERE arl.id IS NULL AND ar.operator_id = $1 AND ar.season_id = $2
+    )`,
+    [operatorId, seasonId]
+  )
+
+  // 6. Now safe to delete parent scheduled_flights
+  const result = await pool.query(
+    `DELETE FROM scheduled_flights WHERE id = ANY($1::uuid[])`,
+    [flightIds]
+  )
 
   console.log('SSIM Import: Deleted', result.rowCount, 'scheduled_flights')
   return { deleted: result.rowCount || 0 }

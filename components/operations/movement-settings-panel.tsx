@@ -5,7 +5,7 @@ import { RotateCcw, Check, Loader2, Settings2, Eye, Palette, Timer, BarChart3, M
 import { Switch } from '@/components/ui/switch'
 import { AircraftType, Airport, FlightServiceType } from '@/types/database'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
-import { type GanttSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/gantt-settings'
+import { type MovementSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/movement-settings'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 // ─── Color Presets ────────────────────────────────────────────────────────
@@ -41,21 +41,21 @@ export interface FleetPreviewItem {
   cabin: string
 }
 
-interface GanttSettingsPanelProps {
+interface MovementSettingsPanelProps {
   open: boolean
   onClose: () => void
-  settings: GanttSettingsData
+  settings: MovementSettingsData
   aircraftTypes: AircraftType[]
   airports: Airport[]
   serviceTypes: FlightServiceType[]
   fleetPreview?: FleetPreviewItem[]
   saveStatus: 'idle' | 'saving' | 'saved'
-  onUpdateDisplay: (key: keyof GanttSettingsData['display'], value: boolean) => void
-  onUpdateColorAssignment: (colors: Partial<GanttSettingsData['colorAssignment']>) => void
+  onUpdateDisplay: (key: keyof MovementSettingsData['display'], value: boolean) => void
+  onUpdateColorAssignment: (colors: Partial<MovementSettingsData['colorAssignment']>) => void
   onUpdateColorAcType: (typeColors: Record<string, string>) => void
   onUpdateColorServiceType: (serviceColors: Record<string, string>) => void
-  onUpdateTooltip: (key: keyof GanttSettingsData['tooltip'], value: boolean) => void
-  onUpdateSettings: (partial: Partial<GanttSettingsData>) => void
+  onUpdateTooltip: (key: keyof MovementSettingsData['tooltip'], value: boolean) => void
+  onUpdateSettings: (partial: Partial<MovementSettingsData>) => void
   onUpdateUtilTarget: (icaoType: string, hours: number) => void
   onResetUtilTarget: (icaoType: string) => void
   onUpdateTatOverride: (icaoType: string, overrides: { dd?: number; di?: number; id?: number; ii?: number }) => void
@@ -65,13 +65,13 @@ interface GanttSettingsPanelProps {
 
 // ─── Component ────────────────────────────────────────────────────────────
 
-export function GanttSettingsPanel({
+export function MovementSettingsPanel({
   open, onClose, settings, aircraftTypes, airports, serviceTypes, fleetPreview, saveStatus,
   onUpdateDisplay, onUpdateColorAssignment, onUpdateColorAcType, onUpdateColorServiceType,
   onUpdateTooltip, onUpdateSettings,
   onUpdateUtilTarget, onResetUtilTarget,
   onUpdateTatOverride, onResetTatOverride, onResetAll,
-}: GanttSettingsPanelProps) {
+}: MovementSettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [previewType, setPreviewType] = useState<string | null>(null)
@@ -239,21 +239,21 @@ export function GanttSettingsPanel({
                         value="dual"
                         label="Dual (UTC + Local)"
                         current={settings.timeDisplay}
-                        onChange={(v) => onUpdateSettings({ timeDisplay: v as GanttSettingsData['timeDisplay'] })}
+                        onChange={(v) => onUpdateSettings({ timeDisplay: v as MovementSettingsData['timeDisplay'] })}
                       />
                       <FormatRadio
                         name="timeDisplay"
                         value="utc"
                         label="UTC only"
                         current={settings.timeDisplay}
-                        onChange={(v) => onUpdateSettings({ timeDisplay: v as GanttSettingsData['timeDisplay'] })}
+                        onChange={(v) => onUpdateSettings({ timeDisplay: v as MovementSettingsData['timeDisplay'] })}
                       />
                       <FormatRadio
                         name="timeDisplay"
                         value="local"
                         label="Local only"
                         current={settings.timeDisplay}
-                        onChange={(v) => onUpdateSettings({ timeDisplay: v as GanttSettingsData['timeDisplay'] })}
+                        onChange={(v) => onUpdateSettings({ timeDisplay: v as MovementSettingsData['timeDisplay'] })}
                       />
                     </div>
                     {(settings.timeDisplay === 'dual' || settings.timeDisplay === 'local') && (
@@ -331,21 +331,21 @@ export function GanttSettingsPanel({
                         value="type_reg"
                         label="By type, then registration"
                         current={settings.fleetSortOrder}
-                        onChange={(v) => onUpdateSettings({ fleetSortOrder: v as GanttSettingsData['fleetSortOrder'] })}
+                        onChange={(v) => onUpdateSettings({ fleetSortOrder: v as MovementSettingsData['fleetSortOrder'] })}
                       />
                       <FormatRadio
                         name="fleetSort"
                         value="reg_only"
                         label="Flat list by registration"
                         current={settings.fleetSortOrder}
-                        onChange={(v) => onUpdateSettings({ fleetSortOrder: v as GanttSettingsData['fleetSortOrder'] })}
+                        onChange={(v) => onUpdateSettings({ fleetSortOrder: v as MovementSettingsData['fleetSortOrder'] })}
                       />
                       <FormatRadio
                         name="fleetSort"
                         value="type_util"
                         label="By type, then utilization"
                         current={settings.fleetSortOrder}
-                        onChange={(v) => onUpdateSettings({ fleetSortOrder: v as GanttSettingsData['fleetSortOrder'] })}
+                        onChange={(v) => onUpdateSettings({ fleetSortOrder: v as MovementSettingsData['fleetSortOrder'] })}
                       />
                     </div>
                   </section>
@@ -415,7 +415,7 @@ export function GanttSettingsPanel({
                     </h3>
                     <select
                       value={settings.colorMode}
-                      onChange={(e) => onUpdateSettings({ colorMode: e.target.value as GanttSettingsData['colorMode'] })}
+                      onChange={(e) => onUpdateSettings({ colorMode: e.target.value as MovementSettingsData['colorMode'] })}
                       className="w-full text-[11px] px-2.5 py-1.5 rounded-md border border-border bg-transparent"
                     >
                       <option value="assignment">By Assignment Status</option>
@@ -719,7 +719,7 @@ export function GanttSettingsPanel({
                       })}
                     </div>
                     <p className="text-[9px] text-muted-foreground/60 mt-3">
-                      Overrides apply to Gantt conflict detection only.
+                      Overrides apply to Movement conflict detection only.
                     </p>
                   </section>
                 </div>
@@ -799,7 +799,7 @@ export function GanttSettingsPanel({
             </DialogTitle>
           </DialogHeader>
           <p className="text-[11px] text-muted-foreground">
-            This will reset all Gantt settings to their default values including display preferences, colors, utilization targets, and TAT overrides.
+            This will reset all Movement settings to their default values including display preferences, colors, utilization targets, and TAT overrides.
           </p>
           <DialogFooter className="mt-2">
             <button
@@ -939,7 +939,7 @@ function PreviewBar({ label, bg, solid, isAssigned }: { label: string; bg: strin
   )
 }
 
-function BarLabelPreview({ barLabels }: { barLabels: GanttSettingsData['barLabels'] }) {
+function BarLabelPreview({ barLabels }: { barLabels: MovementSettingsData['barLabels'] }) {
   const parts: string[] = ['VJ327']
   if (barLabels.sector) parts.push('SGN-HAN')
   if (barLabels.times) parts.push('01:00-02:55')

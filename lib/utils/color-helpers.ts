@@ -104,6 +104,45 @@ export function getBarTextColor(bgHex: string, isDark: boolean): string {
   return hslToHex({ h: hsl.h, s: Math.min(hsl.s + 20, 80), l: 25 })
 }
 
+/**
+ * Desaturate a hex color by reducing saturation.
+ * amount: 0–100 percentage points to subtract from saturation.
+ */
+export function desaturate(hex: string, amount: number): string {
+  const hsl = hexToHSL(hex)
+  return hslToHex({ h: hsl.h, s: Math.max(0, hsl.s - amount), l: hsl.l })
+}
+
+/**
+ * Create a dark-mode background variant of a vivid color.
+ * Reduces lightness significantly and desaturates slightly.
+ */
+export function darkModeVariant(hex: string): string {
+  const hsl = hexToHSL(hex)
+  return hslToHex({
+    h: hsl.h,
+    s: Math.max(0, hsl.s - 10),
+    l: clamp(Math.round(hsl.l * 0.4), 12, 25),
+  })
+}
+
+/**
+ * Return a readable text color (light or dark) for a given background.
+ * Uses relative luminance to decide contrast.
+ */
+export function getContrastTextColor(bgHex: string, isDark: boolean): string {
+  const h = bgHex.replace('#', '')
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+  if (isDark) {
+    return luminance < 0.4 ? '#E5E7EB' : '#111827'
+  }
+  return luminance < 0.5 ? '#FFFFFF' : '#111827'
+}
+
 /** Default color settings for bar fills. */
 export const DEFAULT_BAR_COLORS = {
   unassigned: '#DBEAFE', // blue-100 (pale)

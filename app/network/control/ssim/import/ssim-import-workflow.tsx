@@ -382,7 +382,7 @@ export function SsimImportWorkflow({ seasons }: Props) {
             <FileText className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold tracking-tight">SSIM Import</h2>
+            <h2 className="text-xl font-semibold tracking-tight">1.1.10.1. SSIM Import</h2>
             <p className="text-sm text-muted-foreground">Import schedules from SSIM Chapter 7 files</p>
           </div>
         </div>
