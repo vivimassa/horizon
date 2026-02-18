@@ -76,6 +76,8 @@ export interface UseGanttDragReturn {
   resetWorkspace: () => void
   /** Merge workspace overrides (used by clipboard paste) */
   addWorkspaceOverrides: (entries: [string, string][]) => void
+  /** Remove workspace overrides for specific expanded flight IDs */
+  removeWorkspaceOverrides: (expandedIds: string[]) => void
   /** Check if a flight is being dragged */
   isDragged: (expandedId: string) => boolean
   /** Check if a flight is a ghost placeholder (its original position while being dragged) */
@@ -401,6 +403,18 @@ export function useGanttDrag({
     })
   }, [])
 
+  const removeWorkspaceOverrides = useCallback((expandedIds: string[]) => {
+    setWorkspaceOverrides(prev => {
+      if (prev.size === 0) return prev
+      const next = new Map(prev)
+      let changed = false
+      for (const id of expandedIds) {
+        if (next.delete(id)) changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [])
+
   return {
     workspaceOverrides,
     dragState,
@@ -414,6 +428,7 @@ export function useGanttDrag({
     cancelDrop,
     resetWorkspace,
     addWorkspaceOverrides,
+    removeWorkspaceOverrides,
     isDragged,
     isGhostPlaceholder,
     getDragDeltaY,

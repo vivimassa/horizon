@@ -182,14 +182,20 @@ export function SsimImportWorkflow({ seasons }: Props) {
     let cityPairsCreated = 0
 
     try {
-      // Filter flights by date range
+      // Filter flights by date range (always apply when dates are set)
       let flights = parseResult.flights
-      console.log('SSIM Import: dateRange mode:', rangeMode, 'from:', rangeFrom, 'to:', rangeTo, 'total flights before filter:', flights.length)
-      if (rangeMode === 'custom' && rangeFrom && rangeTo) {
+      if (rangeFrom && rangeTo) {
+        // Keep only flights whose period overlaps with the selected date range
         flights = flights.filter(f => f.periodStart <= rangeTo && f.periodEnd >= rangeFrom)
-        console.log('SSIM Import: after date range filter:', flights.length, 'flights (excluded', parseResult.flights.length - flights.length, ')')
-      } else {
-        console.log('SSIM Import: no date range filter applied (mode=' + rangeMode + ')')
+
+        // In custom mode, clip each flight's period to the selected range
+        if (rangeMode === 'custom') {
+          flights = flights.map(f => ({
+            ...f,
+            periodStart: f.periodStart < rangeFrom ? rangeFrom : f.periodStart,
+            periodEnd: f.periodEnd > rangeTo ? rangeTo : f.periodEnd,
+          }))
+        }
       }
 
       setImportProgress({

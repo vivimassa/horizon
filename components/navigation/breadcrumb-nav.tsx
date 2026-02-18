@@ -41,6 +41,7 @@ const labelMap: Record<string, string> = {
   'codeshare-config': 'Codeshare Config',
   'cabin-config': 'Cabin Configurations',
   'route-constraints': 'Route Constraints',
+  'schedule-preferences': 'Schedule Preferences & Restrictions',
   'schedule-templates': 'Schedule Templates',
   'operations-config': 'Operations Config',
   'delay-codes': 'Delay Codes',

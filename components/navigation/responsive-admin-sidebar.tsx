@@ -63,7 +63,7 @@ const sidebarSections: SidebarSection[] = [
     items: [
       { label: 'Schedule Seasons', href: '/admin/network-config/schedule-seasons' },
       { label: 'Codeshare Config', href: '/admin/network-config/codeshare-config' },
-      { label: 'Route Constraints', href: '/admin/network-config/route-constraints' },
+      { label: 'Schedule Preferences & Restrictions', href: '/admin/network-config/schedule-preferences' },
     ],
   },
   {

@@ -76,6 +76,8 @@ interface AssignmentBlock {
 interface TimeWindow {
   startMs: number
   endMs: number
+  depStation: string
+  arrStation: string
 }
 
 // ─── Aircraft state tracker ───────────────────────────────────
@@ -117,6 +119,59 @@ function canFitBlock(
       return false
     }
   }
+  return true
+}
+
+/**
+ * Check station chain compatibility: does placing this block break
+ * the station chain with the flights immediately before/after it?
+ *
+ * Returns true if the block fits the chain (or there is no neighbour).
+ */
+function checkStationChain(
+  state: AircraftState,
+  block: AssignmentBlock,
+): boolean {
+  const blockDepStation = block.flights[0].depStation
+  const blockArrStation = block.flights[block.flights.length - 1].arrStation
+
+  // Find the flight window that ends closest BEFORE this block starts
+  let prevWindow: TimeWindow | null = null
+  let prevEndMs = -Infinity
+  for (const w of state.windows) {
+    if (w.endMs <= block.startMs && w.endMs > prevEndMs) {
+      prevWindow = w
+      prevEndMs = w.endMs
+    }
+  }
+
+  // Find the flight window that starts closest AFTER this block ends
+  let nextWindow: TimeWindow | null = null
+  let nextStartMs = Infinity
+  for (const w of state.windows) {
+    if (w.startMs >= block.endMs && w.startMs < nextStartMs) {
+      nextWindow = w
+      nextStartMs = w.startMs
+    }
+  }
+
+  // Check backward chain: previous arrival must match block departure
+  if (prevWindow && prevWindow.arrStation !== blockDepStation) {
+    return false
+  }
+
+  // Check forward chain: block arrival must match next departure
+  if (nextWindow && blockArrStation !== nextWindow.depStation) {
+    return false
+  }
+
+  // If no previous window, check against aircraft's home base / initial position
+  if (!prevWindow && state.lastARR !== null && state.windows.length === 0) {
+    if (state.lastARR !== blockDepStation) {
+      return false
+    }
+  }
+
   return true
 }
 
@@ -205,7 +260,8 @@ function buildBlocks(flights: AssignableFlight[]): AssignmentBlock[] {
 export function autoAssignFlights(
   flights: AssignableFlight[],
   aircraft: AssignableAircraft[],
-  defaultTatMinutes: Map<string, number>
+  defaultTatMinutes: Map<string, number>,
+  method: 'minimize' | 'balance' = 'minimize'
 ): TailAssignmentResult {
   const assignments = new Map<string, string>()
   const overflow: AssignableFlight[] = []
@@ -260,52 +316,32 @@ export function autoAssignFlights(
       })
     }
 
-    // Assign each block atomically
+    // ── Separate pinned and free blocks ──
+    const pinnedBlocks: AssignmentBlock[] = []
+    const freeBlocks: AssignmentBlock[] = []
     for (const block of typeBlocks) {
-      // Validate internal consistency of multi-leg route blocks
-      if (block.flights.length > 1 && !validateBlockInternal(block)) {
-        overflow.push(...block.flights)
-        continue
-      }
-
-      const firstFlight = block.flights[0]
-      const lastFlight = block.flights[block.flights.length - 1]
-
-      let bestReg: string | null = null
-
-      // If any flight in the block has a manual registration, pin to it
       if (block.preAssignedReg) {
-        const st = states.get(block.preAssignedReg)
-        if (st && canFitBlock(st, block.startMs, block.endMs, minTatMs)) {
-          bestReg = block.preAssignedReg
-          // Record chain break if station mismatch on the pinned reg
-          if (st.lastARR && st.lastARR !== firstFlight.depStation) {
-            chainBreaks.push({
-              flightId: firstFlight.id,
-              prevArr: st.lastARR,
-              nextDep: firstFlight.depStation,
-            })
-          }
-        }
+        pinnedBlocks.push(block)
+      } else {
+        freeBlocks.push(block)
       }
+    }
 
-      // Otherwise find best aircraft via priority system
-      if (!bestReg) {
-        bestReg = findBestAircraft(
-          firstFlight, block.startMs, block.endMs,
-          states, regs, minTat, minTatMs, chainBreaks
-        )
+    // Helper: record a block's assignment on an aircraft state
+    const recordAssignment = (block: AssignmentBlock, reg: string) => {
+      for (const f of block.flights) {
+        assignments.set(f.id, reg)
       }
-
-      if (bestReg) {
-        // Assign ALL flights in the block to this registration
-        for (const f of block.flights) {
-          assignments.set(f.id, bestReg)
-        }
-        // Record the time window for future overlap checks
-        const st = states.get(bestReg)!
-        st.windows.push({ startMs: block.startMs, endMs: block.endMs })
-        // Update chain-logic fields to the latest-ending assignment
+      const st = states.get(reg)
+      if (st) {
+        const firstFl = block.flights[0]
+        const lastFlight = block.flights[block.flights.length - 1]
+        st.windows.push({
+          startMs: block.startMs,
+          endMs: block.endMs,
+          depStation: firstFl.depStation,
+          arrStation: lastFlight.arrStation,
+        })
         const currentLastEndMs = st.lastSTA !== null && st.lastSTADate !== null
           ? st.lastSTADate + st.lastSTA * 60000
           : -Infinity
@@ -315,8 +351,50 @@ export function autoAssignFlights(
           st.lastARR = lastFlight.arrStation
         }
         st.assignedFlights.push(...block.flights)
+      }
+    }
+
+    // ── Process pinned blocks FIRST — they are immovable ──
+    for (const block of pinnedBlocks) {
+      const reg = block.preAssignedReg!
+      const st = states.get(reg)
+
+      if (st && st.lastARR && st.lastARR !== block.flights[0].depStation) {
+        chainBreaks.push({
+          flightId: block.flights[0].id,
+          prevArr: st.lastARR,
+          nextDep: block.flights[0].depStation,
+        })
+      }
+
+      recordAssignment(block, reg)
+    }
+
+    // ── Auto-assign free blocks ──
+    for (const block of freeBlocks) {
+      // Validate internal consistency of multi-leg route blocks
+      if (block.flights.length > 1 && !validateBlockInternal(block)) {
+        overflow.push(...block.flights)
+        continue
+      }
+
+      const firstFlight = block.flights[0]
+      let bestReg: string | null
+
+      if (method === 'balance') {
+        bestReg = findBalancedAircraft(
+          firstFlight, block, states, regs, minTatMs, chainBreaks
+        )
       } else {
-        // Entire block overflows together
+        bestReg = findBestAircraft(
+          firstFlight, block,
+          states, regs, minTat, minTatMs, chainBreaks
+        )
+      }
+
+      if (bestReg) {
+        recordAssignment(block, bestReg)
+      } else {
         overflow.push(...block.flights)
       }
     }
@@ -329,8 +407,7 @@ export function autoAssignFlights(
 
 function findBestAircraft(
   firstFlight: AssignableFlight,
-  blockStartMs: number,
-  blockEndMs: number,
+  block: AssignmentBlock,
   states: Map<string, AircraftState>,
   regs: AssignableAircraft[],
   minTat: number,
@@ -350,7 +427,10 @@ function findBestAircraft(
     const st = states.get(ac.registration)!
 
     // Full overlap check against ALL existing assignments
-    if (!canFitBlock(st, blockStartMs, blockEndMs, minTatMs)) continue
+    if (!canFitBlock(st, block.startMs, block.endMs, minTatMs)) continue
+
+    // Station chain check: verify block fits the chain
+    if (!checkStationChain(st, block)) continue
 
     const sameStation = st.lastARR === firstFlight.depStation
     const isIdle = st.lastSTA === null
@@ -363,7 +443,7 @@ function findBestAircraft(
       // Priority 2: Same station but aircraft was idle (or at home base)
       candidates.push({ reg: ac.registration, priority: 2, gap: Infinity })
     } else {
-      // Priority 3: Available but different station
+      // Priority 3: Available + station chain valid (inserted between compatible flights)
       candidates.push({ reg: ac.registration, priority: 3, gap: Infinity })
     }
   }
@@ -391,6 +471,79 @@ function findBestAircraft(
   }
 
   return best.reg
+}
+
+// ─── Balance-utilization aircraft selection (Good Solution) ──
+
+/**
+ * Select the best aircraft using balance-utilization scoring.
+ * Primary factor: prefer aircraft with FEWER total block minutes
+ * so that hours are distributed evenly across the fleet.
+ */
+function findBalancedAircraft(
+  firstFlight: AssignableFlight,
+  block: AssignmentBlock,
+  states: Map<string, AircraftState>,
+  regs: AssignableAircraft[],
+  minTatMs: number,
+  chainBreaks: ChainBreak[]
+): string | null {
+  interface Candidate {
+    reg: string
+    score: number
+  }
+
+  const candidates: Candidate[] = []
+  const blockFirstDep = firstFlight.depStation
+
+  for (const ac of regs) {
+    const st = states.get(ac.registration)!
+
+    // Full overlap check against ALL existing assignments
+    if (!canFitBlock(st, block.startMs, block.endMs, minTatMs)) continue
+
+    // Station chain check: verify block fits the chain
+    if (!checkStationChain(st, block)) continue
+
+    let score = 0
+
+    // UTILIZATION SCORE (primary):
+    // Prefer aircraft with FEWER block minutes — this is what makes it "balanced"
+    const totalBlockMinutes = st.assignedFlights.reduce((sum, f) => {
+      return sum + (toAbsoluteMs(f.date, f.staMinutes) - toAbsoluteMs(f.date, f.stdMinutes)) / 60000
+    }, 0)
+    score -= totalBlockMinutes * 2
+
+    // CHAIN BONUS:
+    // If this aircraft's last arrival matches block's first departure → perfect chain
+    if (st.lastARR && st.lastARR === blockFirstDep && st.lastSTA !== null) {
+      score += 500
+    }
+
+    // EMPTY AIRCRAFT BONUS:
+    // Aircraft with zero flights today gets a bonus to encourage spreading
+    if (st.assignedFlights.length === 0) {
+      score += 300
+    }
+
+    // TIME GAP PENALTY:
+    // If aircraft has been idle for a long time, slight penalty
+    if (st.lastSTA !== null && st.lastSTADate !== null) {
+      const lastEndMs = st.lastSTADate + st.lastSTA * 60000
+      const gapMinutes = (block.startMs - lastEndMs) / 60000
+      if (gapMinutes > 360) {
+        score -= 50
+      }
+    }
+
+    candidates.push({ reg: ac.registration, score })
+  }
+
+  if (candidates.length === 0) return null
+
+  // Pick the aircraft with highest score
+  candidates.sort((a, b) => b.score - a.score)
+  return candidates[0].reg
 }
 
 /** Compute gap minutes between aircraft's latest STA and the flight's STD. */

@@ -77,6 +77,7 @@ export function MovementSettingsPanel({
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [previewType, setPreviewType] = useState<string | null>(null)
 
+
   // Safe accessors
   const display = settings.display
   const colorAssignment = settings.colorAssignment
@@ -207,29 +208,6 @@ export function MovementSettingsPanel({
               {/* ─── General Tab ─────────────────────────────────── */}
               {activeTab === 'general' && (
                 <div className="space-y-6">
-                  {/* Assignment Method */}
-                  <section>
-                    <h3 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                      Assignment Method
-                    </h3>
-                    <div className="space-y-1.5">
-                      <FormatRadio
-                        name="assignMethod"
-                        value="minimize"
-                        label="Minimize aircraft used"
-                        current={settings.assignmentMethod ?? 'minimize'}
-                        onChange={(v) => onUpdateSettings({ assignmentMethod: v as 'minimize' | 'balance' })}
-                      />
-                      <FormatRadio
-                        name="assignMethod"
-                        value="balance"
-                        label="Balance hours across fleet"
-                        current={settings.assignmentMethod ?? 'minimize'}
-                        onChange={(v) => onUpdateSettings({ assignmentMethod: v as 'minimize' | 'balance' })}
-                      />
-                    </div>
-                  </section>
-
                   {/* Time Display */}
                   <section>
                     <h3 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-3">

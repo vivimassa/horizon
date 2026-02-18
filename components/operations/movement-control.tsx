@@ -1,15 +1,14 @@
 'use client'
 
-import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
+import { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback, Fragment } from 'react'
 import {
-  ChevronLeft,
-  ChevronRight,
   ChevronDown,
   Check,
   Plane,
   PlaneTakeoff,
   Clock,
   Calendar,
+  CalendarRange,
   MapPin,
   X,
   AlertTriangle,
@@ -39,6 +38,7 @@ import { useMovementSettings } from '@/lib/hooks/use-movement-settings'
 import { type MovementSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/movement-settings'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
 import { MovementSettingsPanel, type FleetPreviewItem } from './movement-settings-panel'
+import { GanttOptimizerDialog, type OptimizerMethod } from '@/components/network/gantt-optimizer-dialog'
 import { useMovementClipboard } from '@/lib/hooks/use-movement-clipboard'
 import { useMovementDrag, type RowLayoutItem, type PendingDrop } from '@/lib/hooks/use-movement-drag'
 import { MovementClipboardPill } from './movement-clipboard-pill'
@@ -142,18 +142,57 @@ function formatDateShort(d: Date): string {
   return `${dow}, ${day} ${mon}`
 }
 
-function formatDateRange(start: Date, days: number): string {
-  const end = addDays(start, days - 1)
-  const s = start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-  const e = end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-  return `${s} – ${e}`
-}
-
 function formatISO(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+function parseDate(s: string): Date { return new Date(s + 'T00:00:00') }
+function diffDays(a: Date, b: Date): number { return Math.round((b.getTime() - a.getTime()) / 86400000) }
+
+/** YYYY-MM-DD → DD/MM/YYYY for display */
+function isoToDisplay(iso: string): string {
+  const [y, m, d] = iso.split('-')
+  return `${d}/${m}/${y}`
+}
+
+/** Parse user input (ddmmyyyy, dd/mm/yyyy, d/m/yyyy) → YYYY-MM-DD or null */
+function parseUserDate(text: string): string | null {
+  const stripped = text.replace(/[/\-\.]/g, '')
+  if (/^\d{8}$/.test(stripped)) {
+    const d = stripped.slice(0, 2), m = stripped.slice(2, 4), y = stripped.slice(4, 8)
+    if (+d >= 1 && +d <= 31 && +m >= 1 && +m <= 12 && +y >= 1900 && +y <= 2100) {
+      const date = new Date(`${y}-${m}-${d}T00:00:00`)
+      if (!isNaN(date.getTime())) return `${y}-${m}-${d}`
+    }
+  }
+  const parts = text.split(/[/\-\.]/)
+  if (parts.length === 3) {
+    const [dp, mp, yp] = parts
+    const d = dp.padStart(2, '0'), m = mp.padStart(2, '0'), y = yp
+    if (y.length === 4 && +d >= 1 && +d <= 31 && +m >= 1 && +m <= 12 && +y >= 1900 && +y <= 2100) {
+      const date = new Date(`${y}-${m}-${d}T00:00:00`)
+      if (!isNaN(date.getTime())) return `${y}-${m}-${d}`
+    }
+  }
+  return null
+}
+
+const ZOOM_DAYS: Record<ZoomLevel, number> = {
+  '1D': 1, '2D': 2, '3D': 3, '4D': 4, '5D': 5, '6D': 6, '7D': 7,
+  '14D': 14, '28D': 28, 'M': 31, '3M': 91, '6M': 182,
+}
+
+/** Find the largest zoom level that fits within totalDays */
+function findBestZoom(totalDays: number): ZoomLevel {
+  const all: ZoomLevel[] = ['1D', '2D', '3D', '4D', '5D', '6D', '7D', '14D', '28D', 'M', '3M', '6M']
+  let best: ZoomLevel = '1D'
+  for (const z of all) {
+    if (ZOOM_DAYS[z] <= totalDays) best = z
+  }
+  return best
 }
 
 function timeToMinutes(t: string): number {
@@ -242,14 +281,16 @@ function getBarColor(
   const isWip = !isPub && !ef.finalized
 
   if (colorMode === 'assignment') {
-    if (isWip || isFin) {
+    if (isDbAssigned) {
+      return { bg: 'var(--gantt-bar-bg-assigned)', text: 'var(--gantt-bar-text-assigned)', useVars: true }
+    }
+    if (isWip) {
+      return { bg: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.03)', text: '', useVars: false }
+    }
+    if (isFin) {
       return { bg: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)', text: '', useVars: false }
     }
-    return {
-      bg: isDbAssigned ? 'var(--gantt-bar-bg-assigned)' : 'var(--gantt-bar-bg-unassigned)',
-      text: isDbAssigned ? 'var(--gantt-bar-text-assigned)' : '',
-      useVars: true,
-    }
+    return { bg: 'var(--gantt-bar-bg-unassigned)', text: '', useVars: true }
   }
 
   let bg = '#3B82F6'
@@ -298,6 +339,29 @@ interface MovementControlProps {
 }
 
 export function MovementControl({ registrations, aircraftTypes, seatingConfigs, airports, serviceTypes }: MovementControlProps) {
+  // ─── Period state (FROM/TO boundary) ────────────────────────────────
+  const [periodFrom, setPeriodFrom] = useState<string | null>(null)
+  const [periodTo, setPeriodTo] = useState<string | null>(null)
+  const [periodCommitted, setPeriodCommitted] = useState(false)
+  const [committedFrom, setCommittedFrom] = useState<string | null>(null)
+  const [committedTo, setCommittedTo] = useState<string | null>(null)
+  // Display text for FROM/TO text inputs
+  const [fromText, setFromText] = useState('')
+  const [toText, setToText] = useState('')
+  // Calendar picker: alternates between FROM and TO
+  const calendarRef = useRef<HTMLInputElement>(null)
+  const pickTargetRef = useRef<'from' | 'to'>('from')
+
+  // Sync display text when periodFrom/periodTo change externally
+  useEffect(() => { setFromText(periodFrom ? isoToDisplay(periodFrom) : '') }, [periodFrom])
+  useEffect(() => { setToText(periodTo ? isoToDisplay(periodTo) : '') }, [periodTo])
+
+  // ─── Optimizer state ───────────────────────────────────────────────
+  const [optimizerOpen, setOptimizerOpen] = useState(false)
+  const [assignmentMethod, setAssignmentMethod] = useState<OptimizerMethod>('greedy')
+  const [optimizerRunning, setOptimizerRunning] = useState(false)
+  const [lastOptRun, setLastOptRun] = useState<{ method: string; time: Date } | null>(null)
+
   // ─── State ──────────────────────────────────────────────────────────
   const [startDate, setStartDate] = useState(() => startOfDay(new Date()))
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('4D')
@@ -457,6 +521,11 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const longTapRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const centerPanelRef = useRef<HTMLDivElement>(null)
 
+  // ─── Viewport virtualization ────────────────────────────────────────
+  const [visibleBounds, setVisibleBounds] = useState({ left: 0, right: 4000, top: 0, bottom: 2000 })
+  const vbRafRef = useRef<number>(0)
+  const lastVBRef = useRef({ left: 0, right: 4000, top: 0, bottom: 2000 })
+
   // ─── Responsive container width ─────────────────────────────────────
   const [containerWidth, setContainerWidth] = useState(0)
 
@@ -468,7 +537,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     const observer = new ResizeObserver(update)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [periodCommitted])
 
   // ─── Fullscreen API + CSS fallback ────────────────────────────────
   const toggleFullscreen = useCallback(async () => {
@@ -497,6 +566,15 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   // Portal container for dialogs — must render inside fullscreen element
   const dialogContainer = isFullscreen ? movementContainerRef.current : null
 
+  // ─── Optimizer handler ─────────────────────────────────────────────
+  const handleRunAssignment = useCallback(async (method: OptimizerMethod) => {
+    setOptimizerRunning(true)
+    setAssignmentMethod(method)
+    await new Promise(r => setTimeout(r, 300))
+    setOptimizerRunning(false)
+    setLastOptRun({ method: method === 'greedy' ? 'Greedy Solution' : 'Good Solution', time: new Date() })
+  }, [])
+
   // CSS fallback Escape handler
   useEffect(() => {
     if (!isFullscreen || document.fullscreenElement) return // only for CSS fallback
@@ -524,12 +602,37 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     try { localStorage.setItem('horizon_movement_panel_pinned', String(panelPinned)) } catch { /* ignore */ }
   }, [panelPinned])
 
+  // ─── Period helpers ─────────────────────────────────────────────────
+  const periodDays = useMemo(() => {
+    if (!committedFrom || !committedTo) return 0
+    return diffDays(parseDate(committedFrom), parseDate(committedTo)) + 1
+  }, [committedFrom, committedTo])
+
+  const isZoomDisabled = useCallback((z: ZoomLevel) => {
+    if (!periodCommitted || periodDays === 0) return false
+    return ZOOM_DAYS[z] > periodDays
+  }, [periodCommitted, periodDays])
+
+  const periodDirty = periodCommitted && (periodFrom !== committedFrom || periodTo !== committedTo)
+
+  // Clamp zoom if period shrinks below current zoom
+  useEffect(() => {
+    if (periodCommitted && periodDays > 0) {
+      if (ZOOM_DAYS[zoomLevel] > periodDays) {
+        setZoomLevel(findBestZoom(periodDays))
+      }
+    }
+  }, [periodDays, periodCommitted, zoomLevel])
+
   // ─── Derived ────────────────────────────────────────────────────────
   const zoomConfig = ZOOM_CONFIG[zoomLevel]
-  const totalHours = zoomConfig.days * 24
-  const rawPPH = containerWidth > 0 ? containerWidth / totalHours : 12
+  // zoomDays = how many days fit in the viewport (determines scale)
+  const zoomDays = Math.min(ZOOM_DAYS[zoomLevel], periodDays || ZOOM_DAYS[zoomLevel])
+  // totalDaysToRender = how many days of content to render (full committed period)
+  const totalDaysToRender = periodDays || zoomDays
+  const rawPPH = containerWidth > 0 && zoomDays > 0 ? containerWidth / (zoomDays * 24) : 10
   const pixelsPerHour = Math.max(rawPPH, MIN_PPH)
-  const totalWidth = totalHours * pixelsPerHour
+  const totalWidth = totalDaysToRender * 24 * pixelsPerHour
 
   // Auto-adjust tick spacing based on effective pixels-per-hour
   const autoTickHours = pixelsPerHour > 40 ? 1
@@ -621,35 +724,121 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     if (headerInnerRef.current) headerInnerRef.current.style.transform = `translateX(-${sl}px)`
     if (histogramInnerRef.current) histogramInnerRef.current.style.transform = `translateX(-${sl}px)`
     if (leftPanelRef.current) leftPanelRef.current.scrollTop = s.scrollTop
+
+    // Viewport virtualization: RAF-throttled bounds update
+    if (vbRafRef.current) cancelAnimationFrame(vbRafRef.current)
+    vbRafRef.current = requestAnimationFrame(() => {
+      const VB_BUFFER = 500
+      const VB_THRESHOLD = 200
+      const nb = {
+        left: sl - VB_BUFFER,
+        right: sl + s.clientWidth + VB_BUFFER,
+        top: s.scrollTop - VB_BUFFER,
+        bottom: s.scrollTop + s.clientHeight + VB_BUFFER,
+      }
+      const lb = lastVBRef.current
+      if (
+        Math.abs(nb.left - lb.left) > VB_THRESHOLD ||
+        Math.abs(nb.right - lb.right) > VB_THRESHOLD ||
+        Math.abs(nb.top - lb.top) > VB_THRESHOLD ||
+        Math.abs(nb.bottom - lb.bottom) > VB_THRESHOLD
+      ) {
+        lastVBRef.current = nb
+        setVisibleBounds(nb)
+      }
+    })
   }, [])
+
+  // Initial viewport measurement + re-measure on zoom/resize changes
+  useLayoutEffect(() => {
+    const s = bodyRef.current
+    if (!s) return
+    const VB_BUFFER = 500
+    const b = {
+      left: s.scrollLeft - VB_BUFFER,
+      right: s.scrollLeft + s.clientWidth + VB_BUFFER,
+      top: s.scrollTop - VB_BUFFER,
+      bottom: s.scrollTop + s.clientHeight + VB_BUFFER,
+    }
+    lastVBRef.current = b
+    setVisibleBounds(b)
+  }, [zoomLevel, containerWidth])
+
+  // Preserve scroll center when zoom level changes
+  const prevPphRef = useRef(pixelsPerHour)
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (!body || prevPphRef.current === 0) { prevPphRef.current = pixelsPerHour; return }
+    if (prevPphRef.current === pixelsPerHour) return
+    const ratio = pixelsPerHour / prevPphRef.current
+    const centerX = body.scrollLeft + body.clientWidth / 2
+    body.scrollLeft = Math.max(0, centerX * ratio - body.clientWidth / 2)
+    prevPphRef.current = pixelsPerHour
+    handleBodyScroll()
+  }, [pixelsPerHour, handleBodyScroll])
 
   // ─── Per-date tail assignments ─────────────────────────────────────
   // Map key = "flightId__YYYY-MM-DD", value = aircraft_reg
   const [tailAssignments, setTailAssignments] = useState<Map<string, string>>(new Map())
 
-  // ─── Data Fetch ────────────────────────────────────────────────────
+  // ─── Data Fetch (with stale-fetch guard + optimistic merge) ──────
+  const fetchVersionRef = useRef(0)
+  /** Tracks pending optimistic ops so refreshFlights won't overwrite them */
+  const pendingOpsRef = useRef<{ adds: Map<string, string>; deletes: Set<string> }>({ adds: new Map(), deletes: new Set() })
+
   const refreshFlights = useCallback(async () => {
-    const rangeStart = formatISO(startDate)
-    const rangeEnd = formatISO(addDays(startDate, zoomConfig.days))
+    if (!committedFrom || !committedTo) return
+    const version = ++fetchVersionRef.current
     setLoading(true)
+    const rangeEnd = formatISO(addDays(parseDate(committedTo), 1))
     const [f, ta] = await Promise.all([
-      getMovementFlights(rangeStart, rangeEnd),
-      getFlightTailAssignments(rangeStart, rangeEnd),
+      getMovementFlights(committedFrom, rangeEnd),
+      getFlightTailAssignments(committedFrom, rangeEnd),
     ])
+    if (fetchVersionRef.current !== version) return
     setFlights(f)
-    // Build lookup map for per-date assignments
     const taMap = new Map<string, string>()
     for (const row of ta) {
       taMap.set(`${row.scheduledFlightId}__${row.flightDate}`, row.aircraftReg)
     }
-    setTailAssignments(taMap)
+    setTailAssignments(() => {
+      const merged = new Map(taMap)
+      const ops = pendingOpsRef.current
+      ops.adds.forEach((reg, key) => {
+        if (!merged.has(key)) merged.set(key, reg)
+      })
+      ops.deletes.forEach(key => {
+        merged.delete(key)
+      })
+      const survivingAdds = new Map<string, string>()
+      ops.adds.forEach((reg, key) => {
+        if (!taMap.has(key) || taMap.get(key) !== reg) {
+          survivingAdds.set(key, reg)
+        }
+      })
+      const survivingDeletes = new Set<string>()
+      ops.deletes.forEach(key => {
+        if (taMap.has(key)) survivingDeletes.add(key)
+      })
+      pendingOpsRef.current = { adds: survivingAdds, deletes: survivingDeletes }
+      return merged
+    })
     setLoading(false)
-  }, [startDate, zoomConfig.days])
+  }, [committedFrom, committedTo])
 
-  useEffect(() => { refreshFlights() }, [refreshFlights])
+  useEffect(() => {
+    if (periodCommitted && committedFrom && committedTo) {
+      refreshFlights()
+    }
+  }, [periodCommitted, committedFrom, committedTo, refreshFlights])
 
-  /** Optimistic assign: update per-date tail assignment map */
+  /** Optimistic assign: update per-date tail assignment map + track pending */
   const applyOptimisticAssign = useCallback((items: FlightDateItem[], reg: string) => {
+    for (const item of items) {
+      const key = `${item.flightId}__${item.flightDate}`
+      pendingOpsRef.current.adds.set(key, reg)
+      pendingOpsRef.current.deletes.delete(key)
+    }
     setTailAssignments(prev => {
       const next = new Map(prev)
       for (const item of items) {
@@ -659,8 +848,13 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     })
   }, [])
 
-  /** Optimistic unassign: remove per-date tail assignments */
+  /** Optimistic unassign: remove per-date tail assignments + track pending */
   const applyOptimisticUnassign = useCallback((items: FlightDateItem[]) => {
+    for (const item of items) {
+      const key = `${item.flightId}__${item.flightDate}`
+      pendingOpsRef.current.deletes.add(key)
+      pendingOpsRef.current.adds.delete(key)
+    }
     setTailAssignments(prev => {
       const next = new Map(prev)
       for (const item of items) {
@@ -747,18 +941,20 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       const stdMin = timeToMinutes(f.stdLocal)
       const staMin = timeToMinutes(f.staLocal)
 
-      for (let d = 0; d < zoomConfig.days; d++) {
+      for (let d = 0; d < totalDaysToRender; d++) {
         const date = addDays(startDate, d)
         if (date < pStart || date > pEnd) continue
         const dow = getDayOfWeek(date)
         if (!f.daysOfOperation.includes(String(dow))) continue
 
-        // Per-date tail assignment takes priority over scheduled_flights.aircraft_reg
+        // Per-date tail assignment takes priority, then fall back to scheduled_flights.aircraft_reg
         const dateStr = formatISO(date)
 
         // Skip dates that have been soft-deleted
         if (f.excludedDates && f.excludedDates.includes(dateStr)) continue
         const perDateReg = tailAssignments.get(`${f.id}__${dateStr}`) || null
+        // Use per-date assignment first, then flight-level aircraft_reg from DB
+        const effectiveReg = perDateReg || f.aircraftReg || null
 
         result.push({
           id: `${f.id}_${dateStr}`,
@@ -780,7 +976,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           routeType: f.routeType,
           routeId: f.routeId,
           seasonId: f.seasonId,
-          aircraftReg: perDateReg,
+          aircraftReg: effectiveReg,
           dayOffset: f.dayOffset ?? 0,
           assignedReg: null, // set by tail assignment engine
           serviceType: f.serviceType || 'J',
@@ -790,7 +986,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       }
     }
     return result
-  }, [flights, startDate, zoomConfig.days, scheduleFilters.published, scheduleFilters.finalized, scheduleFilters.wip, tailAssignments])
+  }, [flights, startDate, totalDaysToRender, scheduleFilters.published, scheduleFilters.finalized, scheduleFilters.wip, tailAssignments])
 
   // ─── Flight search results (live-filtered) ─────────────────────────
   const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
@@ -864,8 +1060,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
     }
 
-    return autoAssignFlights(expandedFlights, assignableAircraft, defaultTat)
-  }, [expandedFlights, registrations, aircraftTypes])
+    return autoAssignFlights(expandedFlights, assignableAircraft, defaultTat, assignmentMethod === 'good' ? 'balance' : 'minimize')
+  }, [expandedFlights, registrations, aircraftTypes, assignmentMethod])
 
   // Annotate expanded flights with their assigned registration
   const assignedFlights = useMemo(() => {
@@ -927,8 +1123,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
   // ─── Histogram bucket mode ──────────────────────────────────────
   const histogramMode: 'hourly' | 'weekly' = useMemo(() => {
-    return zoomConfig.days <= 7 ? 'hourly' : 'weekly'
-  }, [zoomConfig.days])
+    return zoomDays <= 7 ? 'hourly' : 'weekly'
+  }, [zoomDays])
 
   const histogramLabel = histogramMode === 'hourly' ? 'Flights/hr' : 'Flights/wk'
 
@@ -938,7 +1134,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     const pph = pixelsPerHour
 
     if (histogramMode === 'hourly') {
-      const totalSlots = zoomConfig.days * 24
+      const totalSlots = totalDaysToRender * 24
       const counts = new Array(totalSlots).fill(0) as number[]
       for (const ef of assignedFlights) {
         const dayOff = Math.floor((ef.date.getTime() - startDate.getTime()) / 86400000)
@@ -952,7 +1148,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       // weekly (Mon-Sun aligned)
       // Find the Monday at or before startDate
       const startMs = startDate.getTime()
-      const endMs = startMs + zoomConfig.days * 86400000
+      const endMs = startMs + totalDaysToRender * 86400000
       const startDay = startDate.getDay() // 0=Sun
       const diffToMon = startDay === 0 ? -6 : 1 - startDay
       const firstMon = new Date(startMs + diffToMon * 86400000)
@@ -982,11 +1178,11 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
     const max = Math.max(1, ...buckets.map((b) => b.count))
     return { buckets, max }
-  }, [assignedFlights, zoomConfig.days, pixelsPerHour, startDate, histogramMode, totalWidth])
+  }, [assignedFlights, totalDaysToRender, pixelsPerHour, startDate, histogramMode, totalWidth])
 
   // ─── EOD location per registration per day ─────────────────────────
   const showEodBadges = movementSettings.display?.eodBadges ?? true
-  const eodEveryDay = zoomConfig.days <= 7 // ≤7D: badge every day; >7D: one badge at right edge
+  const eodEveryDay = zoomDays <= 7 // ≤7D: badge every day; >7D: one badge at right edge
 
   // Map: "REG|YYYY-MM-DD" → { station, mismatch }
   const eodLocations = useMemo(() => {
@@ -1069,7 +1265,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const {
     workspaceOverrides, dragState, targetRow, pendingDrop,
     onBarMouseDown, onBodyMouseMove, onBodyMouseUp,
-    resetWorkspace, addWorkspaceOverrides, isDragged, isGhostPlaceholder,
+    resetWorkspace, addWorkspaceOverrides, removeWorkspaceOverrides,
+    isDragged, isGhostPlaceholder,
     getDragDeltaY, getWorkspaceReg, confirmDrop, cancelDrop,
   } = useMovementDrag({
     selectedFlights,
@@ -1241,11 +1438,6 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFlight, assignedFlights, registrations, acTypeByIcao, movementSettings.utilizationTargets, movementSettings.tatOverrides, movementSettings.display])
-
-  // ─── Navigation ───────────────────────────────────────────────────
-  const goBack = () => setStartDate((d) => addDays(d, -zoomConfig.days))
-  const goForward = () => setStartDate((d) => addDays(d, zoomConfig.days))
-  const goToday = () => setStartDate(startOfDay(new Date()))
 
   const toggleCollapse = (icao: string) => {
     setCollapsedTypes((prev) => {
@@ -1871,6 +2063,136 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const tzOffset = movementSettings.baseTimezoneOffset ?? 7
   const headerH = timeMode === 'dual' ? 56 : 40
 
+  // ─── Period Selector (shared between blank + active states) ────────
+  const handleFromBlur = () => {
+    if (fromText === '') { setPeriodFrom(null); return }
+    const parsed = parseUserDate(fromText)
+    if (parsed) { setPeriodFrom(parsed); if (periodCommitted) setPeriodCommitted(false) }
+    else setFromText(periodFrom ? isoToDisplay(periodFrom) : '')
+  }
+  const handleToBlur = () => {
+    if (toText === '') { setPeriodTo(null); return }
+    const parsed = parseUserDate(toText)
+    if (parsed) { setPeriodTo(parsed); if (periodCommitted) setPeriodCommitted(false) }
+    else setToText(periodTo ? isoToDisplay(periodTo) : '')
+  }
+  const handleCalendarPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const iso = e.target.value
+    if (!iso) return
+    if (pickTargetRef.current === 'from') {
+      setPeriodFrom(iso)
+      if (periodCommitted) setPeriodCommitted(false)
+      pickTargetRef.current = 'to'
+      setTimeout(() => calendarRef.current?.showPicker?.(), 100)
+    } else {
+      setPeriodTo(iso)
+      if (periodCommitted) setPeriodCommitted(false)
+      pickTargetRef.current = 'from'
+    }
+  }
+
+  const periodSelector = (
+    <div className="flex items-center gap-1.5">
+      {/* Hidden native date input for calendar picker */}
+      <input
+        ref={calendarRef}
+        type="date"
+        className="sr-only"
+        tabIndex={-1}
+        onChange={handleCalendarPick}
+      />
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] font-semibold text-muted-foreground">From</span>
+        <input
+          type="text"
+          placeholder="DD/MM/YYYY"
+          value={fromText}
+          onChange={(e) => setFromText(e.target.value)}
+          onBlur={handleFromBlur}
+          onKeyDown={(e) => { if (e.key === 'Enter') { handleFromBlur(); (e.target as HTMLInputElement).blur() } }}
+          className="bg-background border border-border rounded-md text-[11px] font-medium text-foreground tabular-nums text-center outline-none focus:ring-1 focus:ring-primary/40 transition-colors placeholder:text-muted-foreground/40 placeholder:font-normal"
+          style={{ width: 110, height: 26, padding: '0 6px', borderRadius: 6 }}
+        />
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] font-semibold text-muted-foreground">To</span>
+        <input
+          type="text"
+          placeholder="DD/MM/YYYY"
+          value={toText}
+          onChange={(e) => setToText(e.target.value)}
+          onBlur={handleToBlur}
+          onKeyDown={(e) => { if (e.key === 'Enter') { handleToBlur(); (e.target as HTMLInputElement).blur() } }}
+          className="bg-background border border-border rounded-md text-[11px] font-medium text-foreground tabular-nums text-center outline-none focus:ring-1 focus:ring-primary/40 transition-colors placeholder:text-muted-foreground/40 placeholder:font-normal"
+          style={{ width: 110, height: 26, padding: '0 6px', borderRadius: 6 }}
+        />
+      </div>
+      <button
+        onClick={() => { pickTargetRef.current = 'from'; calendarRef.current?.showPicker?.() }}
+        className="flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+        style={{ width: 26, height: 26, borderRadius: 6 }}
+        title="Pick dates from calendar"
+      >
+        <Calendar style={{ width: 14, height: 14 }} />
+      </button>
+      <button
+        onClick={() => {
+          if (!periodFrom || !periodTo) return
+          let from = periodFrom, to = periodTo
+          if (to < from) { from = periodTo; to = periodFrom; setPeriodFrom(from); setPeriodTo(to) }
+          const totalDays = diffDays(parseDate(from), parseDate(to)) + 1
+          setStartDate(parseDate(from))
+          setZoomLevel(findBestZoom(totalDays))
+          setCommittedFrom(from)
+          setCommittedTo(to)
+          setPeriodCommitted(true)
+        }}
+        className="text-[10px] font-semibold text-white transition-colors"
+        style={{
+          height: 26, padding: '0 14px', borderRadius: 6,
+          background: (!periodFrom || !periodTo) ? 'var(--muted)' : '#991B1B',
+          opacity: (!periodFrom || !periodTo) ? 0.4 : 1,
+          cursor: (!periodFrom || !periodTo) ? 'default' : 'pointer',
+          animation: periodDirty ? 'pulse 2s infinite' : 'none',
+        }}
+      >
+        {periodDirty ? 'Go ↻' : 'Go'}
+      </button>
+      <button
+        onClick={() => setOptimizerOpen(true)}
+        className="text-[10px] font-semibold transition-colors hover:bg-[rgba(153,27,27,0.06)]"
+        style={{ height: 26, padding: '0 12px', borderRadius: 8, border: '1.5px solid #991B1B', background: 'transparent', color: '#991B1B', marginLeft: 4 }}
+      >
+        ✈ Optimizer
+      </button>
+    </div>
+  )
+
+  // ─── Blank state (no period selected) ─────────────────────────────
+  if (!periodCommitted) {
+    return (
+      <div
+        ref={movementContainerRef}
+        className={`gantt-fullscreen-target h-full flex flex-col overflow-hidden relative bg-background ${isFullscreen && typeof document !== 'undefined' && !document.fullscreenElement ? 'fixed inset-0 z-[9999]' : ''}`}
+      >
+        <div className="shrink-0 glass border-b z-20 px-4 py-2">
+          <div className="flex items-center gap-3">
+            {periodSelector}
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="mx-auto mb-4 rounded-full bg-muted/30 flex items-center justify-center" style={{ width: 64, height: 64 }}>
+              <CalendarRange className="text-muted-foreground" style={{ width: 28, height: 28 }} />
+            </div>
+            <p className="text-[13px] font-medium">Select a period to view</p>
+            <p className="text-[11px] text-muted-foreground mt-1">Choose a date range above and click Go to load the chart</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // ─── Render ────────────────────────────────────────────────────────
   return (
     <div
@@ -1882,63 +2204,53 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         {/* Row 1: Title + Navigation + Zoom */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <h1 className="text-sm font-semibold whitespace-nowrap">Movement Control</h1>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={goBack}
-                className="p-1 rounded-md hover:bg-muted transition-colors"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <span className="text-xs text-muted-foreground min-w-[160px] text-center">
-                {formatDateRange(startDate, zoomConfig.days)}
-                <span className="ml-1 opacity-50">(Local)</span>
-              </span>
-              <button
-                onClick={goForward}
-                className="p-1 rounded-md hover:bg-muted transition-colors"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-              <button
-                onClick={goToday}
-                className="ml-1 px-2 py-0.5 text-[10px] font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-              >
-                Today
-              </button>
-            </div>
+            {periodSelector}
           </div>
 
           {/* Zoom pills + Row height zoom + Settings gear */}
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5">
-              {ZOOM_GROUP_DAYS.map((z) => (
-                <button
-                  key={z}
-                  onClick={() => setZoomLevel(z)}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium rounded-md transition-colors ${
-                    zoomLevel === z
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {z}
-                </button>
-              ))}
+              {ZOOM_GROUP_DAYS.map((z) => {
+                const disabled = isZoomDisabled(z)
+                return (
+                  <button
+                    key={z}
+                    onClick={() => !disabled && setZoomLevel(z)}
+                    disabled={disabled}
+                    className={`px-1.5 py-0.5 text-[10px] font-medium rounded-md transition-colors ${
+                      disabled
+                        ? 'text-muted-foreground/30 cursor-not-allowed'
+                        : zoomLevel === z
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                    style={{ opacity: disabled ? 0.3 : 1 }}
+                  >
+                    {z}
+                  </button>
+                )
+              })}
               <div className="w-px h-4 bg-border/60 mx-0.5" />
-              {ZOOM_GROUP_WIDE.map((z) => (
-                <button
-                  key={z}
-                  onClick={() => setZoomLevel(z)}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium rounded-md transition-colors ${
-                    zoomLevel === z
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {z}
-                </button>
-              ))}
+              {ZOOM_GROUP_WIDE.map((z) => {
+                const disabled = isZoomDisabled(z)
+                return (
+                  <button
+                    key={z}
+                    onClick={() => !disabled && setZoomLevel(z)}
+                    disabled={disabled}
+                    className={`px-1.5 py-0.5 text-[10px] font-medium rounded-md transition-colors ${
+                      disabled
+                        ? 'text-muted-foreground/30 cursor-not-allowed'
+                        : zoomLevel === z
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                    style={{ opacity: disabled ? 0.3 : 1 }}
+                  >
+                    {z}
+                  </button>
+                )
+              })}
               {/* Vertical divider + Row height zoom */}
               <div className="w-px h-4 bg-border/60 mx-0.5" />
               <button
@@ -2049,7 +2361,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           <div className="shrink-0 border-b" style={{ height: headerH }} />
           {/* Histogram label */}
           {(movementSettings.display?.histogram ?? true) ? (
-            <div className="h-[34px] shrink-0 border-b flex items-center px-3">
+            <div className="h-[48px] shrink-0 border-b flex items-center px-3">
               <span className="text-[11px] font-semibold text-muted-foreground/80 select-none">
                 {histogramLabel}
               </span>
@@ -2063,7 +2375,17 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
             className="flex-1 overflow-hidden select-none"
           >
             <div style={{ height: bodyHeight }}>
-              {rows.map((row) => {
+              {rows.map((row, rowIdx) => {
+                const rl = rowLayout[rowIdx]
+                const lpRowH = rl?.height ?? (row.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT)
+                const lpRowTop = rl?.yTop ?? 0
+
+                // Vertical virtualization: placeholder for off-screen rows
+                if (lpRowTop + lpRowH < visibleBounds.top || lpRowTop > visibleBounds.bottom) {
+                  const key = row.type === 'group' ? `g-${row.icaoType}` : row.type === 'overflow' ? `overflow-lp-${row.icaoType}` : `a-${row.reg.id}`
+                  return <div key={key} style={{ height: lpRowH }} />
+                }
+
                 if (row.type === 'group') {
                   const isCollapsed = collapsedTypes.has(row.icaoType)
                   const typeColor = acTypeColors[row.icaoType] || '#6B7280'
@@ -2189,7 +2511,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
             style={{ height: headerH }}
           >
                 <div ref={headerInnerRef} className="relative" style={{ width: totalWidth, height: headerH }}>
-                  {Array.from({ length: zoomConfig.days }, (_, d) => {
+                  {Array.from({ length: totalDaysToRender }, (_, d) => {
                     const date = addDays(startDate, d)
                     const x = d * 24 * pixelsPerHour
                     const dayWidth = 24 * pixelsPerHour
@@ -2225,11 +2547,26 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                         >
                           {formatDateShort(displayDate)}
                         </div>
-                        {/* Day separator line */}
+                        {/* Day separator line — UTC midnight solid */}
                         <div
-                          className="absolute top-0 bottom-0 border-l border-black/[0.06] dark:border-white/[0.06]"
-                          style={{ left: x }}
+                          className="absolute top-0 bottom-0 bg-black/80 dark:bg-white/30"
+                          style={{ left: x, width: 2 }}
                         />
+                        {/* Local midnight — dotted */}
+                        {tzOffset !== 0 && (() => {
+                          const localMidnightUtcHour = ((24 - tzOffset) % 24 + 24) % 24
+                          const localX = x + localMidnightUtcHour * pixelsPerHour
+                          return (
+                            <div
+                              className="absolute top-0 bottom-0 pointer-events-none"
+                              style={{
+                                left: localX,
+                                width: 0,
+                                borderLeft: isDark ? '2px dotted rgba(255,255,255,0.25)' : '2px dotted rgba(0,0,0,0.6)',
+                              }}
+                            />
+                          )
+                        })()}
                         {/* Hour ticks */}
                         {hoursPerTick <= 12 &&
                           Array.from(
@@ -2308,17 +2645,17 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                     )
                   })}
                   {/* Month labels overlay for 3M/6M */}
-                  {zoomConfig.days > 31 && (() => {
+                  {totalDaysToRender > 31 && (() => {
                     const months: { label: string; xPx: number; widthPx: number }[] = []
                     let d = 0
-                    while (d < zoomConfig.days) {
+                    while (d < totalDaysToRender) {
                       const date = addDays(startDate, d)
                       const displayDate = timeMode === 'utc' ? date : getLocalDate(date, tzOffset)
                       const monthStart = d
                       const currentMonth = displayDate.getMonth()
                       const currentYear = displayDate.getFullYear()
                       let end = d + 1
-                      while (end < zoomConfig.days) {
+                      while (end < totalDaysToRender) {
                         const nd = addDays(startDate, end)
                         const ndDisplay = timeMode === 'utc' ? nd : getLocalDate(nd, tzOffset)
                         if (ndDisplay.getMonth() !== currentMonth || ndDisplay.getFullYear() !== currentYear) break
@@ -2358,24 +2695,20 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           {(movementSettings.display?.histogram ?? true) ? (
             <div
               ref={histogramRef}
-              className="h-[34px] shrink-0 border-b overflow-hidden"
+              className="h-[48px] shrink-0 border-b overflow-hidden"
             >
-              <div ref={histogramInnerRef} className="relative" style={{ width: totalWidth, height: 34 }}>
+              <div ref={histogramInnerRef} className="relative" style={{ width: totalWidth, height: 48 }}>
                 {histogram.buckets.map((bucket, i) => {
-                  if (bucket.count === 0 && histogramMode === 'hourly') return null
-                  const barHeight = Math.round((bucket.count / histogram.max) * 12)
-
-                  // Zoom-dependent label style
-                  const isMuted = zoomConfig.days >= 4 && zoomConfig.days <= 7
                   const isWeekly = histogramMode === 'weekly'
-                  const showLabel = isWeekly
-                    ? bucket.widthPx > 30
-                    : isMuted
-                      ? bucket.count > 0 && bucket.widthPx > 12
-                      : bucket.widthPx > 18
-                  const labelFontSize = isWeekly ? 10 : isMuted ? 8 : 9
-                  const labelFontWeight = isMuted ? 600 : 700
-                  const labelOpacity = isMuted ? 0.5 : 1
+                  // Weekly: skip zero-count entirely
+                  if (bucket.count === 0 && isWeekly) return null
+                  const barHeight = bucket.count > 0 ? Math.max(2, Math.round((bucket.count / histogram.max) * 28)) : 0
+
+                  // ≤7D hourly: ALWAYS show count label (including 0)
+                  const showLabel = isWeekly ? (bucket.count > 0 && bucket.widthPx > 20) : true
+                  const labelFontSize = isWeekly ? 10 : zoomDays >= 5 ? 7 : zoomDays >= 4 ? 8 : 9
+                  const labelFontWeight = zoomDays >= 4 ? 600 : 700
+                  const zeroColor = isDark ? 'rgba(156,163,175,0.25)' : 'rgba(107,114,128,0.3)'
 
                   return (
                     <div key={i}>
@@ -2392,18 +2725,18 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                           }}
                         />
                       )}
-                      {/* Count label */}
-                      {showLabel && bucket.count > 0 && (
+                      {/* Count label — always visible in hourly mode */}
+                      {showLabel && (
                         <div
-                          className="absolute text-center pointer-events-none select-none"
+                          className="absolute pointer-events-none select-none"
                           style={{
-                            left: bucket.xPx,
-                            width: bucket.widthPx,
-                            bottom: barHeight + 1,
+                            left: bucket.xPx + bucket.widthPx / 2,
+                            transform: 'translateX(-50%)',
+                            bottom: bucket.count > 0 ? barHeight + 1 : 2,
                             fontSize: labelFontSize,
-                            fontWeight: labelFontWeight,
-                            opacity: labelOpacity,
-                            color: 'var(--gantt-histogram-label)',
+                            fontWeight: bucket.count > 0 ? labelFontWeight : 400,
+                            color: bucket.count > 0 ? 'var(--gantt-histogram-label)' : zeroColor,
+                            whiteSpace: 'nowrap',
                           }}
                         >
                           {bucket.count}
@@ -2492,15 +2825,11 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
             <div className="relative" style={{ width: totalWidth, height: bodyHeight }}>
               {/* Background: midnight lines, hour grid (no weekend tint — header only) */}
               {(() => {
-                return Array.from({ length: zoomConfig.days }, (_, d) => {
+                return Array.from({ length: totalDaysToRender }, (_, d) => {
                   const date = addDays(startDate, d)
                   const x = d * 24 * pixelsPerHour
                   return (
                     <div key={`bg-${d}`}>
-                      <div
-                        className="absolute top-0 border-l border-black/[0.06] dark:border-white/[0.06]"
-                        style={{ left: x, height: bodyHeight }}
-                      />
                       {hoursPerTick <= 6 &&
                         Array.from(
                           { length: Math.floor(24 / hoursPerTick) },
@@ -2524,16 +2853,49 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                 })
               })()}
 
+              {/* Day separator lines — solid UTC midnight, dotted local midnight */}
+              {Array.from({ length: totalDaysToRender }, (_, d) => {
+                const x = d * 24 * pixelsPerHour
+                const localMidnightUtcHour = ((24 - tzOffset) % 24 + 24) % 24
+                const localX = x + localMidnightUtcHour * pixelsPerHour
+                return (
+                  <Fragment key={`day-sep-${d}`}>
+                    {/* UTC midnight — solid */}
+                    <div
+                      className="absolute top-0 pointer-events-none bg-black/80 dark:bg-white/30"
+                      style={{ left: x, width: 2, height: bodyHeight, zIndex: 1 }}
+                    />
+                    {/* Local midnight — dotted */}
+                    {tzOffset !== 0 && (
+                      <div
+                        className="absolute top-0 pointer-events-none"
+                        style={{
+                          left: localX,
+                          width: 0,
+                          height: bodyHeight,
+                          zIndex: 1,
+                          borderLeft: isDark ? '2px dotted rgba(255,255,255,0.25)' : '2px dotted rgba(0,0,0,0.6)',
+                        }}
+                      />
+                    )}
+                  </Fragment>
+                )
+              })}
+
               {/* Flight bars + TAT labels */}
               {(() => {
                 let yOffset = 0
 
                 // Helper: render flight bars for a list of flights
                 const renderFlightBars = (rowFlights: ExpandedFlight[], isOverflow: boolean, regCode: string) => {
-                  const showTatLabels = (movementSettings.display?.tatLabels ?? true) && zoomConfig.days <= 3
+                  const showTatLabels = (movementSettings.display?.tatLabels ?? true) && zoomDays <= 3
                   return rowFlights.map((ef, fi) => {
                     const x = getFlightX(ef)
                     const w = getFlightWidth(ef)
+
+                    // Horizontal virtualization: skip bars outside visible range
+                    if (x + w < visibleBounds.left || x > visibleBounds.right) return null
+
                     const isSelected = selectedFlights.has(ef.id)
                     const isHovered = hoveredFlightId === ef.id
                     const num = stripFlightPrefix(ef.flightNumber)
@@ -2612,7 +2974,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                     // Flanking STD/STA text (≤3D zoom only)
                     let flankSTD: React.ReactNode = null
                     let flankSTA: React.ReactNode = null
-                    if (zoomConfig.days <= 3) {
+                    if (zoomDays <= 3) {
                       const FLANK_TEXT_W = 28
                       const FLANK_GAP = 4
                       const MIN_SPACE = FLANK_TEXT_W + FLANK_GAP + 4
@@ -2727,7 +3089,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                           className="absolute cursor-grab group/bar select-none"
                           style={{
                             left: x, width: w, height: BAR_HEIGHT, top: BAR_TOP,
-                            zIndex: isSearchHighlight ? 50 : barIsDragged ? 100 : isSelected ? 10 : isHovered ? 5 : 1,
+                            zIndex: isSearchHighlight ? 50 : barIsDragged ? 100 : isSelected ? 10 : isHovered ? 5 : 2,
                             transform: barIsDragged
                               ? `translateY(${getDragDeltaY(0)}px) scale(1.03)`
                               : undefined,
@@ -2809,8 +3171,16 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
                 return rows.map((row) => {
                   const currentY = yOffset
+                  const rowH = row.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT
+                  yOffset += rowH
+
+                  // Vertical virtualization: render lightweight placeholder for off-screen rows
+                  if (currentY + rowH < visibleBounds.top || currentY > visibleBounds.bottom) {
+                    const key = row.type === 'group' ? `gr-${row.icaoType}` : row.type === 'overflow' ? `overflow-${row.icaoType}` : `row-${row.reg.id}`
+                    return <div key={key} className="absolute left-0" style={{ top: currentY, height: rowH }} />
+                  }
+
                   if (row.type === 'group') {
-                    yOffset += GROUP_HEADER_HEIGHT
                     return (
                       <div
                         key={`gr-${row.icaoType}`}
@@ -2821,7 +3191,6 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                   }
 
                   if (row.type === 'overflow') {
-                    yOffset += ROW_HEIGHT
                     const rowFlights = getOverflowFlightsSorted(row.icaoType)
                     return (
                       <div
@@ -2838,7 +3207,6 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                   }
 
                   // type === 'aircraft'
-                  yOffset += ROW_HEIGHT
                   const reg = row.reg
                   const rowFlights = getRegFlightsSorted(reg.registration)
                   const isRowPasteTarget = clipboard?.targetReg === reg.registration
@@ -2880,7 +3248,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
                         if (eodEveryDay) {
                           // ≤7D: badge at every day boundary
-                          return Array.from({ length: zoomConfig.days }, (_, d) => {
+                          return Array.from({ length: totalDaysToRender }, (_, d) => {
                             const dateKey = formatISO(addDays(startDate, d))
                             const eod = eodLocations.get(`${regKey}|${dateKey}`)
                             const station = eod?.station ?? base
@@ -2908,14 +3276,14 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                         } else {
                           // >7D: one badge at the right edge — last flight's arrival or base
                           let lastStation: string | null = null
-                          for (let d = zoomConfig.days - 1; d >= 0; d--) {
+                          for (let d = totalDaysToRender - 1; d >= 0; d--) {
                             const dateKey = formatISO(addDays(startDate, d))
                             const eod = eodLocations.get(`${regKey}|${dateKey}`)
                             if (eod) { lastStation = eod.station; break }
                           }
                           const station = lastStation ?? base
                           if (!station) return null
-                          const rightEdgeX = zoomConfig.days * 24 * pixelsPerHour
+                          const rightEdgeX = totalDaysToRender * 24 * pixelsPerHour
                           return (
                             <div
                               key="eod-end"
@@ -3064,7 +3432,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                     <div className="text-[12px] font-medium">No flights found</div>
                     <div className="text-[10px] text-muted-foreground leading-relaxed">
                       No matches for &ldquo;{flightSearchQuery}&rdquo; in the<br />
-                      current view ({startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}–{addDays(startDate, zoomConfig.days - 1).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})
+                      current view ({startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}–{addDays(startDate, totalDaysToRender - 1).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})
                     </div>
                     <div className="text-[10px] text-muted-foreground mt-1">Try a different flight number<br />or adjust the date range</div>
                   </div>
@@ -3759,8 +4127,12 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           onAssigned={(items, registration) => {
             setAssignModalOpen(false)
             setSelectedFlights(new Set())
+            // Clear any workspace overrides for these flights so DB assignment takes effect
+            const expandedIds = items.map(it => `${it.flightId}_${it.flightDate}`)
+            removeWorkspaceOverrides(expandedIds)
             applyOptimisticAssign(items, registration)
-            refreshFlights()
+            // Delay refresh to let DB write fully commit; merge logic protects optimistic state
+            setTimeout(() => refreshFlights(), 500)
           }}
         />
       )}
@@ -3775,10 +4147,14 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           const res = await unassignFlightsTail(finalItems)
           if (res.error) { toast.error(friendlyError(res.error)); return }
           toast.success(`${finalItems.length} flight${finalItems.length > 1 ? 's' : ''} unassigned`)
+          // Clear any workspace overrides for these flights so unassignment takes effect
+          const expandedIds = finalItems.map(it => `${it.flightId}_${it.flightDate}`)
+          removeWorkspaceOverrides(expandedIds)
           applyOptimisticUnassign(finalItems)
           setUnassignModalOpen(false)
           setSelectedFlights(new Set())
-          refreshFlights()
+          // Delay refresh to let DB delete fully commit; merge logic protects optimistic state
+          setTimeout(() => refreshFlights(), 500)
         }}
       />
 
@@ -3826,6 +4202,17 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         onUpdateTatOverride={updateTatOverride}
         onResetTatOverride={resetTatOverride}
         onResetAll={resetAllSettings}
+        container={dialogContainer}
+      />
+
+      {/* ── OPTIMIZER DIALOG ─────────────────────────────────── */}
+      <GanttOptimizerDialog
+        open={optimizerOpen}
+        onClose={() => setOptimizerOpen(false)}
+        onRunComplete={handleRunAssignment}
+        currentMethod={assignmentMethod}
+        lastRun={lastOptRun}
+        running={optimizerRunning}
         container={dialogContainer}
       />
 
