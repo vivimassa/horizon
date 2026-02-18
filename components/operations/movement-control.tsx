@@ -49,7 +49,7 @@ import { MovementWorkspaceIndicator } from './movement-workspace-indicator'
 
 // ─── Types & Constants ───────────────────────────────────────────────────
 
-type ZoomLevel = '1D' | '2D' | '3D' | '4D' | '5D' | '6D' | '7D' | '14D' | '28D' | 'M' | '3M' | '6M' | '1Y'
+type ZoomLevel = '1D' | '2D' | '3D' | '4D' | '5D' | '6D' | '7D' | '14D' | '28D' | 'M' | '3M' | '6M'
 
 const ZOOM_CONFIG: Record<ZoomLevel, { hoursPerTick: number; days: number }> = {
   '1D':  { hoursPerTick: 1,  days: 1 },
@@ -64,11 +64,10 @@ const ZOOM_CONFIG: Record<ZoomLevel, { hoursPerTick: number; days: number }> = {
   'M':   { hoursPerTick: 24, days: 31 },
   '3M':  { hoursPerTick: 168, days: 91 },
   '6M':  { hoursPerTick: 336, days: 182 },
-  '1Y':  { hoursPerTick: 720, days: 365 },
 }
 
 const ZOOM_GROUP_DAYS: ZoomLevel[] = ['1D', '2D', '3D', '4D', '5D', '6D', '7D']
-const ZOOM_GROUP_WIDE: ZoomLevel[] = ['14D', '28D', 'M', '3M', '6M', '1Y']
+const ZOOM_GROUP_WIDE: ZoomLevel[] = ['14D', '28D', 'M', '3M', '6M']
 
 // ─── Row height levels (vertical zoom) ────────────────────────────────
 const ROW_HEIGHT_LEVELS = [
@@ -107,6 +106,7 @@ interface ExpandedFlight {
   /** Virtual tail assignment — null if overflow */
   assignedReg: string | null
   serviceType: string
+  source: string
 }
 
 const OVERFLOW_ROW_ID_PREFIX = '__overflow__'
@@ -138,7 +138,10 @@ function startOfDay(d: Date): Date {
 }
 
 function formatDateShort(d: Date): string {
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  const dow = d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()
+  const day = d.getDate().toString().padStart(2, '0')
+  const mon = d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase()
+  return `${dow}, ${day} ${mon}`
 }
 
 function formatDateRange(start: Date, days: number): string {
@@ -288,31 +291,52 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const [startDate, setStartDate] = useState(() => startOfDay(new Date()))
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('4D')
   const [acTypeFilter, setAcTypeFilter] = useState<string | null>(null)
-  const [showPublished, setShowPublished] = useState(true)
-  const [showDrafts, setShowDrafts] = useState(true)
+  const [scheduleFilters, setScheduleFilters] = useState({ published: true, draftSsim: true, draftManual: true })
   const [selectedFlights, setSelectedFlights] = useState<Set<string>>(new Set())
   const [hoveredFlightId, setHoveredFlightId] = useState<string | null>(null)
   const tooltipPosRef = useRef({ x: 0, y: 0 })
-  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set<string>()
-    try {
-      const stored = localStorage.getItem('horizon_movement_collapsed')
-      if (stored) return new Set(JSON.parse(stored))
-    } catch { /* ignore */ }
-    return new Set<string>()
-  })
+  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set<string>())
   const [flights, setFlights] = useState<MovementFlight[]>([])
   const [loading, setLoading] = useState(false)
 
   // Dark mode tracking
-  const [isDark, setIsDark] = useState(() =>
-    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-  )
+  const [isDark, setIsDark] = useState(false)
 
-  // Persist collapsed state to localStorage
+  // Aircraft row reorder state
+  const [selectedAircraftRow, setSelectedAircraftRow] = useState<string | null>(null)
+  const [customAircraftOrder, setCustomAircraftOrder] = useState<Record<string, string[]>>({})
+  const [flashReg, setFlashReg] = useState<string | null>(null)
+
+  // Hydrate client-only state after mount
+  const didHydrateRef = useRef(false)
   useEffect(() => {
+    try {
+      const stored = localStorage.getItem('horizon_movement_collapsed')
+      if (stored) setCollapsedTypes(new Set(JSON.parse(stored)))
+    } catch { /* ignore */ }
+    try {
+      const orderStr = localStorage.getItem('horizon_movement_custom_reg_order')
+      if (orderStr) setCustomAircraftOrder(JSON.parse(orderStr))
+    } catch { /* ignore */ }
+    setIsDark(document.documentElement.classList.contains('dark'))
+    requestAnimationFrame(() => { didHydrateRef.current = true })
+  }, [])
+
+  // Persist collapsed state to localStorage (skip until hydrated)
+  useEffect(() => {
+    if (!didHydrateRef.current) return
     try { localStorage.setItem('horizon_movement_collapsed', JSON.stringify(Array.from(collapsedTypes))) } catch { /* ignore */ }
   }, [collapsedTypes])
+
+  // Persist custom aircraft order to localStorage
+  useEffect(() => {
+    if (!didHydrateRef.current) return
+    const val = JSON.stringify(customAircraftOrder)
+    try {
+      if (val === '{}') localStorage.removeItem('horizon_movement_custom_reg_order')
+      else localStorage.setItem('horizon_movement_custom_reg_order', val)
+    } catch { /* ignore */ }
+  }, [customAircraftOrder])
 
   // Track dark mode changes
   useEffect(() => {
@@ -338,6 +362,17 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     updateTatOverride, resetTatOverride,
     resetAll: resetAllSettings, saveStatus,
   } = useMovementSettings()
+  const prevSortOrderRef = useRef(movementSettings.fleetSortOrder)
+
+  // Clear custom order when fleet sort order changes
+  useEffect(() => {
+    const current = movementSettings.fleetSortOrder ?? 'type_reg'
+    if (prevSortOrderRef.current !== current) {
+      setCustomAircraftOrder({})
+      setSelectedAircraftRow(null)
+      prevSortOrderRef.current = current
+    }
+  }, [movementSettings.fleetSortOrder])
 
   // Mini builder state
   const [miniBuilderOpen, setMiniBuilderOpen] = useState(false)
@@ -374,17 +409,35 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false)
 
-  // Collapsible right panel + pin state
-  const [panelPinned, setPanelPinned] = useState(() => {
-    if (typeof window === 'undefined') return false
-    try { return localStorage.getItem('horizon_movement_panel_pinned') === 'true' } catch { return false }
-  })
-  const [panelVisible, setPanelVisible] = useState(() => {
-    if (typeof window === 'undefined') return false
-    try { return localStorage.getItem('horizon_movement_panel_pinned') === 'true' } catch { return false }
-  })
+  // Collapsible right panel + pin state (hydrated from localStorage after mount)
+  const [panelPinned, setPanelPinned] = useState(false)
+  const [panelVisible, setPanelVisible] = useState(false)
+  useEffect(() => {
+    try {
+      const pinned = localStorage.getItem('horizon_movement_panel_pinned') === 'true'
+      if (pinned) { setPanelPinned(true); setPanelVisible(true) }
+    } catch { /* ignore */ }
+  }, [])
+
+  // Flight search state
+  const [flightSearchOpen, setFlightSearchOpen] = useState(false)
+  const [flightSearchQuery, setFlightSearchQuery] = useState('')
+  const [flightSearchDate, setFlightSearchDate] = useState('')
+  const [flightSearchIndex, setFlightSearchIndex] = useState(-1)
+  const [searchHighlightId, setSearchHighlightId] = useState<string | null>(null)
+
+  // Aircraft search state
+  const [aircraftSearchOpen, setAircraftSearchOpen] = useState(false)
+  const [aircraftSearchQuery, setAircraftSearchQuery] = useState('')
+  const [aircraftSearchIndex, setAircraftSearchIndex] = useState(-1)
+  const [aircraftHighlightReg, setAircraftHighlightReg] = useState<string | null>(null)
 
   // ─── Refs ───────────────────────────────────────────────────────────
+  const moveAircraftRowRef = useRef<(reg: string, direction: 'up' | 'down' | 'top' | 'bottom') => void>(() => {})
+  const flightSearchInputRef = useRef<HTMLInputElement>(null)
+  const searchResultsRef = useRef<HTMLDivElement>(null)
+  const aircraftSearchInputRef = useRef<HTMLInputElement>(null)
+  const aircraftResultsRef = useRef<HTMLDivElement>(null)
   const movementContainerRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const headerRef = useRef<HTMLDivElement>(null)
@@ -431,6 +484,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     return () => document.removeEventListener('fullscreenchange', handler)
   }, [])
 
+  // Portal container for dialogs — must render inside fullscreen element
+  const dialogContainer = isFullscreen ? movementContainerRef.current : null
+
   // CSS fallback Escape handler
   useEffect(() => {
     if (!isFullscreen || document.fullscreenElement) return // only for CSS fallback
@@ -445,15 +501,16 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
   // ─── Panel visibility logic ───────────────────────────────────────
   useEffect(() => {
-    if (panelPinned) {
+    if (panelPinned || flightSearchOpen || aircraftSearchOpen) {
       setPanelVisible(true)
     } else {
       setPanelVisible(selectedFlights.size > 0)
     }
-  }, [panelPinned, selectedFlights.size])
+  }, [panelPinned, selectedFlights.size, flightSearchOpen, aircraftSearchOpen])
 
-  // Persist pin state
+  // Persist pin state (skip until hydrated)
   useEffect(() => {
+    if (!didHydrateRef.current) return
     try { localStorage.setItem('horizon_movement_panel_pinned', String(panelPinned)) } catch { /* ignore */ }
   }, [panelPinned])
 
@@ -473,12 +530,64 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     : 168
   const hoursPerTick = Math.min(zoomConfig.hoursPerTick, autoTickHours)
 
-  // ─── Keyboard handlers (Escape + Delete) ───────────────────────────
+  // ─── Close flight search helper ────────────────────────────────────
+  const closeFlightSearch = useCallback(() => {
+    setFlightSearchOpen(false)
+    setFlightSearchQuery('')
+    setFlightSearchDate('')
+    setFlightSearchIndex(-1)
+    setSearchHighlightId(null)
+  }, [])
+
+  // ─── Close aircraft search helper ─────────────────────────────────
+  const closeAircraftSearch = useCallback(() => {
+    setAircraftSearchOpen(false)
+    setAircraftSearchQuery('')
+    setAircraftSearchIndex(-1)
+    setAircraftHighlightReg(null)
+  }, [])
+
+  // ─── Keyboard handlers (Escape + Delete + Ctrl+F + Ctrl+G) ───────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+F / Cmd+F — open flight search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        const active = document.activeElement
+        const isInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+        if (!isInput || flightSearchOpen) {
+          e.preventDefault()
+          closeAircraftSearch()
+          setFlightSearchOpen(true)
+          setPanelVisible(true)
+          setTimeout(() => flightSearchInputRef.current?.focus(), 50)
+          return
+        }
+      }
+
+      // Ctrl+G / Cmd+G — open aircraft search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
+        e.preventDefault()
+        closeFlightSearch()
+        setAircraftSearchOpen(true)
+        setPanelVisible(true)
+        setTimeout(() => aircraftSearchInputRef.current?.focus(), 50)
+        return
+      }
+
+      // Ctrl+Arrow / Ctrl+Home/End — reorder selected aircraft row
+      if ((e.ctrlKey || e.metaKey) && selectedAircraftRow) {
+        if (e.key === 'ArrowUp') { e.preventDefault(); moveAircraftRowRef.current(selectedAircraftRow, 'up'); return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveAircraftRowRef.current(selectedAircraftRow, 'down'); return }
+        if (e.key === 'Home') { e.preventDefault(); moveAircraftRowRef.current(selectedAircraftRow, 'top'); return }
+        if (e.key === 'End') { e.preventDefault(); moveAircraftRowRef.current(selectedAircraftRow, 'bottom'); return }
+      }
+
       if (e.key === 'Escape') {
-        // Priority: modal > context menu > clipboard > selection > fullscreen
+        // Priority: aircraft search > flight search > modal > context menu > ac row select > selection
+        if (aircraftSearchOpen) { closeAircraftSearch(); return }
+        if (flightSearchOpen) { closeFlightSearch(); return }
         if (contextMenu) { setContextMenu(null); return }
+        if (selectedAircraftRow) { setSelectedAircraftRow(null); return }
         if (selectedFlights.size > 0) { setSelectedFlights(new Set()); return }
         // Fullscreen CSS fallback exit handled by its own effect
       }
@@ -489,7 +598,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedFlights.size, deleteModalOpen, miniBuilderOpen, assignModalOpen, contextMenu])
+  }, [selectedFlights.size, deleteModalOpen, miniBuilderOpen, assignModalOpen, contextMenu, flightSearchOpen, closeFlightSearch, aircraftSearchOpen, closeAircraftSearch, selectedAircraftRow])
 
   // ─── Scroll Sync ───────────────────────────────────────────────────
   // Use transform on inner content for header/histogram sync (more reliable than scrollLeft)
@@ -590,9 +699,19 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       const typeName = regs[0]?.aircraft_types?.name || icao
       result.push({ icaoType: icao, typeName, registrations: regs })
     })
-    result.sort((a, b) => a.icaoType.localeCompare(b.icaoType))
+    const customOrder = movementSettings.acTypeOrder
+    if (customOrder.length > 0) {
+      const orderMap = new Map(customOrder.map((icao, i) => [icao, i]))
+      result.sort((a, b) => {
+        const ai = orderMap.get(a.icaoType) ?? 9999
+        const bi = orderMap.get(b.icaoType) ?? 9999
+        return ai - bi || a.icaoType.localeCompare(b.icaoType)
+      })
+    } else {
+      result.sort((a, b) => a.icaoType.localeCompare(b.icaoType))
+    }
     return result
-  }, [registrations, acTypeFilter])
+  }, [registrations, acTypeFilter, movementSettings.acTypeOrder])
 
   // ─── Unique AC types for filter pills ─────────────────────────────
   const uniqueTypes = useMemo(() => {
@@ -607,8 +726,11 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const expandedFlights = useMemo<ExpandedFlight[]>(() => {
     const result: ExpandedFlight[] = []
     for (const f of flights) {
-      if (f.status === 'published' && !showPublished) continue
-      if (f.status === 'draft' && !showDrafts) continue
+      const isDraft = f.status === 'draft' || f.status === 'ready'
+      const isPub = f.status === 'published'
+      if (isPub && !scheduleFilters.published) continue
+      if (isDraft && f.source === 'ssim' && !scheduleFilters.draftSsim) continue
+      if (isDraft && f.source !== 'ssim' && !scheduleFilters.draftManual) continue
 
       const pStart = new Date(f.periodStart + 'T00:00:00')
       const pEnd = new Date(f.periodEnd + 'T00:00:00')
@@ -649,11 +771,44 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           dayOffset: f.dayOffset ?? 0,
           assignedReg: null, // set by tail assignment engine
           serviceType: f.serviceType || 'J',
+          source: f.source || 'manual',
         })
       }
     }
     return result
-  }, [flights, startDate, zoomConfig.days, showPublished, showDrafts, tailAssignments])
+  }, [flights, startDate, zoomConfig.days, scheduleFilters.published, scheduleFilters.draftSsim, scheduleFilters.draftManual, tailAssignments])
+
+  // ─── Flight search results (live-filtered) ─────────────────────────
+  const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
+    const q = flightSearchQuery.trim()
+    if (!q) return []
+    const normalizedQuery = q.replace(/^VJ/i, '').toLowerCase()
+
+    let results = expandedFlights.filter(f => {
+      const num = f.flightNumber.replace(/^VJ/i, '').toLowerCase()
+      return num.includes(normalizedQuery)
+    })
+
+    if (flightSearchDate.trim()) {
+      const parts = flightSearchDate.trim().split('/')
+      if (parts.length === 2) {
+        const day = parseInt(parts[0], 10)
+        const month = parseInt(parts[1], 10)
+        if (!isNaN(day) && !isNaN(month)) {
+          results = results.filter(f => f.date.getDate() === day && (f.date.getMonth() + 1) === month)
+        }
+      }
+    }
+
+    results.sort((a, b) => {
+      const da = a.date.getTime()
+      const db = b.date.getTime()
+      if (da !== db) return da - db
+      return a.stdMinutes - b.stdMinutes
+    })
+
+    return results
+  }, [expandedFlights, flightSearchQuery, flightSearchDate])
 
   // ─── Route cycle mate lookup ──────────────────────────────────────
   const routeCycleMap = useMemo(() => {
@@ -1089,6 +1244,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   }
 
   const handleBarClick = (id: string, e: React.MouseEvent) => {
+    setSelectedAircraftRow(null)
     setContextMenu(null)
     if (e.shiftKey || e.ctrlKey || e.metaKey) {
       // Toggle: add or remove from selection
@@ -1200,16 +1356,20 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   }, [flightsByReg])
 
   // Resolved AC type colors (with palette fallback)
+  // Use ALL active aircraft types sorted alphabetically — same ordering as
+  // MovementSettingsPanel so palette auto-assignment produces identical colors.
   const acTypeColors = useMemo(() => {
     const result: Record<string, string> = { ...movementSettings.colorAcType }
-    const types = groups.map(g => g.icaoType)
-    types.forEach((icao, i) => {
-      if (!result[icao]) {
-        result[icao] = AC_TYPE_COLOR_PALETTE[i % AC_TYPE_COLOR_PALETTE.length]
+    const allActive = aircraftTypes
+      .filter(t => t.is_active)
+      .sort((a, b) => a.icao_type.localeCompare(b.icao_type))
+    allActive.forEach((t, i) => {
+      if (!result[t.icao_type]) {
+        result[t.icao_type] = AC_TYPE_COLOR_PALETTE[i % AC_TYPE_COLOR_PALETTE.length]
       }
     })
     return result
-  }, [movementSettings.colorAcType, groups])
+  }, [movementSettings.colorAcType, aircraftTypes])
 
   // Registration → ICAO type lookup (for left panel coloring)
   const regToIcao = useMemo(() => {
@@ -1256,9 +1416,14 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       })
       if (!collapsedTypes.has(g.icaoType)) {
         // Sort registrations within group
-        const sortedRegs = [...g.registrations]
+        let sortedRegs = [...g.registrations]
         if (sortOrder === 'type_util') {
           sortedRegs.sort((a, b) => (utilByReg.get(b.registration) ?? 0) - (utilByReg.get(a.registration) ?? 0))
+        }
+        const customRegs = customAircraftOrder[g.icaoType]
+        if (customRegs && customRegs.length > 0) {
+          const orderMap = new Map(customRegs.map((reg, i) => [reg, i]))
+          sortedRegs.sort((a, b) => (orderMap.get(a.registration) ?? 9999) - (orderMap.get(b.registration) ?? 9999))
         }
         for (const reg of sortedRegs) {
           result.push({
@@ -1279,7 +1444,42 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     }
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, collapsedTypes, seatingByAircraft, acTypeMap, overflowByType, movementSettings.fleetSortOrder, utilByReg])
+  }, [groups, collapsedTypes, seatingByAircraft, acTypeMap, overflowByType, movementSettings.fleetSortOrder, utilByReg, customAircraftOrder])
+
+  // ─── Move aircraft row within group ──────────────────────────────
+  const moveAircraftRow = useCallback((reg: string, direction: 'up' | 'down' | 'top' | 'bottom') => {
+    const sortOrder = movementSettings.fleetSortOrder ?? 'type_reg'
+    if (sortOrder === 'reg_only') return
+
+    const icao = regToIcao.get(reg)
+    if (!icao) return
+
+    // Derive current order from rows
+    const currentOrder = customAircraftOrder[icao]
+      ?? rows.filter((r): r is { type: 'aircraft'; reg: AircraftWithRelations; cabin: string } => r.type === 'aircraft' && regToIcao.get(r.reg.registration) === icao).map(r => r.reg.registration)
+    const idx = currentOrder.indexOf(reg)
+    if (idx === -1) return
+
+    const newOrder = [...currentOrder]
+    if (direction === 'up' && idx > 0) {
+      ;[newOrder[idx - 1], newOrder[idx]] = [newOrder[idx], newOrder[idx - 1]]
+    } else if (direction === 'down' && idx < newOrder.length - 1) {
+      ;[newOrder[idx], newOrder[idx + 1]] = [newOrder[idx + 1], newOrder[idx]]
+    } else if (direction === 'top' && idx > 0) {
+      newOrder.splice(idx, 1)
+      newOrder.unshift(reg)
+    } else if (direction === 'bottom' && idx < newOrder.length - 1) {
+      newOrder.splice(idx, 1)
+      newOrder.push(reg)
+    } else {
+      return // already at boundary
+    }
+
+    setCustomAircraftOrder(prev => ({ ...prev, [icao]: newOrder }))
+    setFlashReg(reg)
+    setTimeout(() => setFlashReg(null), 200)
+  }, [movementSettings.fleetSortOrder, regToIcao, customAircraftOrder, rows])
+  moveAircraftRowRef.current = moveAircraftRow
 
   const bodyHeight = rows.reduce(
     (h, r) => h + (r.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT), 0
@@ -1316,6 +1516,260 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     const durationMinutes = ef.staMinutes - ef.stdMinutes
     return Math.max(2, durationMinutes * pixelsPerHour / 60)
   }
+
+  // ─── Scroll to highlighted search result ──────────────────────────
+  const doScrollToFlight = useCallback((ef: ExpandedFlight) => {
+    const body = bodyRef.current
+    if (!body) return
+
+    // Horizontal: center the bar in the viewport
+    const barX = getFlightX(ef)
+    const barW = getFlightWidth(ef)
+    const barCenterX = barX + barW / 2
+    const viewW = body.clientWidth
+    const targetLeft = Math.max(0, barCenterX - viewW / 2)
+
+    // Vertical: find which row this flight is in
+    const effectiveReg = ef.aircraftReg || ef.assignedReg
+    let targetY = 0
+    let found = false
+
+    // First: try to match by exact registration in rowLayout
+    if (effectiveReg) {
+      for (const rl of rowLayout) {
+        if (rl.type === 'aircraft' && rl.registration === effectiveReg) {
+          targetY = rl.yTop + rl.height / 2
+          found = true
+          break
+        }
+      }
+    }
+
+    // Second: try overflow row for matching AC type
+    if (!found) {
+      const targetIcao = ef.aircraftTypeIcao || ''
+      for (const rl of rowLayout) {
+        if (rl.type === 'overflow' && rl.icaoType === targetIcao) {
+          targetY = rl.yTop + rl.height / 2
+          found = true
+          break
+        }
+      }
+    }
+
+    // Third: fallback to any overflow row
+    if (!found) {
+      for (const rl of rowLayout) {
+        if (rl.type === 'overflow') {
+          targetY = rl.yTop + rl.height / 2
+          found = true
+          break
+        }
+      }
+    }
+
+    // Fourth: fallback to group header for the AC type
+    if (!found) {
+      const targetIcao = ef.aircraftTypeIcao || ''
+      for (const rl of rowLayout) {
+        if (rl.type === 'group' && rl.icaoType === targetIcao) {
+          targetY = rl.yTop + rl.height / 2
+          found = true
+          break
+        }
+      }
+    }
+
+    // Scroll both axes
+    body.scrollLeft = targetLeft
+    if (found) {
+      const viewH = body.clientHeight
+      body.scrollTop = Math.max(0, targetY - viewH / 2)
+    }
+    handleBodyScroll()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowLayout, pixelsPerHour, startDate])
+
+  const scrollToFlight = useCallback((ef: ExpandedFlight) => {
+    const effectiveReg = ef.aircraftReg || ef.assignedReg
+    const icao = ef.aircraftTypeIcao || ''
+
+    // Check if AC type is filtered out
+    const isFilteredOut = acTypeFilter !== null && icao !== '' && icao !== acTypeFilter
+    // Check if the group is collapsed (registration would be hidden)
+    const isCollapsed = collapsedTypes.has(icao)
+
+    let needsRerender = false
+
+    if (isFilteredOut) {
+      setAcTypeFilter(null)
+      needsRerender = true
+    }
+
+    if (isCollapsed && effectiveReg) {
+      setCollapsedTypes(prev => {
+        if (prev.has(icao)) {
+          const next = new Set(prev)
+          next.delete(icao)
+          return next
+        }
+        return prev
+      })
+      needsRerender = true
+    }
+
+    if (needsRerender) {
+      // Wait for DOM update after state changes, then scroll
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          doScrollToFlight(ef)
+        })
+      })
+    } else {
+      doScrollToFlight(ef)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doScrollToFlight, acTypeFilter, collapsedTypes])
+
+  // ─── Aircraft search results ───────────────────────────────────────
+  interface AircraftSearchResult {
+    registration: string
+    icaoType: string
+    cabin: string
+    reg: AircraftWithRelations
+    /** true if the aircraft exists but is filtered out by acTypeFilter */
+    filteredOut: boolean
+    filteredType?: string
+  }
+
+  const aircraftSearchResults = useMemo<AircraftSearchResult[]>(() => {
+    const q = aircraftSearchQuery.trim().toUpperCase()
+    if (!q) return []
+    // Strip common prefix
+    const cleaned = q.replace(/^VN-?/i, '')
+    if (!cleaned) return []
+
+    const results: AircraftSearchResult[] = []
+
+    // Search within current groups (visible registrations)
+    for (const g of groups) {
+      for (const reg of g.registrations) {
+        const regStr = reg.registration.toUpperCase()
+        const stripped = regStr.replace(/^VN-?/, '')
+        if (regStr.includes(cleaned) || stripped.includes(cleaned)) {
+          results.push({
+            registration: reg.registration,
+            icaoType: g.icaoType,
+            cabin: getCabinString(reg),
+            reg,
+            filteredOut: false,
+          })
+        }
+      }
+    }
+
+    // Check if there are matches in registrations filtered out by acTypeFilter
+    if (acTypeFilter) {
+      for (const reg of registrations) {
+        const icao = reg.aircraft_types?.icao_type || 'UNKN'
+        if (icao === acTypeFilter) continue // already in groups
+        const regStr = reg.registration.toUpperCase()
+        const stripped = regStr.replace(/^VN-?/, '')
+        if (regStr.includes(cleaned) || stripped.includes(cleaned)) {
+          results.push({
+            registration: reg.registration,
+            icaoType: icao,
+            cabin: getCabinString(reg),
+            reg,
+            filteredOut: true,
+            filteredType: icao,
+          })
+        }
+      }
+    }
+
+    return results
+  }, [aircraftSearchQuery, groups, registrations, acTypeFilter])
+
+  // ─── Scroll to aircraft row ────────────────────────────────────────
+  const scrollToAircraft = useCallback((result: AircraftSearchResult) => {
+    const body = bodyRef.current
+    if (!body) return
+
+    // If the group is collapsed, expand it
+    const icao = result.icaoType
+    setCollapsedTypes(prev => {
+      if (prev.has(icao)) {
+        const next = new Set(prev)
+        next.delete(icao)
+        return next
+      }
+      return prev
+    })
+
+    // If filtered out, clear the acTypeFilter to show the aircraft
+    if (result.filteredOut) {
+      setAcTypeFilter(null)
+    }
+
+    // Set highlight (will fade after 2s)
+    setAircraftHighlightReg(result.registration)
+
+    // Use requestAnimationFrame to wait for DOM update after state changes
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // Re-read body ref in case of DOM changes
+        const b = bodyRef.current
+        if (!b) return
+
+        // Find row in current layout — need to search fresh since rows may have changed
+        // Since rowLayout is a useMemo, it won't have updated yet, so we calculate manually
+        let targetY = 0
+        let found = false
+
+        // Walk rows to find the target registration
+        // We use the leftPanelRef children as a proxy for row positions
+        const lp = leftPanelRef.current
+        if (lp) {
+          const children = lp.children
+          for (let i = 0; i < children.length; i++) {
+            const child = children[i] as HTMLElement
+            // Aircraft rows have key starting with 'a-'
+            if (child.dataset?.reg === result.registration) {
+              targetY = child.offsetTop + child.offsetHeight / 2
+              found = true
+              break
+            }
+          }
+        }
+
+        // Fallback: search rowLayout
+        if (!found) {
+          for (const rl of rowLayout) {
+            if (rl.type === 'aircraft' && rl.registration === result.registration) {
+              targetY = rl.yTop + rl.height / 2
+              found = true
+              break
+            }
+          }
+        }
+
+        if (found) {
+          const viewH = b.clientHeight
+          b.scrollTop = targetY - viewH / 2
+          handleBodyScroll()
+        }
+      })
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowLayout])
+
+  // ─── Fade aircraft highlight after 2s ──────────────────────────────
+  useEffect(() => {
+    if (!aircraftHighlightReg) return
+    const timer = setTimeout(() => setAircraftHighlightReg(null), 2000)
+    return () => clearTimeout(timer)
+  }, [aircraftHighlightReg])
 
   // ─── TAT calculation between two consecutive flights ──────────────
   function calcTat(current: ExpandedFlight, next: ExpandedFlight): TatInfo | null {
@@ -1406,7 +1860,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   // ─── Derived header settings ────────────────────────────────────────
   const timeMode = movementSettings.timeDisplay ?? 'dual'
   const tzOffset = movementSettings.baseTimezoneOffset ?? 7
-  const headerH = timeMode === 'dual' ? 48 : 36
+  const headerH = timeMode === 'dual' ? 56 : 40
 
   // ─── Render ────────────────────────────────────────────────────────
   return (
@@ -1544,37 +1998,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
             <div className="w-px h-4 bg-border mx-1" />
 
-            {/* Published toggle */}
-            <button
-              onClick={() => setShowPublished((v) => !v)}
-              className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-md transition-colors ${
-                showPublished ? 'bg-primary/15 text-primary' : 'bg-muted/50 text-muted-foreground'
-              }`}
-            >
-              <span
-                className={`inline-block w-1.5 h-1.5 rounded-full ${
-                  showPublished ? 'bg-primary' : 'bg-muted-foreground/40'
-                }`}
-              />
-              Pub
-            </button>
-
-            {/* Draft toggle */}
-            <button
-              onClick={() => setShowDrafts((v) => !v)}
-              className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-md transition-colors ${
-                showDrafts ? 'bg-primary/15 text-primary' : 'bg-muted/50 text-muted-foreground'
-              }`}
-            >
-              <span
-                className={`inline-block w-1.5 h-1.5 rounded-full border ${
-                  showDrafts
-                    ? 'border-primary bg-primary/40'
-                    : 'border-muted-foreground/40 bg-transparent'
-                }`}
-              />
-              Draft
-            </button>
+            <ScheduleFilterDropdown filters={scheduleFilters} onChange={setScheduleFilters} />
           </div>
 
           {/* Workspace indicator + Stats + Selection pill */}
@@ -1613,11 +2037,11 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         {/* ── LEFT PANEL (Aircraft Registry) ─────────────────────── */}
         <div className="w-[140px] shrink-0 glass border-r flex flex-col overflow-hidden">
           {/* Aligned with timeline header */}
-          <div className="h-9 shrink-0 border-b" />
+          <div className="shrink-0 border-b" style={{ height: headerH }} />
           {/* Histogram label */}
           {(movementSettings.display?.histogram ?? true) ? (
-            <div className="h-[34px] shrink-0 border-b flex items-end px-3 pb-1">
-              <span className="text-[8px] font-medium text-muted-foreground/70 select-none">
+            <div className="h-[34px] shrink-0 border-b flex items-center px-3">
+              <span className="text-[11px] font-semibold text-muted-foreground/80 select-none">
                 {histogramLabel}
               </span>
             </div>
@@ -1704,13 +2128,32 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                   ? { height: ROW_HEIGHT, ...lpDragStyle }
                   : { height: ROW_HEIGHT, background: regBg, color: regText }
 
+                const isAcHighlight = aircraftHighlightReg === row.reg.registration
+                const acHighlightStyle: React.CSSProperties = isAcHighlight
+                  ? {
+                      background: isDark ? 'rgba(59, 130, 246, 0.18)' : 'rgba(59, 130, 246, 0.12)',
+                      borderLeft: '2px solid #3b82f6',
+                      transition: 'background 0.3s ease, border-left 0.3s ease',
+                    }
+                  : {}
+
+                const isSelectedAcRow = selectedAircraftRow === row.reg.registration
+                const isFlashRow = flashReg === row.reg.registration
+                const acRowSelectStyle: React.CSSProperties = isSelectedAcRow
+                  ? { borderLeft: '3px solid #991B1B', background: isDark ? 'rgba(153, 27, 27, 0.10)' : 'rgba(153, 27, 27, 0.06)' }
+                  : isFlashRow
+                  ? { background: isDark ? 'rgba(153, 27, 27, 0.12)' : 'rgba(153, 27, 27, 0.10)', transition: 'background 0.1s ease' }
+                  : {}
+
                 return (
                   <div
                     key={`a-${row.reg.id}`}
-                    className={`flex flex-col justify-center px-3 border-b transition-colors${clipboard ? ' cursor-pointer' : ''}`}
-                    style={{ ...regStyle, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }}
+                    data-reg={row.reg.registration}
+                    className="flex flex-col justify-center px-3 border-b transition-colors cursor-pointer"
+                    style={{ ...regStyle, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', ...acHighlightStyle, ...acRowSelectStyle }}
                     onClick={() => {
-                      if (clipboard) setClipboardTargetReg(row.reg.registration)
+                      if (clipboard) { setClipboardTargetReg(row.reg.registration); return }
+                      setSelectedAircraftRow(prev => prev === row.reg.registration ? null : row.reg.registration)
                     }}
                   >
                     <span className="font-medium truncate leading-tight" style={{ fontSize: REG_FONT }}>
@@ -1761,13 +2204,13 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                         )}
                         {/* Day label (centered in column) */}
                         <div
-                          className="absolute top-0 text-[9px] font-medium select-none text-center"
+                          className="absolute top-0 text-[11px] font-semibold select-none text-center"
                           style={{
                             left: x,
                             width: dayWidth,
                             color: isWkActive ? '#ffffff' : undefined,
-                            fontWeight: isWkActive ? 700 : 500,
-                            padding: '0 4px 1px 4px',
+                            fontWeight: isWkActive ? 700 : 600,
+                            padding: '2px 4px 1px 4px',
                             zIndex: 2,
                           }}
                         >
@@ -1793,7 +2236,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                                   <div
                                     className="absolute bottom-0"
                                     style={{
-                                      left: hx, height: timeMode === 'dual' ? 12 : 8,
+                                      left: hx, height: timeMode === 'dual' ? 16 : 10,
                                       borderLeft: isWkActive
                                         ? '1px solid rgba(255,255,255,0.2)'
                                         : '1px solid var(--border-subtle, rgba(0,0,0,0.03))',
@@ -1802,35 +2245,38 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                                   {pixelsPerHour >= 8 && (
                                     timeMode === 'dual' ? (
                                       <div className="absolute select-none" style={{ left: hx }}>
-                                        {/* UTC row (top) */}
+                                        {/* Local row (top — subdued) */}
                                         <div
                                           className="absolute pl-0.5"
                                           style={{
-                                            top: 14,
-                                            fontSize: '7px',
-                                            color: isWkActive ? 'rgba(255,255,255,0.6)' : 'var(--muted-foreground-raw, rgba(113,113,122,0.5))',
-                                            opacity: isWkActive ? 1 : 0.6,
-                                            fontWeight: isWkActive ? 700 : undefined,
+                                            top: 18,
+                                            fontSize: '8px',
+                                            color: isWkActive
+                                              ? 'rgba(255,255,255,0.6)'
+                                              : isDark ? 'rgba(161,161,170,0.6)' : 'rgba(113,113,122,0.55)',
+                                            fontWeight: isWkActive ? 600 : 500,
+                                          }}
+                                        >
+                                          {String(localHour).padStart(2, '0')}L
+                                        </div>
+                                        {/* UTC row (bottom — prominent) */}
+                                        <div
+                                          className="absolute pl-0.5"
+                                          style={{
+                                            top: 32,
+                                            fontSize: '9px',
+                                            fontWeight: isWkActive ? 700 : 600,
+                                            color: isWkActive
+                                              ? '#ffffff'
+                                              : isDark ? '#e4e4e7' : '#18181b',
                                           }}
                                         >
                                           {String(hour).padStart(2, '0')}Z
                                         </div>
-                                        {/* Local row (bottom) */}
-                                        <div
-                                          className="absolute pl-0.5"
-                                          style={{
-                                            top: 26,
-                                            fontSize: '8px',
-                                            fontWeight: isWkActive ? 700 : 600,
-                                            color: isWkActive ? '#ffffff' : undefined,
-                                          }}
-                                        >
-                                          {String(localHour).padStart(2, '0')}
-                                        </div>
                                       </div>
                                     ) : (
                                       <div
-                                        className="absolute bottom-1 text-[7px] pl-0.5 select-none"
+                                        className="absolute bottom-1 text-[8px] pl-0.5 select-none"
                                         style={{
                                           left: hx,
                                           color: isWkActive ? '#ffffff' : undefined,
@@ -1852,6 +2298,50 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                       </div>
                     )
                   })}
+                  {/* Month labels overlay for 3M/6M */}
+                  {zoomConfig.days > 31 && (() => {
+                    const months: { label: string; xPx: number; widthPx: number }[] = []
+                    let d = 0
+                    while (d < zoomConfig.days) {
+                      const date = addDays(startDate, d)
+                      const displayDate = timeMode === 'utc' ? date : getLocalDate(date, tzOffset)
+                      const monthStart = d
+                      const currentMonth = displayDate.getMonth()
+                      const currentYear = displayDate.getFullYear()
+                      let end = d + 1
+                      while (end < zoomConfig.days) {
+                        const nd = addDays(startDate, end)
+                        const ndDisplay = timeMode === 'utc' ? nd : getLocalDate(nd, tzOffset)
+                        if (ndDisplay.getMonth() !== currentMonth || ndDisplay.getFullYear() !== currentYear) break
+                        end++
+                      }
+                      const xPx = monthStart * 24 * pixelsPerHour
+                      const widthPx = (end - monthStart) * 24 * pixelsPerHour
+                      const monthName = displayDate.toLocaleDateString('en-US', { month: 'long' }).toUpperCase()
+                      months.push({ label: monthName, xPx, widthPx })
+                      d = end
+                    }
+                    return months.map((m, i) => (
+                      <div
+                        key={i}
+                        className="absolute top-0 flex items-center justify-center select-none"
+                        style={{
+                          left: m.xPx,
+                          width: m.widthPx,
+                          height: headerH,
+                          zIndex: 3,
+                          borderRight: '1px solid var(--border-subtle, rgba(0,0,0,0.08))',
+                        }}
+                      >
+                        <span
+                          className="text-[12px] font-bold tracking-wide"
+                          style={{ color: isDark ? '#e4e4e7' : '#18181b' }}
+                        >
+                          {m.label}
+                        </span>
+                      </div>
+                    ))
+                  })()}
                 </div>
           </div>
 
@@ -1864,7 +2354,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
               <div ref={histogramInnerRef} className="relative" style={{ width: totalWidth, height: 34 }}>
                 {histogram.buckets.map((bucket, i) => {
                   if (bucket.count === 0 && histogramMode === 'hourly') return null
-                  const barHeight = Math.round((bucket.count / histogram.max) * 22)
+                  const barHeight = Math.round((bucket.count / histogram.max) * 12)
 
                   // Zoom-dependent label style
                   const isMuted = zoomConfig.days >= 4 && zoomConfig.days <= 7
@@ -1874,8 +2364,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                     : isMuted
                       ? bucket.count > 0 && bucket.widthPx > 12
                       : bucket.widthPx > 18
-                  const labelFontSize = isWeekly ? 9 : isMuted ? 7 : 8
-                  const labelFontWeight = isMuted ? 500 : 600
+                  const labelFontSize = isWeekly ? 10 : isMuted ? 8 : 9
+                  const labelFontWeight = isMuted ? 600 : 700
                   const labelOpacity = isMuted ? 0.5 : 1
 
                   return (
@@ -2154,6 +2644,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                       }
                     }
 
+                    const isSearchHighlight = searchHighlightId === ef.id
                     const barIsDragged = isDragged(ef.id)
                     const barIsGhost = isGhostPlaceholder(ef.id)
                     const wsReg = getWorkspaceReg(ef.flightId)
@@ -2170,6 +2661,27 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                       } else if (hasWsOverride) {
                         barStatusIcon = (
                           <span className="absolute -top-0.5 -right-0.5 text-[7px] leading-none" style={{ color: '#2563eb', opacity: 0.7 }}>⟳</span>
+                        )
+                      }
+                    }
+
+                    // Origin badge for draft flights (bottom-left corner)
+                    let originBadge: React.ReactNode = null
+                    if (!isPublished && w >= 30) {
+                      const src = ef.source
+                      if (src === 'ssim') {
+                        originBadge = (
+                          <span className="absolute -bottom-0.5 -left-0.5 flex items-center justify-center"
+                            style={{ width: 11, height: 11, borderRadius: 3, fontSize: 7, fontWeight: 700,
+                              fontStyle: 'normal', lineHeight: 1,
+                              background: '#f59e0b', color: '#fff' }}>S</span>
+                        )
+                      } else {
+                        originBadge = (
+                          <span className="absolute -bottom-0.5 -left-0.5 flex items-center justify-center"
+                            style={{ width: 11, height: 11, borderRadius: 3, fontSize: 7, fontWeight: 700,
+                              fontStyle: 'normal', lineHeight: 1,
+                              background: '#8b5cf6', color: '#fff' }}>M</span>
                         )
                       }
                     }
@@ -2195,7 +2707,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                           className="absolute cursor-grab group/bar select-none"
                           style={{
                             left: x, width: w, height: BAR_HEIGHT, top: BAR_TOP,
-                            zIndex: barIsDragged ? 100 : isSelected ? 10 : isHovered ? 5 : 1,
+                            zIndex: isSearchHighlight ? 50 : barIsDragged ? 100 : isSelected ? 10 : isHovered ? 5 : 1,
                             transform: barIsDragged
                               ? `translateY(${getDragDeltaY(0)}px) scale(1.03)`
                               : undefined,
@@ -2203,7 +2715,16 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                             pointerEvents: barIsDragged ? 'none' : undefined,
                             transition: barIsDragged ? undefined : 'transform 150ms ease-out',
                           }}
-                          onClick={(e) => { if (!dragState) handleBarClick(ef.id, e) }}
+                          onClick={(e) => {
+                            if (!dragState) {
+                              if (isSearchHighlight) {
+                                closeFlightSearch()
+                                handleBarClick(ef.id, e)
+                              } else {
+                                handleBarClick(ef.id, e)
+                              }
+                            }
+                          }}
                           onMouseDown={(e) => onBarMouseDown(ef.id, regCode, e)}
                           onContextMenu={(e) => handleBarContextMenu(e, ef.id)}
                           onDoubleClick={(e) => { e.stopPropagation(); handleBarDoubleClick(ef) }}
@@ -2225,23 +2746,27 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                             style={{
                               borderRadius: 5,
                               background: barBg,
-                              border: !isPublished
-                                ? isDbAssigned
-                                  ? '2px dashed var(--gantt-bar-border-draft)'
-                                  : '1.5px dashed var(--gantt-bar-border-draft)'
-                                : isDbAssigned
-                                  ? '2px solid var(--gantt-bar-border-pub-assigned)'
-                                  : '1.5px solid var(--gantt-bar-border-pub)',
+                              border: isSearchHighlight
+                                ? '2px solid #EF4444'
+                                : !isPublished
+                                  ? isDbAssigned
+                                    ? '2px dashed var(--gantt-bar-border-draft)'
+                                    : '1.5px dashed var(--gantt-bar-border-draft)'
+                                  : isDbAssigned
+                                    ? '2px solid var(--gantt-bar-border-pub-assigned)'
+                                    : '1.5px solid var(--gantt-bar-border-pub)',
                               fontStyle: isPublished ? 'normal' : 'italic',
                               color: barText,
                               fontSize: BAR_FONT + 'px',
-                              boxShadow: barIsDragged
-                                ? '0 8px 24px rgba(0,0,0,0.15)'
-                                : isSelected
-                                  ? '0 0 0 3px rgba(59, 130, 246, 0.35), 0 0 14px rgba(59, 130, 246, 0.15)'
-                                  : justPastedIds.has(ef.flightId)
-                                    ? '0 0 0 2px rgba(34, 197, 94, 0.4), 0 0 12px rgba(34, 197, 94, 0.15)'
-                                    : 'none',
+                              boxShadow: isSearchHighlight
+                                ? '0 0 0 3px rgba(239, 68, 68, 0.3)'
+                                : barIsDragged
+                                  ? '0 8px 24px rgba(0,0,0,0.15)'
+                                  : isSelected
+                                    ? '0 0 0 3px rgba(59, 130, 246, 0.35), 0 0 14px rgba(59, 130, 246, 0.15)'
+                                    : justPastedIds.has(ef.flightId)
+                                      ? '0 0 0 2px rgba(34, 197, 94, 0.4), 0 0 12px rgba(34, 197, 94, 0.15)'
+                                      : 'none',
                               opacity: isFlightGhosted(ef.id, ef.flightId) ? 0.25 : 1,
                               backgroundImage: isFlightGhosted(ef.id, ef.flightId)
                                 ? 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.03) 3px, rgba(0,0,0,0.03) 6px)'
@@ -2250,6 +2775,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                           >
                             {content}
                             {barStatusIcon}
+                            {originBadge}
                           </div>
 
                         </div>
@@ -2418,9 +2944,281 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
         {/* ── RIGHT PANEL (Rotation Panel — collapsible) ────────── */}
         <div
-          className="shrink-0 glass border-l flex flex-col overflow-hidden transition-all duration-200 ease-out"
+          className="shrink-0 glass border-l flex flex-col overflow-hidden transition-all duration-200 ease-out relative"
           style={{ width: panelVisible ? 280 : 0, opacity: panelVisible ? 1 : 0, borderLeftWidth: panelVisible ? 1 : 0 }}
         >
+          {/* Flight Search Overlay */}
+          {flightSearchOpen && (
+            <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
+              {/* Search Header */}
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b flex items-center justify-between gap-2">
+                <div className="text-[13px] font-semibold tracking-tight">Flight Search</div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    onClick={() => setPanelPinned(p => !p)}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                    title={panelPinned ? 'Unpin panel' : 'Pin panel'}
+                  >
+                    <Pin className={`h-3.5 w-3.5 transition-all duration-150 ${panelPinned ? 'text-primary fill-primary -rotate-45' : 'text-muted-foreground'}`} />
+                  </button>
+                  <button
+                    onClick={closeFlightSearch}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Inputs */}
+              <div className="px-4 pt-3 pb-2 space-y-2.5">
+                <div>
+                  <div className="text-[11px] font-medium text-muted-foreground mb-1">Flight Number</div>
+                  <div className="relative">
+                    <input
+                      ref={flightSearchInputRef}
+                      type="text"
+                      value={flightSearchQuery}
+                      onChange={(e) => { setFlightSearchQuery(e.target.value); setFlightSearchIndex(-1); setSearchHighlightId(null) }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          if (flightSearchResults.length === 0) return
+                          const nextIdx = e.shiftKey
+                            ? (flightSearchIndex - 1 + flightSearchResults.length) % flightSearchResults.length
+                            : flightSearchIndex < 0 ? 0 : (flightSearchIndex + 1) % flightSearchResults.length
+                          setFlightSearchIndex(nextIdx)
+                          const ef = flightSearchResults[nextIdx]
+                          setSearchHighlightId(ef.id)
+                          scrollToFlight(ef)
+                          const listEl = searchResultsRef.current
+                          if (listEl) {
+                            const rowEl = listEl.children[nextIdx] as HTMLElement
+                            if (rowEl) rowEl.scrollIntoView({ block: 'nearest' })
+                          }
+                        }
+                        if (e.key === 'Escape') { closeFlightSearch() }
+                      }}
+                      placeholder="e.g. 862 or VJ862"
+                      className="w-full pl-3 pr-8 py-1.5 rounded-lg text-[13px] font-medium glass outline-none focus:ring-2 focus:ring-primary/30 border border-border placeholder:text-muted-foreground/50"
+                    />
+                    <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] font-medium text-muted-foreground mb-1">Date (optional)</div>
+                  <input
+                    type="text"
+                    value={flightSearchDate}
+                    onChange={(e) => { setFlightSearchDate(e.target.value); setFlightSearchIndex(-1); setSearchHighlightId(null) }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        flightSearchInputRef.current?.focus()
+                        if (flightSearchResults.length === 0) return
+                        setFlightSearchIndex(0)
+                        const ef = flightSearchResults[0]
+                        setSearchHighlightId(ef.id)
+                        scrollToFlight(ef)
+                      }
+                      if (e.key === 'Escape') { closeFlightSearch() }
+                    }}
+                    placeholder="DD/MM"
+                    className="w-full px-3 py-1.5 rounded-lg text-[12px] glass outline-none focus:ring-2 focus:ring-primary/30 border border-border placeholder:text-muted-foreground/50"
+                  />
+                </div>
+              </div>
+
+              <div className="mx-4 border-t" />
+
+              {/* Results */}
+              <div className="flex-1 min-h-0 flex flex-col px-4 pt-2 pb-3">
+                {flightSearchQuery.trim() === '' ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
+                    <Search className="h-8 w-8 text-muted-foreground/30" />
+                    <div className="text-[11px] text-muted-foreground">Type a flight number to search</div>
+                  </div>
+                ) : flightSearchResults.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
+                    <Plane className="h-8 w-8 text-muted-foreground/30" />
+                    <div className="text-[12px] font-medium">No flights found</div>
+                    <div className="text-[10px] text-muted-foreground leading-relaxed">
+                      No matches for &ldquo;{flightSearchQuery}&rdquo; in the<br />
+                      current view ({startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}–{addDays(startDate, zoomConfig.days - 1).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-1">Try a different flight number<br />or adjust the date range</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-1.5">
+                      <div className="text-[11px] font-semibold">Found {flightSearchResults.length} result{flightSearchResults.length !== 1 ? 's' : ''}</div>
+                      {flightSearchIndex >= 0 && (
+                        <div className="text-[10px] text-muted-foreground">Showing {flightSearchIndex + 1} of {flightSearchResults.length}</div>
+                      )}
+                    </div>
+                    <div className="text-[9px] text-muted-foreground mb-2">
+                      Press Enter to cycle through results<br />Press Escape to close search
+                    </div>
+                    <div ref={searchResultsRef} className="flex-1 min-h-0 overflow-y-auto space-y-0.5" style={{ maxHeight: 8 * 32 }}>
+                      {flightSearchResults.map((ef, i) => {
+                        const isCurrent = i === flightSearchIndex
+                        return (
+                          <button
+                            key={ef.id}
+                            onClick={() => {
+                              setFlightSearchIndex(i)
+                              setSearchHighlightId(ef.id)
+                              scrollToFlight(ef)
+                            }}
+                            className="w-full flex items-center gap-1.5 text-left rounded-md transition-colors hover:bg-muted/40"
+                            style={{
+                              padding: '6px 8px',
+                              borderRadius: 6,
+                              background: isCurrent ? 'rgba(153, 27, 27, 0.08)' : undefined,
+                              borderLeft: isCurrent ? '2px solid #991B1B' : '2px solid transparent',
+                            }}
+                          >
+                            <span className="text-[10px] w-3 shrink-0" style={{ color: isCurrent ? '#991B1B' : 'transparent' }}>▸</span>
+                            <span className="text-[11px] font-semibold">{ef.flightNumber}</span>
+                            <span className="text-[10px] text-muted-foreground">{ef.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                            <span className="text-[10px] text-muted-foreground ml-auto">{ef.depStation}→{ef.arrStation}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Aircraft Search Overlay */}
+          {aircraftSearchOpen && (
+            <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
+              {/* Search Header */}
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b flex items-center justify-between gap-2">
+                <div className="text-[13px] font-semibold tracking-tight">Aircraft Search</div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    onClick={() => setPanelPinned(p => !p)}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                    title={panelPinned ? 'Unpin panel' : 'Pin panel'}
+                  >
+                    <Pin className={`h-3.5 w-3.5 transition-all duration-150 ${panelPinned ? 'text-primary fill-primary -rotate-45' : 'text-muted-foreground'}`} />
+                  </button>
+                  <button
+                    onClick={closeAircraftSearch}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Input */}
+              <div className="px-4 pt-3 pb-2">
+                <div className="text-[11px] font-medium text-muted-foreground mb-1">Registration</div>
+                <div className="relative">
+                  <input
+                    ref={aircraftSearchInputRef}
+                    type="text"
+                    value={aircraftSearchQuery}
+                    onChange={(e) => { setAircraftSearchQuery(e.target.value); setAircraftSearchIndex(-1); setAircraftHighlightReg(null) }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        if (aircraftSearchResults.length === 0) return
+                        const nextIdx = e.shiftKey
+                          ? (aircraftSearchIndex - 1 + aircraftSearchResults.length) % aircraftSearchResults.length
+                          : aircraftSearchIndex < 0 ? 0 : (aircraftSearchIndex + 1) % aircraftSearchResults.length
+                        setAircraftSearchIndex(nextIdx)
+                        const result = aircraftSearchResults[nextIdx]
+                        scrollToAircraft(result)
+                        // Scroll results list to keep current visible
+                        const listEl = aircraftResultsRef.current
+                        if (listEl) {
+                          const rowEl = listEl.children[nextIdx] as HTMLElement
+                          if (rowEl) rowEl.scrollIntoView({ block: 'nearest' })
+                        }
+                      }
+                      if (e.key === 'Escape') { closeAircraftSearch() }
+                    }}
+                    placeholder="e.g. A-615 or VN-A615"
+                    className="w-full pl-3 pr-8 py-1.5 rounded-lg text-[13px] font-medium glass outline-none focus:ring-2 focus:ring-primary/30 border border-border placeholder:text-muted-foreground/50"
+                  />
+                  <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+                </div>
+              </div>
+
+              <div className="mx-4 border-t" />
+
+              {/* Results */}
+              <div className="flex-1 min-h-0 flex flex-col px-4 pt-2 pb-3">
+                {aircraftSearchQuery.trim() === '' ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
+                    <Search className="h-8 w-8 text-muted-foreground/30" />
+                    <div className="text-[11px] text-muted-foreground">Type a registration to search</div>
+                  </div>
+                ) : aircraftSearchResults.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
+                    <Plane className="h-8 w-8 text-muted-foreground/30" />
+                    <div className="text-[12px] font-medium">No aircraft found</div>
+                    <div className="text-[10px] text-muted-foreground leading-relaxed">
+                      No matches for &ldquo;{aircraftSearchQuery}&rdquo;
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-1.5">
+                      <div className="text-[11px] font-semibold">Found {aircraftSearchResults.length} result{aircraftSearchResults.length !== 1 ? 's' : ''}</div>
+                      {aircraftSearchIndex >= 0 && (
+                        <div className="text-[10px] text-muted-foreground">Showing {aircraftSearchIndex + 1} of {aircraftSearchResults.length}</div>
+                      )}
+                    </div>
+                    <div className="text-[9px] text-muted-foreground mb-2">
+                      Press Enter to cycle through results<br />Press Escape to close search
+                    </div>
+                    <div ref={aircraftResultsRef} className="flex-1 min-h-0 overflow-y-auto space-y-0.5" style={{ maxHeight: 8 * 32 }}>
+                      {aircraftSearchResults.map((result, i) => {
+                        const isCurrent = i === aircraftSearchIndex
+                        return (
+                          <button
+                            key={result.registration}
+                            onClick={() => {
+                              setAircraftSearchIndex(i)
+                              scrollToAircraft(result)
+                            }}
+                            className="w-full flex items-center gap-1.5 text-left rounded-md transition-colors hover:bg-muted/40"
+                            style={{
+                              padding: '6px 8px',
+                              borderRadius: 6,
+                              background: isCurrent ? 'rgba(59, 130, 246, 0.08)' : undefined,
+                              borderLeft: isCurrent ? '2px solid #3b82f6' : '2px solid transparent',
+                            }}
+                          >
+                            <span className="text-[10px] w-3 shrink-0" style={{ color: isCurrent ? '#3b82f6' : 'transparent' }}>▸</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] font-semibold">{result.registration}</span>
+                                <span className="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground font-medium">{result.icaoType}</span>
+                              </div>
+                              {result.cabin && (
+                                <div className="text-[10px] text-muted-foreground">{result.cabin}</div>
+                              )}
+                            </div>
+                            {result.filteredOut && (
+                              <span className="text-[8px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-medium shrink-0">filtered</span>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           {selectedFlight && panelData ? (
             <>
               {/* Panel Header */}
@@ -2797,7 +3595,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
       {/* ── DELETE MODAL ──────────────────────────────────────────── */}
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
-        <DialogContent className="sm:max-w-[380px]">
+        <DialogContent className="sm:max-w-[380px]" container={dialogContainer}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               <Trash2 className="h-4 w-4 text-destructive" />
@@ -2878,6 +3676,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           route={miniBuilderRoute}
           loading={miniBuilderLoading}
           onSaved={refreshFlights}
+          container={dialogContainer}
         />
       )}
 
@@ -2934,6 +3733,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           seatingConfigs={seatingConfigs}
           flightsByReg={flightsByReg}
           acTypeByIcao={acTypeByIcao}
+          container={dialogContainer}
           onAssigned={(items, registration) => {
             setAssignModalOpen(false)
             setSelectedFlights(new Set())
@@ -2948,6 +3748,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         open={unassignModalOpen}
         onClose={() => setUnassignModalOpen(false)}
         selectedFlightObjects={selectedFlightObjects}
+        container={dialogContainer}
         onConfirm={async (finalItems) => {
           const res = await unassignFlightsTail(finalItems)
           if (res.error) { toast.error(friendlyError(res.error)); return }
@@ -2966,6 +3767,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           onClose={cancelDrop}
           onConfirm={confirmDrop}
           pendingDrop={pendingDrop}
+          container={dialogContainer}
           getFlightDetails={(eid) => {
             const ef = assignedFlights.find(f => f.id === eid)
             if (!ef) return null
@@ -3027,6 +3829,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         onUpdateTatOverride={updateTatOverride}
         onResetTatOverride={resetTatOverride}
         onResetAll={resetAllSettings}
+        container={dialogContainer}
       />
 
       {/* ── Fixed-position tooltip (rendered outside scroll containers) ── */}
@@ -3041,6 +3844,119 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         />
       )}
 
+    </div>
+  )
+}
+
+// ─── Schedule Filter Dropdown ────────────────────────────────────────────
+
+const SCHEDULE_FILTER_OPTIONS = [
+  { key: 'published' as const,   label: 'Published',      description: 'Published flights',            color: '#3b82f6', dashed: false },
+  { key: 'draftSsim' as const,   label: 'Draft (SSIM)',   description: 'Imported from SSIM files',     color: '#f59e0b', dashed: true },
+  { key: 'draftManual' as const, label: 'Draft (Manual)', description: 'Created via Schedule Builder', color: '#8b5cf6', dashed: true },
+]
+
+type ScheduleFilters = { published: boolean; draftSsim: boolean; draftManual: boolean }
+
+function ScheduleFilterDropdown({
+  filters,
+  onChange,
+  scale,
+}: {
+  filters: ScheduleFilters
+  onChange: (v: ScheduleFilters) => void
+  scale?: (px: number) => number
+}) {
+  const s = scale || ((px: number) => px)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleEsc)
+    }
+  }, [open])
+
+  const activeCount = [filters.published, filters.draftSsim, filters.draftManual].filter(Boolean).length
+  const pillLabel = activeCount === 3 ? `All (3)` : activeCount === 0 ? 'None' : `${activeCount} of 3`
+  const pillColor = activeCount === 3 ? '#16a34a' : activeCount > 0 ? '#3b82f6' : '#ef4444'
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center border border-border rounded-full transition-all duration-200 hover:bg-muted/40"
+        style={{
+          height: s(28),
+          padding: `0 ${s(12)}px`,
+          gap: s(6),
+          fontSize: s(11),
+          fontWeight: 500,
+          cursor: 'pointer',
+        }}
+      >
+        <span style={{ width: s(7), height: s(7), borderRadius: '50%', background: pillColor, flexShrink: 0 }} />
+        <span>{pillLabel}</span>
+        <ChevronDown
+          className="text-muted-foreground transition-transform duration-200"
+          style={{ width: s(10), height: s(10), transform: open ? 'rotate(180deg)' : undefined }}
+        />
+      </button>
+
+      {open && (
+        <div
+          className="absolute top-full mt-1 border border-border rounded-xl overflow-hidden"
+          style={{
+            width: 260,
+            zIndex: 50,
+            background: 'hsl(var(--background))',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+          }}
+        >
+          {SCHEDULE_FILTER_OPTIONS.map((opt, i) => {
+            const checked = filters[opt.key]
+            return (
+              <button
+                key={opt.key}
+                onClick={() => onChange({ ...filters, [opt.key]: !checked })}
+                className="w-full flex items-center gap-2.5 text-left transition-colors hover:bg-muted/40"
+                style={{
+                  padding: '8px 12px',
+                  borderTop: i > 0 ? '1px solid var(--border)' : undefined,
+                }}
+              >
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                  background: opt.dashed ? 'transparent' : opt.color,
+                  border: `1.5px ${opt.dashed ? 'dashed' : 'solid'} ${opt.color}`,
+                }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium">{opt.label}</div>
+                  <div className="text-[10px] text-muted-foreground">{opt.description}</div>
+                </div>
+                <div style={{
+                  width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                  border: checked ? 'none' : '1.5px solid var(--border)',
+                  background: checked ? 'var(--primary)' : 'transparent',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {checked && <Check className="text-primary-foreground" style={{ width: 11, height: 11 }} />}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -3162,7 +4078,7 @@ function FlightTooltip({
               className="text-[9px] font-medium uppercase tracking-wider"
               style={{ color: isPublished ? '#16a34a' : '#d97706' }}
             >
-              {flight.status}
+              {isPublished ? 'Active' : 'Draft'}
             </span>
           </div>
         )}
@@ -3319,11 +4235,12 @@ function MovementContextMenu({
 // ─── Unassign Modal ─────────────────────────────────────────────────────
 
 function UnassignModal({
-  open, onClose, selectedFlightObjects, onConfirm,
+  open, onClose, selectedFlightObjects, container, onConfirm,
 }: {
   open: boolean
   onClose: () => void
   selectedFlightObjects: ExpandedFlight[]
+  container?: HTMLElement | null
   onConfirm: (items: FlightDateItem[]) => Promise<void>
 }) {
   const [unassigning, setUnassigning] = useState(false)
@@ -3349,7 +4266,7 @@ function UnassignModal({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[420px]">
+      <DialogContent className="sm:max-w-[420px]" container={container}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
             <Unlink className="h-4 w-4" />
@@ -3402,11 +4319,12 @@ interface AssignModalProps {
   flightsByReg: Map<string, ExpandedFlight[]>
   acTypeByIcao: Map<string, AircraftType>
   onAssigned: (items: FlightDateItem[], registration: string) => void
+  container?: HTMLElement | null
 }
 
 function AssignToAircraftModal({
   open, onClose, selectedFlights, registrations,
-  aircraftTypes, seatingConfigs, flightsByReg, acTypeByIcao, onAssigned,
+  aircraftTypes, seatingConfigs, flightsByReg, acTypeByIcao, onAssigned, container,
 }: AssignModalProps) {
   const [selectedReg, setSelectedReg] = useState<string | null>(null)
   const [assigning, setAssigning] = useState(false)
@@ -3582,7 +4500,7 @@ function AssignToAircraftModal({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[440px] p-0 gap-0 overflow-hidden" style={{
+      <DialogContent className="sm:max-w-[440px] p-0 gap-0 overflow-hidden" container={container} style={{
         background: 'var(--glass-bg-heavy)',
         backdropFilter: 'blur(24px) saturate(180%)',
         WebkitBackdropFilter: 'blur(24px) saturate(180%)',
@@ -3692,7 +4610,7 @@ function AssignToAircraftModal({
 // ─── Drop Confirm Dialog ────────────────────────────────────────────────
 
 function DropConfirmDialog({
-  open, onClose, onConfirm, pendingDrop, getFlightDetails, getTypeName,
+  open, onClose, onConfirm, pendingDrop, getFlightDetails, getTypeName, container,
 }: {
   open: boolean
   onClose: () => void
@@ -3700,6 +4618,7 @@ function DropConfirmDialog({
   pendingDrop: PendingDrop
   getFlightDetails: (expandedId: string) => { flightNumber: string; depStation: string; arrStation: string; date: Date; stdLocal: string } | null
   getTypeName: (icao: string) => string
+  container?: HTMLElement | null
 }) {
   const formatDate = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
 
@@ -3708,7 +4627,7 @@ function DropConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[420px]">
+      <DialogContent className="sm:max-w-[420px]" container={container}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
             <Plane className="h-4 w-4" />

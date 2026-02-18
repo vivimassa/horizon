@@ -49,7 +49,7 @@ import { GanttWorkspaceIndicator } from './gantt-workspace-indicator'
 
 // ─── Types & Constants ───────────────────────────────────────────────────
 
-type ZoomLevel = '1D' | '2D' | '3D' | '4D' | '5D' | '6D' | '7D' | '14D' | '28D' | 'M' | '3M' | '6M' | '1Y'
+type ZoomLevel = '1D' | '2D' | '3D' | '4D' | '5D' | '6D' | '7D' | '14D' | '28D' | 'M' | '3M' | '6M'
 
 const ZOOM_CONFIG: Record<ZoomLevel, { hoursPerTick: number; days: number }> = {
   '1D':  { hoursPerTick: 1,  days: 1 },
@@ -64,11 +64,10 @@ const ZOOM_CONFIG: Record<ZoomLevel, { hoursPerTick: number; days: number }> = {
   'M':   { hoursPerTick: 24, days: 31 },
   '3M':  { hoursPerTick: 168, days: 91 },
   '6M':  { hoursPerTick: 336, days: 182 },
-  '1Y':  { hoursPerTick: 720, days: 365 },
 }
 
 const ZOOM_GROUP_DAYS: ZoomLevel[] = ['1D', '2D', '3D', '4D', '5D', '6D', '7D']
-const ZOOM_GROUP_WIDE: ZoomLevel[] = ['14D', '28D', 'M', '3M', '6M', '1Y']
+const ZOOM_GROUP_WIDE: ZoomLevel[] = ['14D', '28D', 'M', '3M', '6M']
 
 // ─── Row height levels (vertical zoom) ────────────────────────────────
 const ROW_HEIGHT_LEVELS = [
@@ -107,6 +106,7 @@ interface ExpandedFlight {
   /** Virtual tail assignment — null if overflow */
   assignedReg: string | null
   serviceType: string
+  source: string
 }
 
 const OVERFLOW_ROW_ID_PREFIX = '__overflow__'
@@ -138,7 +138,10 @@ function startOfDay(d: Date): Date {
 }
 
 function formatDateShort(d: Date): string {
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  const dow = d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()
+  const day = d.getDate().toString().padStart(2, '0')
+  const mon = d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase()
+  return `${dow}, ${day} ${mon}`
 }
 
 function formatDateRange(start: Date, days: number): string {
@@ -306,31 +309,53 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const [startDate, setStartDate] = useState(() => startOfDay(new Date()))
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('4D')
   const [acTypeFilter, setAcTypeFilter] = useState<string | null>(null)
-  const [showPublished, setShowPublished] = useState(true)
-  const [showDrafts, setShowDrafts] = useState(true)
+  const [scheduleFilters, setScheduleFilters] = useState({ published: true, draftSsim: true, draftManual: true })
   const [selectedFlights, setSelectedFlights] = useState<Set<string>>(new Set())
   const [hoveredFlightId, setHoveredFlightId] = useState<string | null>(null)
   const tooltipPosRef = useRef({ x: 0, y: 0 })
-  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set<string>()
-    try {
-      const stored = localStorage.getItem('horizon_gantt_collapsed')
-      if (stored) return new Set(JSON.parse(stored))
-    } catch { /* ignore */ }
-    return new Set<string>()
-  })
+  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set<string>())
   const [flights, setFlights] = useState<GanttFlight[]>([])
   const [loading, setLoading] = useState(false)
 
   // Dark mode tracking
-  const [isDark, setIsDark] = useState(() =>
-    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-  )
+  const [isDark, setIsDark] = useState(false)
 
-  // Persist collapsed state to localStorage
+  // Aircraft row reorder state
+  const [selectedAircraftRow, setSelectedAircraftRow] = useState<string | null>(null)
+  const [customAircraftOrder, setCustomAircraftOrder] = useState<Record<string, string[]>>({})
+  const [flashReg, setFlashReg] = useState<string | null>(null)
+
+  // Hydrate client-only state after mount
+  const didHydrateRef = useRef(false)
   useEffect(() => {
+    try {
+      const stored = localStorage.getItem('horizon_gantt_collapsed')
+      if (stored) setCollapsedTypes(new Set(JSON.parse(stored)))
+    } catch { /* ignore */ }
+    try {
+      const orderStr = localStorage.getItem('horizon_gantt_custom_reg_order')
+      if (orderStr) setCustomAircraftOrder(JSON.parse(orderStr))
+    } catch { /* ignore */ }
+    setIsDark(document.documentElement.classList.contains('dark'))
+    // Mark hydrated after a tick so the persist effect skips the initial empty write
+    requestAnimationFrame(() => { didHydrateRef.current = true })
+  }, [])
+
+  // Persist collapsed state to localStorage (skip until hydrated)
+  useEffect(() => {
+    if (!didHydrateRef.current) return
     try { localStorage.setItem('horizon_gantt_collapsed', JSON.stringify(Array.from(collapsedTypes))) } catch { /* ignore */ }
   }, [collapsedTypes])
+
+  // Persist custom aircraft order to localStorage
+  useEffect(() => {
+    if (!didHydrateRef.current) return
+    const val = JSON.stringify(customAircraftOrder)
+    try {
+      if (val === '{}') localStorage.removeItem('horizon_gantt_custom_reg_order')
+      else localStorage.setItem('horizon_gantt_custom_reg_order', val)
+    } catch { /* ignore */ }
+  }, [customAircraftOrder])
 
   // Track dark mode changes
   useEffect(() => {
@@ -356,6 +381,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     updateTatOverride, resetTatOverride,
     resetAll: resetAllSettings, saveStatus,
   } = useGanttSettings()
+  const prevSortOrderRef = useRef(ganttSettings.fleetSortOrder)
+
+  // Clear custom order when fleet sort order changes
+  useEffect(() => {
+    const current = ganttSettings.fleetSortOrder ?? 'type_reg'
+    if (prevSortOrderRef.current !== current) {
+      setCustomAircraftOrder({})
+      setSelectedAircraftRow(null)
+      prevSortOrderRef.current = current
+    }
+  }, [ganttSettings.fleetSortOrder])
 
   // Mini builder state
   const [miniBuilderOpen, setMiniBuilderOpen] = useState(false)
@@ -392,19 +428,36 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false)
 
-  // Collapsible right panel + pin state
-  const [panelPinned, setPanelPinned] = useState(() => {
-    if (typeof window === 'undefined') return false
-    try { return localStorage.getItem('horizon_gantt_panel_pinned') === 'true' } catch { return false }
-  })
-  const [panelVisible, setPanelVisible] = useState(() => {
-    if (typeof window === 'undefined') return false
-    try { return localStorage.getItem('horizon_gantt_panel_pinned') === 'true' } catch { return false }
-  })
+  // Collapsible right panel + pin state (hydrated from localStorage after mount)
+  const [panelPinned, setPanelPinned] = useState(false)
+  const [panelVisible, setPanelVisible] = useState(false)
+  useEffect(() => {
+    try {
+      const pinned = localStorage.getItem('horizon_gantt_panel_pinned') === 'true'
+      if (pinned) { setPanelPinned(true); setPanelVisible(true) }
+    } catch { /* ignore */ }
+  }, [])
 
   // Day-stats panel mode
   const [panelMode, setPanelMode] = useState<'rotation' | 'day-stats'>('rotation')
   const [selectedDays, setSelectedDays] = useState<Set<string>>(new Set())
+
+  // Flight search state
+  const [flightSearchOpen, setFlightSearchOpen] = useState(false)
+  const [flightSearchQuery, setFlightSearchQuery] = useState('')
+  const [flightSearchDate, setFlightSearchDate] = useState('')
+  const [flightSearchIndex, setFlightSearchIndex] = useState(-1)
+  const [searchHighlightId, setSearchHighlightId] = useState<string | null>(null)
+  const flightSearchInputRef = useRef<HTMLInputElement>(null)
+  const searchResultsRef = useRef<HTMLDivElement>(null)
+
+  // Aircraft search state
+  const [aircraftSearchOpen, setAircraftSearchOpen] = useState(false)
+  const [aircraftSearchQuery, setAircraftSearchQuery] = useState('')
+  const [aircraftSearchIndex, setAircraftSearchIndex] = useState(-1)
+  const [aircraftHighlightReg, setAircraftHighlightReg] = useState<string | null>(null)
+  const aircraftSearchInputRef = useRef<HTMLInputElement>(null)
+  const aircraftResultsRef = useRef<HTMLDivElement>(null)
 
   // Day drag selection state
   const [dayDragStart, setDayDragStart] = useState<string | null>(null)
@@ -412,6 +465,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const dayDragActiveRef = useRef(false)
 
   // ─── Refs ───────────────────────────────────────────────────────────
+  const moveAircraftRowRef = useRef<(reg: string, direction: 'up' | 'down' | 'top' | 'bottom') => void>(() => {})
   const ganttContainerRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const headerRef = useRef<HTMLDivElement>(null)
@@ -458,6 +512,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     return () => document.removeEventListener('fullscreenchange', handler)
   }, [])
 
+  // Portal container for dialogs — must render inside fullscreen element
+  const dialogContainer = isFullscreen ? ganttContainerRef.current : null
+
   // CSS fallback Escape handler
   useEffect(() => {
     if (!isFullscreen || document.fullscreenElement) return // only for CSS fallback
@@ -472,15 +529,16 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
   // ─── Panel visibility logic ───────────────────────────────────────
   useEffect(() => {
-    if (panelPinned) {
+    if (panelPinned || flightSearchOpen || aircraftSearchOpen) {
       setPanelVisible(true)
     } else {
       setPanelVisible(selectedFlights.size > 0 || panelMode === 'day-stats')
     }
-  }, [panelPinned, selectedFlights.size, panelMode])
+  }, [panelPinned, selectedFlights.size, panelMode, flightSearchOpen, aircraftSearchOpen])
 
-  // Persist pin state
+  // Persist pin state (skip until hydrated)
   useEffect(() => {
+    if (!didHydrateRef.current) return
     try { localStorage.setItem('horizon_gantt_panel_pinned', String(panelPinned)) } catch { /* ignore */ }
   }, [panelPinned])
 
@@ -500,13 +558,65 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     : 168
   const hoursPerTick = Math.min(zoomConfig.hoursPerTick, autoTickHours)
 
-  // ─── Keyboard handlers (Escape + Delete) ───────────────────────────
+  // ─── Close flight search helper ────────────────────────────────────
+  const closeFlightSearch = useCallback(() => {
+    setFlightSearchOpen(false)
+    setFlightSearchQuery('')
+    setFlightSearchDate('')
+    setFlightSearchIndex(-1)
+    setSearchHighlightId(null)
+  }, [])
+
+  // ─── Close aircraft search helper ─────────────────────────────────
+  const closeAircraftSearch = useCallback(() => {
+    setAircraftSearchOpen(false)
+    setAircraftSearchQuery('')
+    setAircraftSearchIndex(-1)
+    setAircraftHighlightReg(null)
+  }, [])
+
+  // ─── Keyboard handlers (Escape + Delete + Ctrl+F + Ctrl+G) ───────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+F / Cmd+F — open flight search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        const active = document.activeElement
+        const isInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+        if (!isInput || flightSearchOpen) {
+          e.preventDefault()
+          closeAircraftSearch()
+          setFlightSearchOpen(true)
+          setPanelVisible(true)
+          setTimeout(() => flightSearchInputRef.current?.focus(), 50)
+          return
+        }
+      }
+
+      // Ctrl+G / Cmd+G — open aircraft search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
+        e.preventDefault()
+        closeFlightSearch()
+        setAircraftSearchOpen(true)
+        setPanelVisible(true)
+        setTimeout(() => aircraftSearchInputRef.current?.focus(), 50)
+        return
+      }
+
+      // Ctrl+Arrow / Ctrl+Home/End — reorder selected aircraft row
+      if ((e.ctrlKey || e.metaKey) && selectedAircraftRow) {
+        if (e.key === 'ArrowUp') { e.preventDefault(); moveAircraftRowRef.current(selectedAircraftRow, 'up'); return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveAircraftRowRef.current(selectedAircraftRow, 'down'); return }
+        if (e.key === 'Home') { e.preventDefault(); moveAircraftRowRef.current(selectedAircraftRow, 'top'); return }
+        if (e.key === 'End') { e.preventDefault(); moveAircraftRowRef.current(selectedAircraftRow, 'bottom'); return }
+      }
+
       if (e.key === 'Escape') {
-        // Priority: modal > context menu > day-stats > clipboard > selection > fullscreen
+        // Priority: aircraft search > flight search > modal > context menu > day-stats > ac row select > selection
+        if (aircraftSearchOpen) { closeAircraftSearch(); return }
+        if (flightSearchOpen) { closeFlightSearch(); return }
         if (contextMenu) { setContextMenu(null); return }
         if (panelMode === 'day-stats') { setSelectedDays(new Set()); setPanelMode('rotation'); return }
+        if (selectedAircraftRow) { setSelectedAircraftRow(null); return }
         if (selectedFlights.size > 0) { setSelectedFlights(new Set()); return }
         // Fullscreen CSS fallback exit handled by its own effect
       }
@@ -517,7 +627,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedFlights.size, deleteModalOpen, miniBuilderOpen, assignModalOpen, contextMenu, panelMode])
+  }, [selectedFlights.size, deleteModalOpen, miniBuilderOpen, assignModalOpen, contextMenu, panelMode, flightSearchOpen, closeFlightSearch, aircraftSearchOpen, closeAircraftSearch, selectedAircraftRow])
 
   // ─── Scroll Sync ───────────────────────────────────────────────────
   // Use transform on inner content for header/histogram sync (more reliable than scrollLeft)
@@ -620,9 +730,19 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       const typeName = regs[0]?.aircraft_types?.name || icao
       result.push({ icaoType: icao, typeName, registrations: regs })
     })
-    result.sort((a, b) => a.icaoType.localeCompare(b.icaoType))
+    const customOrder = ganttSettings.acTypeOrder
+    if (customOrder.length > 0) {
+      const orderMap = new Map(customOrder.map((icao, i) => [icao, i]))
+      result.sort((a, b) => {
+        const ai = orderMap.get(a.icaoType) ?? 9999
+        const bi = orderMap.get(b.icaoType) ?? 9999
+        return ai - bi || a.icaoType.localeCompare(b.icaoType)
+      })
+    } else {
+      result.sort((a, b) => a.icaoType.localeCompare(b.icaoType))
+    }
     return result
-  }, [registrations, acTypeFilter])
+  }, [registrations, acTypeFilter, ganttSettings.acTypeOrder])
 
   // ─── Unique AC types for filter pills ─────────────────────────────
   const uniqueTypes = useMemo(() => {
@@ -637,8 +757,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const expandedFlights = useMemo<ExpandedFlight[]>(() => {
     const result: ExpandedFlight[] = []
     for (const f of flights) {
-      if (f.status === 'published' && !showPublished) continue
-      if (f.status === 'draft' && !showDrafts) continue
+      const isDraft = f.status === 'draft' || f.status === 'ready'
+      const isPub = f.status === 'published'
+      if (isPub && !scheduleFilters.published) continue
+      if (isDraft && f.source === 'ssim' && !scheduleFilters.draftSsim) continue
+      if (isDraft && f.source !== 'ssim' && !scheduleFilters.draftManual) continue
 
       const pStart = new Date(f.periodStart + 'T00:00:00')
       const pEnd = new Date(f.periodEnd + 'T00:00:00')
@@ -679,11 +802,44 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           dayOffset: f.dayOffset ?? 0,
           assignedReg: null, // set by tail assignment engine
           serviceType: f.serviceType || 'J',
+          source: f.source || 'manual',
         })
       }
     }
     return result
-  }, [flights, startDate, zoomConfig.days, showPublished, showDrafts, tailAssignments])
+  }, [flights, startDate, zoomConfig.days, scheduleFilters.published, scheduleFilters.draftSsim, scheduleFilters.draftManual, tailAssignments])
+
+  // ─── Flight search results (live-filtered) ─────────────────────────
+  const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
+    const q = flightSearchQuery.trim()
+    if (!q) return []
+    const normalizedQuery = q.replace(/^VJ/i, '').toLowerCase()
+
+    let results = expandedFlights.filter(f => {
+      const num = f.flightNumber.replace(/^VJ/i, '').toLowerCase()
+      return num.includes(normalizedQuery)
+    })
+
+    if (flightSearchDate.trim()) {
+      const parts = flightSearchDate.trim().split('/')
+      if (parts.length === 2) {
+        const day = parseInt(parts[0], 10)
+        const month = parseInt(parts[1], 10)
+        if (!isNaN(day) && !isNaN(month)) {
+          results = results.filter(f => f.date.getDate() === day && (f.date.getMonth() + 1) === month)
+        }
+      }
+    }
+
+    results.sort((a, b) => {
+      const da = a.date.getTime()
+      const db = b.date.getTime()
+      if (da !== db) return da - db
+      return a.stdMinutes - b.stdMinutes
+    })
+
+    return results
+  }, [expandedFlights, flightSearchQuery, flightSearchDate])
 
   // ─── Route cycle mate lookup ──────────────────────────────────────
   const routeCycleMap = useMemo(() => {
@@ -872,10 +1028,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           return fMs >= dayStart && fMs < dayEnd
         })
         const blockMin = dayFlights.reduce((s, f) => s + f.blockMinutes, 0)
-        const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
         return {
           dateStr,
-          label: `${dow[date.getDay()]} ${date.getDate()}`,
+          label: '',
           flights: dayFlights.length,
           blockHours: Math.round(blockMin / 6) / 10,
           xPx: d * 24 * pph,
@@ -1188,22 +1343,51 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     if (selectedDays.size === 0) return null
     const days = Array.from(selectedDays).sort()
     const dayFlights = assignedFlights.filter(f => days.includes(formatISO(f.date)))
+    const numDays = days.length
 
     const totalFlights = dayFlights.length
     const totalBlock = dayFlights.reduce((s, f) => s + f.blockMinutes, 0)
     const uniqueRegs = new Set(dayFlights.map(f => f.assignedReg || f.aircraftReg).filter(Boolean))
 
-    // Utilization by AC type
-    const byType = new Map<string, { flights: number; blockMin: number; regs: Set<string> }>()
+    // Total AC in fleet (from registrations, active/operational only)
+    const totalAcInFleet = registrations.filter(r => r.status === 'active' || r.status === 'operational').length
+
+    // Activity by AC type
+    const byType = new Map<string, { flights: number; blockMin: number; activeRegs: Set<string> }>()
     for (const f of dayFlights) {
       const icao = f.aircraftTypeIcao || 'UNKN'
-      const entry = byType.get(icao) || { flights: 0, blockMin: 0, regs: new Set<string>() }
+      const entry = byType.get(icao) || { flights: 0, blockMin: 0, activeRegs: new Set<string>() }
       entry.flights++
       entry.blockMin += f.blockMinutes
       const reg = f.assignedReg || f.aircraftReg
-      if (reg) entry.regs.add(reg)
+      if (reg) entry.activeRegs.add(reg)
       byType.set(icao, entry)
     }
+
+    // Total AC per type (from fleet registrations)
+    const totalRegsByType = new Map<string, number>()
+    for (const reg of registrations) {
+      if (reg.status !== 'active' && reg.status !== 'operational') continue
+      const icao = reg.aircraft_types?.icao_type || 'UNKN'
+      totalRegsByType.set(icao, (totalRegsByType.get(icao) || 0) + 1)
+    }
+
+    // Utilization data per type
+    const utilData = Array.from(byType.entries()).map(([icao, d]) => {
+      const totalRegsForType = totalRegsByType.get(icao) || d.activeRegs.size
+      const activeCount = d.activeRegs.size
+      const avgActive = activeCount > 0 ? (d.blockMin / 60) / (activeCount * numDays) : 0
+      const avgFleet = totalRegsForType > 0 ? (d.blockMin / 60) / (totalRegsForType * numDays) : 0
+      const target = ganttSettings.utilizationTargets[icao] || (acTypeByIcao.get(icao)?.category === 'widebody' ? 14 : 12)
+      return {
+        icao,
+        avgActive: Math.round(avgActive * 10) / 10,
+        avgFleet: Math.round(avgFleet * 10) / 10,
+        target,
+        activeCount,
+        totalRegs: totalRegsForType,
+      }
+    }).sort((a, b) => b.avgActive - a.avgActive)
 
     // Overnight stations
     const overnightStations = new Map<string, number>()
@@ -1214,13 +1398,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         }
       })
     }
+    const overnightTotal = Array.from(overnightStations.values()).reduce((s, c) => s + c, 0)
 
     // Build a smart label for the panel header
     const fmtDayLabel = (ds: string[]) => {
       if (ds.length === 1) {
-        return new Date(ds[0] + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+        return new Date(ds[0] + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
       }
-      // Check if contiguous
       const isContiguous = ds.every((d, i) => {
         if (i === 0) return true
         const prev = new Date(ds[i - 1] + 'T00:00:00')
@@ -1234,7 +1418,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         const l = last.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
         return `${f} – ${l} (${ds.length} days)`
       }
-      // Non-contiguous: list individual dates
       const parts = ds.map(d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }))
       if (parts.length <= 3) return parts.join(', ')
       return `${parts.slice(0, 2).join(', ')} +${parts.length - 2} more`
@@ -1242,20 +1425,28 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
     return {
       days,
+      numDays,
       label: fmtDayLabel(days),
       totalFlights,
       totalBlockHours: Math.round(totalBlock / 6) / 10,
-      avgDailyFlights: days.length > 1 ? Math.round(totalFlights / days.length * 10) / 10 : null,
-      avgDailyBlockHours: days.length > 1 ? Math.round(totalBlock / days.length / 6) / 10 : null,
+      avgDailyFlights: numDays > 1 ? Math.round(totalFlights / numDays * 10) / 10 : null,
+      avgDailyBlockHours: numDays > 1 ? Math.round(totalBlock / numDays / 6) / 10 : null,
       aircraftInService: uniqueRegs.size,
+      totalAcInFleet,
       byType: Array.from(byType.entries()).map(([icao, d]) => ({
-        icao, flights: d.flights, blockHours: Math.round(d.blockMin / 6) / 10, regs: d.regs.size,
+        icao,
+        flights: d.flights,
+        blockHours: Math.round(d.blockMin / 6) / 10,
+        activeRegs: d.activeRegs.size,
+        totalRegs: totalRegsByType.get(icao) || d.activeRegs.size,
       })).sort((a, b) => b.flights - a.flights),
+      utilData,
       overnightStations: Array.from(overnightStations.entries())
-        .map(([station, count]) => ({ station, count }))
+        .map(([station, count]) => ({ station, count, pct: overnightTotal > 0 ? Math.round(count / overnightTotal * 100) : 0 }))
         .sort((a, b) => b.count - a.count),
+      overnightTotal,
     }
-  }, [selectedDays, assignedFlights, eodLocations])
+  }, [selectedDays, assignedFlights, eodLocations, registrations, ganttSettings.utilizationTargets, acTypeByIcao])
 
   // ─── Navigation ───────────────────────────────────────────────────
   const goBack = () => setStartDate((d) => addDays(d, -zoomConfig.days))
@@ -1272,6 +1463,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   }
 
   const handleBarClick = (id: string, e: React.MouseEvent) => {
+    setSelectedAircraftRow(null)
     setContextMenu(null)
     // Switch back to rotation panel mode when clicking a flight bar
     setPanelMode('rotation')
@@ -1455,16 +1647,20 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   }, [flightsByReg])
 
   // Resolved AC type colors (with palette fallback)
+  // Use ALL active aircraft types sorted alphabetically — same ordering as
+  // GanttSettingsPanel so palette auto-assignment produces identical colors.
   const acTypeColors = useMemo(() => {
     const result: Record<string, string> = { ...ganttSettings.colorAcType }
-    const types = groups.map(g => g.icaoType)
-    types.forEach((icao, i) => {
-      if (!result[icao]) {
-        result[icao] = AC_TYPE_COLOR_PALETTE[i % AC_TYPE_COLOR_PALETTE.length]
+    const allActive = aircraftTypes
+      .filter(t => t.is_active)
+      .sort((a, b) => a.icao_type.localeCompare(b.icao_type))
+    allActive.forEach((t, i) => {
+      if (!result[t.icao_type]) {
+        result[t.icao_type] = AC_TYPE_COLOR_PALETTE[i % AC_TYPE_COLOR_PALETTE.length]
       }
     })
     return result
-  }, [ganttSettings.colorAcType, groups])
+  }, [ganttSettings.colorAcType, aircraftTypes])
 
   // Registration → ICAO type lookup (for left panel coloring)
   const regToIcao = useMemo(() => {
@@ -1511,9 +1707,14 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       })
       if (!collapsedTypes.has(g.icaoType)) {
         // Sort registrations within group
-        const sortedRegs = [...g.registrations]
+        let sortedRegs = [...g.registrations]
         if (sortOrder === 'type_util') {
           sortedRegs.sort((a, b) => (utilByReg.get(b.registration) ?? 0) - (utilByReg.get(a.registration) ?? 0))
+        }
+        const customRegs = customAircraftOrder[g.icaoType]
+        if (customRegs && customRegs.length > 0) {
+          const orderMap = new Map(customRegs.map((reg, i) => [reg, i]))
+          sortedRegs.sort((a, b) => (orderMap.get(a.registration) ?? 9999) - (orderMap.get(b.registration) ?? 9999))
         }
         for (const reg of sortedRegs) {
           result.push({
@@ -1534,7 +1735,42 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     }
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, collapsedTypes, seatingByAircraft, acTypeMap, overflowByType, ganttSettings.fleetSortOrder, utilByReg])
+  }, [groups, collapsedTypes, seatingByAircraft, acTypeMap, overflowByType, ganttSettings.fleetSortOrder, utilByReg, customAircraftOrder])
+
+  // ─── Move aircraft row within group ──────────────────────────────
+  const moveAircraftRow = useCallback((reg: string, direction: 'up' | 'down' | 'top' | 'bottom') => {
+    const sortOrder = ganttSettings.fleetSortOrder ?? 'type_reg'
+    if (sortOrder === 'reg_only') return
+
+    const icao = regToIcao.get(reg)
+    if (!icao) return
+
+    // Derive current order from rows
+    const currentOrder = customAircraftOrder[icao]
+      ?? rows.filter((r): r is { type: 'aircraft'; reg: AircraftWithRelations; cabin: string } => r.type === 'aircraft' && regToIcao.get(r.reg.registration) === icao).map(r => r.reg.registration)
+    const idx = currentOrder.indexOf(reg)
+    if (idx === -1) return
+
+    const newOrder = [...currentOrder]
+    if (direction === 'up' && idx > 0) {
+      ;[newOrder[idx - 1], newOrder[idx]] = [newOrder[idx], newOrder[idx - 1]]
+    } else if (direction === 'down' && idx < newOrder.length - 1) {
+      ;[newOrder[idx], newOrder[idx + 1]] = [newOrder[idx + 1], newOrder[idx]]
+    } else if (direction === 'top' && idx > 0) {
+      newOrder.splice(idx, 1)
+      newOrder.unshift(reg)
+    } else if (direction === 'bottom' && idx < newOrder.length - 1) {
+      newOrder.splice(idx, 1)
+      newOrder.push(reg)
+    } else {
+      return // already at boundary
+    }
+
+    setCustomAircraftOrder(prev => ({ ...prev, [icao]: newOrder }))
+    setFlashReg(reg)
+    setTimeout(() => setFlashReg(null), 200)
+  }, [ganttSettings.fleetSortOrder, regToIcao, customAircraftOrder, rows])
+  moveAircraftRowRef.current = moveAircraftRow
 
   const bodyHeight = rows.reduce(
     (h, r) => h + (r.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT), 0
@@ -1571,6 +1807,260 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     const durationMinutes = ef.staMinutes - ef.stdMinutes
     return Math.max(2, durationMinutes * pixelsPerHour / 60)
   }
+
+  // ─── Scroll to highlighted search result ──────────────────────────
+  const doScrollToFlight = useCallback((ef: ExpandedFlight) => {
+    const body = bodyRef.current
+    if (!body) return
+
+    // Horizontal: center the bar in the viewport
+    const barX = getFlightX(ef)
+    const barW = getFlightWidth(ef)
+    const barCenterX = barX + barW / 2
+    const viewW = body.clientWidth
+    const targetLeft = Math.max(0, barCenterX - viewW / 2)
+
+    // Vertical: find which row this flight is in
+    const effectiveReg = ef.aircraftReg || ef.assignedReg
+    let targetY = 0
+    let found = false
+
+    // First: try to match by exact registration in rowLayout
+    if (effectiveReg) {
+      for (const rl of rowLayout) {
+        if (rl.type === 'aircraft' && rl.registration === effectiveReg) {
+          targetY = rl.yTop + rl.height / 2
+          found = true
+          break
+        }
+      }
+    }
+
+    // Second: try overflow row for matching AC type
+    if (!found) {
+      const targetIcao = ef.aircraftTypeIcao || ''
+      for (const rl of rowLayout) {
+        if (rl.type === 'overflow' && rl.icaoType === targetIcao) {
+          targetY = rl.yTop + rl.height / 2
+          found = true
+          break
+        }
+      }
+    }
+
+    // Third: fallback to any overflow row
+    if (!found) {
+      for (const rl of rowLayout) {
+        if (rl.type === 'overflow') {
+          targetY = rl.yTop + rl.height / 2
+          found = true
+          break
+        }
+      }
+    }
+
+    // Fourth: fallback to group header for the AC type
+    if (!found) {
+      const targetIcao = ef.aircraftTypeIcao || ''
+      for (const rl of rowLayout) {
+        if (rl.type === 'group' && rl.icaoType === targetIcao) {
+          targetY = rl.yTop + rl.height / 2
+          found = true
+          break
+        }
+      }
+    }
+
+    // Scroll both axes
+    body.scrollLeft = targetLeft
+    if (found) {
+      const viewH = body.clientHeight
+      body.scrollTop = Math.max(0, targetY - viewH / 2)
+    }
+    handleBodyScroll()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowLayout, pixelsPerHour, startDate])
+
+  const scrollToFlight = useCallback((ef: ExpandedFlight) => {
+    const effectiveReg = ef.aircraftReg || ef.assignedReg
+    const icao = ef.aircraftTypeIcao || ''
+
+    // Check if AC type is filtered out
+    const isFilteredOut = acTypeFilter !== null && icao !== '' && icao !== acTypeFilter
+    // Check if the group is collapsed (registration would be hidden)
+    const isCollapsed = collapsedTypes.has(icao)
+
+    let needsRerender = false
+
+    if (isFilteredOut) {
+      setAcTypeFilter(null)
+      needsRerender = true
+    }
+
+    if (isCollapsed && effectiveReg) {
+      setCollapsedTypes(prev => {
+        if (prev.has(icao)) {
+          const next = new Set(prev)
+          next.delete(icao)
+          return next
+        }
+        return prev
+      })
+      needsRerender = true
+    }
+
+    if (needsRerender) {
+      // Wait for DOM update after state changes, then scroll
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          doScrollToFlight(ef)
+        })
+      })
+    } else {
+      doScrollToFlight(ef)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doScrollToFlight, acTypeFilter, collapsedTypes])
+
+  // ─── Aircraft search results ───────────────────────────────────────
+  interface AircraftSearchResult {
+    registration: string
+    icaoType: string
+    cabin: string
+    reg: AircraftWithRelations
+    /** true if the aircraft exists but is filtered out by acTypeFilter */
+    filteredOut: boolean
+    filteredType?: string
+  }
+
+  const aircraftSearchResults = useMemo<AircraftSearchResult[]>(() => {
+    const q = aircraftSearchQuery.trim().toUpperCase()
+    if (!q) return []
+    // Strip common prefix
+    const cleaned = q.replace(/^VN-?/i, '')
+    if (!cleaned) return []
+
+    const results: AircraftSearchResult[] = []
+
+    // Search within current groups (visible registrations)
+    for (const g of groups) {
+      for (const reg of g.registrations) {
+        const regStr = reg.registration.toUpperCase()
+        const stripped = regStr.replace(/^VN-?/, '')
+        if (regStr.includes(cleaned) || stripped.includes(cleaned)) {
+          results.push({
+            registration: reg.registration,
+            icaoType: g.icaoType,
+            cabin: getCabinString(reg),
+            reg,
+            filteredOut: false,
+          })
+        }
+      }
+    }
+
+    // Check if there are matches in registrations filtered out by acTypeFilter
+    if (acTypeFilter) {
+      for (const reg of registrations) {
+        const icao = reg.aircraft_types?.icao_type || 'UNKN'
+        if (icao === acTypeFilter) continue // already in groups
+        const regStr = reg.registration.toUpperCase()
+        const stripped = regStr.replace(/^VN-?/, '')
+        if (regStr.includes(cleaned) || stripped.includes(cleaned)) {
+          results.push({
+            registration: reg.registration,
+            icaoType: icao,
+            cabin: getCabinString(reg),
+            reg,
+            filteredOut: true,
+            filteredType: icao,
+          })
+        }
+      }
+    }
+
+    return results
+  }, [aircraftSearchQuery, groups, registrations, acTypeFilter])
+
+  // ─── Scroll to aircraft row ────────────────────────────────────────
+  const scrollToAircraft = useCallback((result: AircraftSearchResult) => {
+    const body = bodyRef.current
+    if (!body) return
+
+    // If the group is collapsed, expand it
+    const icao = result.icaoType
+    setCollapsedTypes(prev => {
+      if (prev.has(icao)) {
+        const next = new Set(prev)
+        next.delete(icao)
+        return next
+      }
+      return prev
+    })
+
+    // If filtered out, clear the acTypeFilter to show the aircraft
+    if (result.filteredOut) {
+      setAcTypeFilter(null)
+    }
+
+    // Set highlight (will fade after 2s)
+    setAircraftHighlightReg(result.registration)
+
+    // Use requestAnimationFrame to wait for DOM update after state changes
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // Re-read body ref in case of DOM changes
+        const b = bodyRef.current
+        if (!b) return
+
+        // Find row in current layout — need to search fresh since rows may have changed
+        // Since rowLayout is a useMemo, it won't have updated yet, so we calculate manually
+        let targetY = 0
+        let found = false
+
+        // Walk rows to find the target registration
+        // We use the leftPanelRef children as a proxy for row positions
+        const lp = leftPanelRef.current
+        if (lp) {
+          const children = lp.children
+          for (let i = 0; i < children.length; i++) {
+            const child = children[i] as HTMLElement
+            // Aircraft rows have key starting with 'a-'
+            if (child.dataset?.reg === result.registration) {
+              targetY = child.offsetTop + child.offsetHeight / 2
+              found = true
+              break
+            }
+          }
+        }
+
+        // Fallback: search rowLayout
+        if (!found) {
+          for (const rl of rowLayout) {
+            if (rl.type === 'aircraft' && rl.registration === result.registration) {
+              targetY = rl.yTop + rl.height / 2
+              found = true
+              break
+            }
+          }
+        }
+
+        if (found) {
+          const viewH = b.clientHeight
+          b.scrollTop = targetY - viewH / 2
+          handleBodyScroll()
+        }
+      })
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowLayout])
+
+  // ─── Fade aircraft highlight after 2s ──────────────────────────────
+  useEffect(() => {
+    if (!aircraftHighlightReg) return
+    const timer = setTimeout(() => setAircraftHighlightReg(null), 2000)
+    return () => clearTimeout(timer)
+  }, [aircraftHighlightReg])
 
   // ─── TAT calculation between two consecutive flights ──────────────
   function calcTat(current: ExpandedFlight, next: ExpandedFlight): TatInfo | null {
@@ -1661,7 +2151,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   // ─── Derived header settings ────────────────────────────────────────
   const timeMode = ganttSettings.timeDisplay ?? 'dual'
   const tzOffset = ganttSettings.baseTimezoneOffset ?? 7
-  const headerH = timeMode === 'dual' ? 48 : 36
+  const headerH = timeMode === 'dual' ? 56 : 40
 
   // ─── Fullscreen control scale ────────────────────────────────────────
   const ctrlScale = isFullscreen ? 1.3 : 1
@@ -1818,41 +2308,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
             <div className="bg-border transition-all duration-200" style={{ width: 1, height: s(16), margin: `0 ${s(4)}px` }} />
 
-            {/* Published toggle */}
-            <button
-              onClick={() => setShowPublished((v) => !v)}
-              className={`flex items-center font-medium rounded-md transition-all duration-200 ${
-                showPublished ? 'bg-primary/15 text-primary' : 'bg-muted/50 text-muted-foreground'
-              }`}
-              style={{ gap: s(4), padding: `${s(2)}px ${s(8)}px`, fontSize: s(10), height: s(24) }}
-            >
-              <span
-                className={`inline-block rounded-full ${
-                  showPublished ? 'bg-primary' : 'bg-muted-foreground/40'
-                }`}
-                style={{ width: s(6), height: s(6) }}
-              />
-              Pub
-            </button>
-
-            {/* Draft toggle */}
-            <button
-              onClick={() => setShowDrafts((v) => !v)}
-              className={`flex items-center font-medium rounded-md transition-all duration-200 ${
-                showDrafts ? 'bg-primary/15 text-primary' : 'bg-muted/50 text-muted-foreground'
-              }`}
-              style={{ gap: s(4), padding: `${s(2)}px ${s(8)}px`, fontSize: s(10), height: s(24) }}
-            >
-              <span
-                className={`inline-block rounded-full border ${
-                  showDrafts
-                    ? 'border-primary bg-primary/40'
-                    : 'border-muted-foreground/40 bg-transparent'
-                }`}
-                style={{ width: s(6), height: s(6) }}
-              />
-              Draft
-            </button>
+            <ScheduleFilterDropdown filters={scheduleFilters} onChange={setScheduleFilters} scale={s} />
           </div>
 
           {/* Workspace indicator + Stats + Selection pill */}
@@ -1891,17 +2347,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         {/* ── LEFT PANEL (Aircraft Registry) ─────────────────────── */}
         <div className="w-[140px] shrink-0 glass border-r flex flex-col overflow-hidden">
           {/* Aligned with timeline header */}
-          <div className="h-9 shrink-0 border-b" />
+          <div className="shrink-0 border-b" style={{ height: headerH }} />
           {/* Summary + Histogram labels */}
           {(ganttSettings.display?.histogram ?? true) ? (
             <>
               <div className="h-[28px] shrink-0 border-b flex items-center px-3">
-                <span className="text-[8px] font-medium text-muted-foreground/70 select-none">
+                <span className="text-[11px] font-semibold text-muted-foreground/80 select-none">
                   {histogramMode === 'hourly' ? 'Daily' : 'Weekly'}
                 </span>
               </div>
-              <div className="h-[20px] shrink-0 border-b flex items-center px-3">
-                <span className="text-[7px] font-medium text-muted-foreground/50 select-none">
+              <div className="h-[28px] shrink-0 border-b flex items-center px-3">
+                <span className="text-[10px] font-medium text-muted-foreground/70 select-none">
                   {histogramLabel}
                 </span>
               </div>
@@ -1989,13 +2445,32 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   ? { height: ROW_HEIGHT, ...lpDragStyle }
                   : { height: ROW_HEIGHT, background: regBg, color: regText }
 
+                const isAcHighlight = aircraftHighlightReg === row.reg.registration
+                const acHighlightStyle: React.CSSProperties = isAcHighlight
+                  ? {
+                      background: isDark ? 'rgba(59, 130, 246, 0.18)' : 'rgba(59, 130, 246, 0.12)',
+                      borderLeft: '2px solid #3b82f6',
+                      transition: 'background 0.3s ease, border-left 0.3s ease',
+                    }
+                  : {}
+
+                const isSelectedAcRow = selectedAircraftRow === row.reg.registration
+                const isFlashRow = flashReg === row.reg.registration
+                const acRowSelectStyle: React.CSSProperties = isSelectedAcRow
+                  ? { borderLeft: '3px solid #991B1B', background: isDark ? 'rgba(153, 27, 27, 0.10)' : 'rgba(153, 27, 27, 0.06)' }
+                  : isFlashRow
+                  ? { background: isDark ? 'rgba(153, 27, 27, 0.12)' : 'rgba(153, 27, 27, 0.10)', transition: 'background 0.1s ease' }
+                  : {}
+
                 return (
                   <div
                     key={`a-${row.reg.id}`}
-                    className={`flex flex-col justify-center px-3 border-b transition-colors${clipboard ? ' cursor-pointer' : ''}`}
-                    style={{ ...regStyle, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }}
+                    data-reg={row.reg.registration}
+                    className="flex flex-col justify-center px-3 border-b transition-colors cursor-pointer"
+                    style={{ ...regStyle, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', ...acHighlightStyle, ...acRowSelectStyle }}
                     onClick={() => {
-                      if (clipboard) setClipboardTargetReg(row.reg.registration)
+                      if (clipboard) { setClipboardTargetReg(row.reg.registration); return }
+                      setSelectedAircraftRow(prev => prev === row.reg.registration ? null : row.reg.registration)
                     }}
                   >
                     <span className="font-medium truncate leading-tight" style={{ fontSize: REG_FONT }}>
@@ -2044,9 +2519,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             style={{
                               left: x, width: dayWidth, height: headerH,
                               background: isDaySelected
-                                ? (isDark ? '#7F1D1D' : '#991B1B')
+                                ? (isDark ? '#1E3A5F' : '#1E40AF')
                                 : isDayPending
-                                  ? (isDark ? 'rgba(127, 29, 29, 0.4)' : 'rgba(153, 27, 27, 0.3)')
+                                  ? (isDark ? 'rgba(30, 64, 175, 0.4)' : 'rgba(30, 64, 175, 0.3)')
                                   : isWkActive
                                     ? (isDark ? '#7F1D1D' : '#991B1B')
                                     : undefined,
@@ -2055,14 +2530,14 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                         )}
                         {/* Day label (centered in column — clickable) */}
                         <div
-                          className="absolute top-0 text-[9px] font-medium select-none text-center cursor-pointer"
+                          className="absolute top-0 text-[11px] font-semibold select-none text-center cursor-pointer"
                           style={{
                             left: x,
                             width: dayWidth,
                             height: headerH,
                             color: (isWkActive || isDaySelected || isDayPending) ? '#ffffff' : undefined,
-                            fontWeight: (isWkActive || isDaySelected) ? 700 : 500,
-                            padding: '0 4px 1px 4px',
+                            fontWeight: (isWkActive || isDaySelected) ? 700 : 600,
+                            padding: '2px 4px 1px 4px',
                             zIndex: 2,
                           }}
                           onMouseDown={(e) => handleDayMouseDown(dayDateStr, e)}
@@ -2090,8 +2565,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                   <div
                                     className="absolute bottom-0"
                                     style={{
-                                      left: hx, height: timeMode === 'dual' ? 12 : 8,
-                                      borderLeft: isWkActive
+                                      left: hx, height: timeMode === 'dual' ? 16 : 10,
+                                      borderLeft: (isWkActive || isDaySelected)
                                         ? '1px solid rgba(255,255,255,0.2)'
                                         : '1px solid var(--border-subtle, rgba(0,0,0,0.03))',
                                     }}
@@ -2099,40 +2574,43 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                   {pixelsPerHour >= 8 && (
                                     timeMode === 'dual' ? (
                                       <div className="absolute select-none" style={{ left: hx }}>
-                                        {/* UTC row (top) */}
+                                        {/* Local row (top — subdued) */}
                                         <div
                                           className="absolute pl-0.5"
                                           style={{
-                                            top: 14,
-                                            fontSize: '7px',
-                                            color: isWkActive ? 'rgba(255,255,255,0.6)' : 'var(--muted-foreground-raw, rgba(113,113,122,0.5))',
-                                            opacity: isWkActive ? 1 : 0.6,
-                                            fontWeight: isWkActive ? 700 : undefined,
+                                            top: 18,
+                                            fontSize: '8px',
+                                            color: (isWkActive || isDaySelected)
+                                              ? 'rgba(255,255,255,0.6)'
+                                              : isDark ? 'rgba(161,161,170,0.6)' : 'rgba(113,113,122,0.55)',
+                                            fontWeight: (isWkActive || isDaySelected) ? 600 : 500,
+                                          }}
+                                        >
+                                          {String(localHour).padStart(2, '0')}L
+                                        </div>
+                                        {/* UTC row (bottom — prominent) */}
+                                        <div
+                                          className="absolute pl-0.5"
+                                          style={{
+                                            top: 32,
+                                            fontSize: '9px',
+                                            fontWeight: (isWkActive || isDaySelected) ? 700 : 600,
+                                            color: (isWkActive || isDaySelected)
+                                              ? '#ffffff'
+                                              : isDark ? '#e4e4e7' : '#18181b',
                                           }}
                                         >
                                           {String(hour).padStart(2, '0')}Z
                                         </div>
-                                        {/* Local row (bottom) */}
-                                        <div
-                                          className="absolute pl-0.5"
-                                          style={{
-                                            top: 26,
-                                            fontSize: '8px',
-                                            fontWeight: isWkActive ? 700 : 600,
-                                            color: isWkActive ? '#ffffff' : undefined,
-                                          }}
-                                        >
-                                          {String(localHour).padStart(2, '0')}
-                                        </div>
                                       </div>
                                     ) : (
                                       <div
-                                        className="absolute bottom-1 text-[7px] pl-0.5 select-none"
+                                        className="absolute bottom-1 text-[8px] pl-0.5 select-none"
                                         style={{
                                           left: hx,
-                                          color: isWkActive ? '#ffffff' : undefined,
-                                          fontWeight: isWkActive ? 700 : undefined,
-                                          opacity: isWkActive ? 0.9 : 0.5,
+                                          color: (isWkActive || isDaySelected) ? '#ffffff' : undefined,
+                                          fontWeight: (isWkActive || isDaySelected) ? 700 : undefined,
+                                          opacity: (isWkActive || isDaySelected) ? 0.9 : 0.5,
                                         }}
                                       >
                                         {timeMode === 'utc'
@@ -2149,6 +2627,51 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       </div>
                     )
                   })}
+                  {/* Month labels overlay for 3M/6M */}
+                  {zoomConfig.days > 31 && (() => {
+                    const months: { label: string; xPx: number; widthPx: number }[] = []
+                    let d = 0
+                    while (d < zoomConfig.days) {
+                      const date = addDays(startDate, d)
+                      const displayDate = timeMode === 'utc' ? date : getLocalDate(date, tzOffset)
+                      const monthStart = d
+                      const currentMonth = displayDate.getMonth()
+                      const currentYear = displayDate.getFullYear()
+                      // Find end of this month
+                      let end = d + 1
+                      while (end < zoomConfig.days) {
+                        const nd = addDays(startDate, end)
+                        const ndDisplay = timeMode === 'utc' ? nd : getLocalDate(nd, tzOffset)
+                        if (ndDisplay.getMonth() !== currentMonth || ndDisplay.getFullYear() !== currentYear) break
+                        end++
+                      }
+                      const xPx = monthStart * 24 * pixelsPerHour
+                      const widthPx = (end - monthStart) * 24 * pixelsPerHour
+                      const monthName = displayDate.toLocaleDateString('en-US', { month: 'long' }).toUpperCase()
+                      months.push({ label: monthName, xPx, widthPx })
+                      d = end
+                    }
+                    return months.map((m, i) => (
+                      <div
+                        key={i}
+                        className="absolute top-0 flex items-center justify-center select-none"
+                        style={{
+                          left: m.xPx,
+                          width: m.widthPx,
+                          height: headerH,
+                          zIndex: 3,
+                          borderRight: '1px solid var(--border-subtle, rgba(0,0,0,0.08))',
+                        }}
+                      >
+                        <span
+                          className="text-[12px] font-bold tracking-wide"
+                          style={{ color: isDark ? '#e4e4e7' : '#18181b' }}
+                        >
+                          {m.label}
+                        </span>
+                      </div>
+                    ))
+                  })()}
                 </div>
           </div>
 
@@ -2170,11 +2693,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           width: bucket.widthPx,
                           height: 28,
                           borderRight: '1px solid var(--border-subtle, rgba(0,0,0,0.04))',
-                          borderBottom: isSelected ? '2px solid #991B1B' : undefined,
+                          borderBottom: isSelected ? '2px solid #1E40AF' : undefined,
                           background: isSelected
-                            ? (isDark ? 'rgba(153, 27, 27, 0.15)' : 'rgba(153, 27, 27, 0.1)')
+                            ? (isDark ? 'rgba(30, 64, 175, 0.15)' : 'rgba(30, 64, 175, 0.1)')
                             : isPending
-                              ? (isDark ? 'rgba(153, 27, 27, 0.08)' : 'rgba(153, 27, 27, 0.06)')
+                              ? (isDark ? 'rgba(30, 64, 175, 0.08)' : 'rgba(30, 64, 175, 0.06)')
                               : bucket.isWeekend
                                 ? 'rgba(127, 29, 29, 0.06)'
                                 : undefined,
@@ -2183,29 +2706,41 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                         onMouseEnter={() => handleDayMouseEnter(bucket.dateStr)}
                       >
                         <div className="text-center px-1 overflow-hidden">
-                          {bucket.widthPx > 90 ? (
-                            <div className="flex items-center gap-1.5 justify-center">
-                              <span
-                                className="text-[9px] font-semibold whitespace-nowrap"
-                                style={{ color: bucket.isWeekend ? 'var(--gantt-histogram-label)' : undefined, opacity: bucket.isWeekend ? 0.8 : 1 }}
-                              >
-                                {bucket.label}
-                              </span>
-                              <span className="text-[8px] text-muted-foreground/70 whitespace-nowrap">
-                                {bucket.flights}f · {bucket.blockHours}h
-                              </span>
-                            </div>
+                          {bucket.widthPx > 140 ? (
+                            <span
+                              className="text-[9px] font-medium whitespace-nowrap"
+                              style={{
+                                color: isSelected ? '#ffffff' : (bucket.isWeekend ? 'var(--gantt-histogram-label)' : undefined),
+                                opacity: bucket.isWeekend && !isSelected ? 0.8 : 1,
+                              }}
+                            >
+                              Flights: {bucket.flights}, BH: {bucket.blockHours}
+                            </span>
+                          ) : bucket.widthPx > 90 ? (
+                            <span
+                              className="text-[9px] font-medium whitespace-nowrap"
+                              style={{
+                                color: isSelected ? '#ffffff' : (bucket.isWeekend ? 'var(--gantt-histogram-label)' : undefined),
+                                opacity: bucket.isWeekend && !isSelected ? 0.8 : 1,
+                              }}
+                            >
+                              F: {bucket.flights}, BH: {bucket.blockHours}
+                            </span>
                           ) : bucket.widthPx > 50 ? (
-                            <div className="flex flex-col items-center leading-none gap-0.5">
-                              <span className="text-[8px] font-semibold whitespace-nowrap" style={{ opacity: bucket.isWeekend ? 0.8 : 1 }}>
-                                {bucket.label}
-                              </span>
-                              <span className="text-[7px] text-muted-foreground/60 whitespace-nowrap">
-                                {bucket.flights}f
-                              </span>
-                            </div>
+                            <span
+                              className="text-[9px] whitespace-nowrap"
+                              style={{
+                                color: isSelected ? '#ffffff' : undefined,
+                                opacity: bucket.isWeekend && !isSelected ? 0.8 : 0.7,
+                              }}
+                            >
+                              {bucket.flights}F · {bucket.blockHours}h
+                            </span>
                           ) : bucket.widthPx > 24 ? (
-                            <span className="text-[7px] font-medium text-muted-foreground/70 whitespace-nowrap">
+                            <span
+                              className="text-[9px] font-semibold whitespace-nowrap"
+                              style={{ color: isSelected ? '#ffffff' : 'var(--muted-foreground)', opacity: 0.7 }}
+                            >
                               {bucket.flights}
                             </span>
                           ) : null}
@@ -2216,15 +2751,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 </div>
               </div>
 
-              {/* Histogram (20px) */}
+              {/* Histogram (28px) */}
               <div
                 ref={histogramRef}
-                className="h-[20px] shrink-0 border-b overflow-hidden"
+                className="h-[28px] shrink-0 border-b overflow-hidden"
               >
-                <div ref={histogramInnerRef} className="relative" style={{ width: totalWidth, height: 20 }}>
+                <div ref={histogramInnerRef} className="relative" style={{ width: totalWidth, height: 28 }}>
                   {histogram.buckets.map((bucket, i) => {
                     if (bucket.count === 0 && histogramMode === 'hourly') return null
-                    const barHeight = Math.round((bucket.count / histogram.max) * 14)
+                    const barHeight = Math.round((bucket.count / histogram.max) * 10)
                     const heatColor = getHistogramBarColor(bucket.count, histogram.max, isDark)
                     const heatLabelColor = getHistogramLabelColor(bucket.count, histogram.max, isDark)
 
@@ -2236,8 +2771,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       : isMuted
                         ? bucket.count > 0 && bucket.widthPx > 12
                         : bucket.widthPx > 18
-                    const labelFontSize = isWeeklyMode ? 8 : isMuted ? 6 : 7
-                    const labelFontWeight = isMuted ? 500 : 600
+                    const labelFontSize = isWeeklyMode ? 10 : isMuted ? 8 : 9
+                    const labelFontWeight = isMuted ? 600 : 700
 
                     return (
                       <div key={i}>
@@ -2376,8 +2911,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             width: 24 * pixelsPerHour,
                             height: bodyHeight,
                             background: isDaySelected
-                              ? (isDark ? 'rgba(153, 27, 27, 0.06)' : 'rgba(153, 27, 27, 0.04)')
-                              : (isDark ? 'rgba(153, 27, 27, 0.03)' : 'rgba(153, 27, 27, 0.02)'),
+                              ? (isDark ? 'rgba(30, 64, 175, 0.08)' : 'rgba(30, 64, 175, 0.05)')
+                              : (isDark ? 'rgba(30, 64, 175, 0.04)' : 'rgba(30, 64, 175, 0.025)'),
                             zIndex: 0,
                           }}
                         />
@@ -2539,6 +3074,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       }
                     }
 
+                    const isSearchHighlight = searchHighlightId === ef.id
                     const barIsDragged = isDragged(ef.id)
                     const barIsGhost = isGhostPlaceholder(ef.id)
                     const wsReg = getWorkspaceReg(ef.flightId)
@@ -2555,6 +3091,27 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       } else if (hasWsOverride) {
                         barStatusIcon = (
                           <span className="absolute -top-0.5 -right-0.5 text-[7px] leading-none" style={{ color: '#2563eb', opacity: 0.7 }}>⟳</span>
+                        )
+                      }
+                    }
+
+                    // Origin badge for draft flights (bottom-left corner)
+                    let originBadge: React.ReactNode = null
+                    if (!isPublished && w >= 30) {
+                      const src = ef.source
+                      if (src === 'ssim') {
+                        originBadge = (
+                          <span className="absolute -bottom-0.5 -left-0.5 flex items-center justify-center"
+                            style={{ width: 11, height: 11, borderRadius: 3, fontSize: 7, fontWeight: 700,
+                              fontStyle: 'normal', lineHeight: 1,
+                              background: '#f59e0b', color: '#fff' }}>S</span>
+                        )
+                      } else {
+                        originBadge = (
+                          <span className="absolute -bottom-0.5 -left-0.5 flex items-center justify-center"
+                            style={{ width: 11, height: 11, borderRadius: 3, fontSize: 7, fontWeight: 700,
+                              fontStyle: 'normal', lineHeight: 1,
+                              background: '#8b5cf6', color: '#fff' }}>M</span>
                         )
                       }
                     }
@@ -2580,7 +3137,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           className="absolute cursor-grab group/bar select-none"
                           style={{
                             left: x, width: w, height: BAR_HEIGHT, top: BAR_TOP,
-                            zIndex: barIsDragged ? 100 : isSelected ? 10 : isHovered ? 5 : 1,
+                            zIndex: isSearchHighlight ? 50 : barIsDragged ? 100 : isSelected ? 10 : isHovered ? 5 : 1,
                             transform: barIsDragged
                               ? `translateY(${getDragDeltaY(0)}px) scale(1.03)`
                               : undefined,
@@ -2588,7 +3145,16 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             pointerEvents: barIsDragged ? 'none' : undefined,
                             transition: barIsDragged ? undefined : 'transform 150ms ease-out',
                           }}
-                          onClick={(e) => { if (!dragState) handleBarClick(ef.id, e) }}
+                          onClick={(e) => {
+                            if (!dragState) {
+                              if (isSearchHighlight) {
+                                closeFlightSearch()
+                                handleBarClick(ef.id, e)
+                              } else {
+                                handleBarClick(ef.id, e)
+                              }
+                            }
+                          }}
                           onMouseDown={(e) => onBarMouseDown(ef.id, regCode, e)}
                           onContextMenu={(e) => handleBarContextMenu(e, ef.id)}
                           onDoubleClick={(e) => { e.stopPropagation(); handleBarDoubleClick(ef) }}
@@ -2610,23 +3176,27 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             style={{
                               borderRadius: 5,
                               background: barBg,
-                              border: !isPublished
-                                ? isDbAssigned
-                                  ? '2px dashed var(--gantt-bar-border-draft)'
-                                  : '1.5px dashed var(--gantt-bar-border-draft)'
-                                : isDbAssigned
-                                  ? '2px solid var(--gantt-bar-border-pub-assigned)'
-                                  : '1.5px solid var(--gantt-bar-border-pub)',
+                              border: isSearchHighlight
+                                ? '2px solid #EF4444'
+                                : !isPublished
+                                  ? isDbAssigned
+                                    ? '2px dashed var(--gantt-bar-border-draft)'
+                                    : '1.5px dashed var(--gantt-bar-border-draft)'
+                                  : isDbAssigned
+                                    ? '2px solid var(--gantt-bar-border-pub-assigned)'
+                                    : '1.5px solid var(--gantt-bar-border-pub)',
                               fontStyle: isPublished ? 'normal' : 'italic',
                               color: barText,
                               fontSize: BAR_FONT + 'px',
-                              boxShadow: barIsDragged
-                                ? '0 8px 24px rgba(0,0,0,0.15)'
-                                : isSelected
-                                  ? '0 0 0 3px rgba(59, 130, 246, 0.35), 0 0 14px rgba(59, 130, 246, 0.15)'
-                                  : justPastedIds.has(ef.flightId)
-                                    ? '0 0 0 2px rgba(34, 197, 94, 0.4), 0 0 12px rgba(34, 197, 94, 0.15)'
-                                    : 'none',
+                              boxShadow: isSearchHighlight
+                                ? '0 0 0 3px rgba(239, 68, 68, 0.3)'
+                                : barIsDragged
+                                  ? '0 8px 24px rgba(0,0,0,0.15)'
+                                  : isSelected
+                                    ? '0 0 0 3px rgba(59, 130, 246, 0.35), 0 0 14px rgba(59, 130, 246, 0.15)'
+                                    : justPastedIds.has(ef.flightId)
+                                      ? '0 0 0 2px rgba(34, 197, 94, 0.4), 0 0 12px rgba(34, 197, 94, 0.15)'
+                                      : 'none',
                               opacity: isFlightGhosted(ef.id, ef.flightId) ? 0.25 : 1,
                               backgroundImage: isFlightGhosted(ef.id, ef.flightId)
                                 ? 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.03) 3px, rgba(0,0,0,0.03) 6px)'
@@ -2635,6 +3205,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           >
                             {content}
                             {barStatusIcon}
+                            {originBadge}
                           </div>
 
                         </div>
@@ -2803,16 +3374,289 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
         {/* ── RIGHT PANEL (Rotation Panel — collapsible) ────────── */}
         <div
-          className="shrink-0 glass border-l flex flex-col overflow-hidden transition-all duration-200 ease-out"
+          className="shrink-0 glass border-l flex flex-col overflow-hidden transition-all duration-200 ease-out relative"
           style={{ width: panelVisible ? 280 : 0, opacity: panelVisible ? 1 : 0, borderLeftWidth: panelVisible ? 1 : 0 }}
         >
+          {/* Flight Search Overlay */}
+          {flightSearchOpen && (
+            <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
+              {/* Search Header */}
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b flex items-center justify-between gap-2">
+                <div className="text-[13px] font-semibold tracking-tight">Flight Search</div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    onClick={() => setPanelPinned(p => !p)}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                    title={panelPinned ? 'Unpin panel' : 'Pin panel'}
+                  >
+                    <Pin className={`h-3.5 w-3.5 transition-all duration-150 ${panelPinned ? 'text-primary fill-primary -rotate-45' : 'text-muted-foreground'}`} />
+                  </button>
+                  <button
+                    onClick={closeFlightSearch}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Inputs */}
+              <div className="px-4 pt-3 pb-2 space-y-2.5">
+                <div>
+                  <div className="text-[11px] font-medium text-muted-foreground mb-1">Flight Number</div>
+                  <div className="relative">
+                    <input
+                      ref={flightSearchInputRef}
+                      type="text"
+                      value={flightSearchQuery}
+                      onChange={(e) => { setFlightSearchQuery(e.target.value); setFlightSearchIndex(-1); setSearchHighlightId(null) }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          if (flightSearchResults.length === 0) return
+                          const nextIdx = e.shiftKey
+                            ? (flightSearchIndex - 1 + flightSearchResults.length) % flightSearchResults.length
+                            : flightSearchIndex < 0 ? 0 : (flightSearchIndex + 1) % flightSearchResults.length
+                          setFlightSearchIndex(nextIdx)
+                          const ef = flightSearchResults[nextIdx]
+                          setSearchHighlightId(ef.id)
+                          scrollToFlight(ef)
+                          // Scroll results list to keep current visible
+                          const listEl = searchResultsRef.current
+                          if (listEl) {
+                            const rowEl = listEl.children[nextIdx] as HTMLElement
+                            if (rowEl) rowEl.scrollIntoView({ block: 'nearest' })
+                          }
+                        }
+                        if (e.key === 'Escape') { closeFlightSearch() }
+                      }}
+                      placeholder="e.g. 862 or VJ862"
+                      className="w-full pl-3 pr-8 py-1.5 rounded-lg text-[13px] font-medium glass outline-none focus:ring-2 focus:ring-primary/30 border border-border placeholder:text-muted-foreground/50"
+                    />
+                    <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] font-medium text-muted-foreground mb-1">Date (optional)</div>
+                  <input
+                    type="text"
+                    value={flightSearchDate}
+                    onChange={(e) => { setFlightSearchDate(e.target.value); setFlightSearchIndex(-1); setSearchHighlightId(null) }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        flightSearchInputRef.current?.focus()
+                        if (flightSearchResults.length === 0) return
+                        setFlightSearchIndex(0)
+                        const ef = flightSearchResults[0]
+                        setSearchHighlightId(ef.id)
+                        scrollToFlight(ef)
+                      }
+                      if (e.key === 'Escape') { closeFlightSearch() }
+                    }}
+                    placeholder="DD/MM"
+                    className="w-full px-3 py-1.5 rounded-lg text-[12px] glass outline-none focus:ring-2 focus:ring-primary/30 border border-border placeholder:text-muted-foreground/50"
+                  />
+                </div>
+              </div>
+
+              <div className="mx-4 border-t" />
+
+              {/* Results */}
+              <div className="flex-1 min-h-0 flex flex-col px-4 pt-2 pb-3">
+                {flightSearchQuery.trim() === '' ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
+                    <Search className="h-8 w-8 text-muted-foreground/30" />
+                    <div className="text-[11px] text-muted-foreground">Type a flight number to search</div>
+                  </div>
+                ) : flightSearchResults.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
+                    <Plane className="h-8 w-8 text-muted-foreground/30" />
+                    <div className="text-[12px] font-medium">No flights found</div>
+                    <div className="text-[10px] text-muted-foreground leading-relaxed">
+                      No matches for &ldquo;{flightSearchQuery}&rdquo; in the<br />
+                      current view ({startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}–{addDays(startDate, zoomConfig.days - 1).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-1">Try a different flight number<br />or adjust the date range</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-1.5">
+                      <div className="text-[11px] font-semibold">Found {flightSearchResults.length} result{flightSearchResults.length !== 1 ? 's' : ''}</div>
+                      {flightSearchIndex >= 0 && (
+                        <div className="text-[10px] text-muted-foreground">Showing {flightSearchIndex + 1} of {flightSearchResults.length}</div>
+                      )}
+                    </div>
+                    <div className="text-[9px] text-muted-foreground mb-2">
+                      Press Enter to cycle through results<br />Press Escape to close search
+                    </div>
+                    <div ref={searchResultsRef} className="flex-1 min-h-0 overflow-y-auto space-y-0.5" style={{ maxHeight: 8 * 32 }}>
+                      {flightSearchResults.map((ef, i) => {
+                        const isCurrent = i === flightSearchIndex
+                        return (
+                          <button
+                            key={ef.id}
+                            onClick={() => {
+                              setFlightSearchIndex(i)
+                              setSearchHighlightId(ef.id)
+                              scrollToFlight(ef)
+                            }}
+                            className="w-full flex items-center gap-1.5 text-left rounded-md transition-colors hover:bg-muted/40"
+                            style={{
+                              padding: '6px 8px',
+                              borderRadius: 6,
+                              background: isCurrent ? 'rgba(153, 27, 27, 0.08)' : undefined,
+                              borderLeft: isCurrent ? '2px solid #991B1B' : '2px solid transparent',
+                            }}
+                          >
+                            <span className="text-[10px] w-3 shrink-0" style={{ color: isCurrent ? '#991B1B' : 'transparent' }}>▸</span>
+                            <span className="text-[11px] font-semibold">{ef.flightNumber}</span>
+                            <span className="text-[10px] text-muted-foreground">{ef.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                            <span className="text-[10px] text-muted-foreground ml-auto">{ef.depStation}→{ef.arrStation}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Aircraft Search Overlay */}
+          {aircraftSearchOpen && (
+            <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
+              {/* Search Header */}
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b flex items-center justify-between gap-2">
+                <div className="text-[13px] font-semibold tracking-tight">Aircraft Search</div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    onClick={() => setPanelPinned(p => !p)}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                    title={panelPinned ? 'Unpin panel' : 'Pin panel'}
+                  >
+                    <Pin className={`h-3.5 w-3.5 transition-all duration-150 ${panelPinned ? 'text-primary fill-primary -rotate-45' : 'text-muted-foreground'}`} />
+                  </button>
+                  <button
+                    onClick={closeAircraftSearch}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Input */}
+              <div className="px-4 pt-3 pb-2">
+                <div className="text-[11px] font-medium text-muted-foreground mb-1">Registration</div>
+                <div className="relative">
+                  <input
+                    ref={aircraftSearchInputRef}
+                    type="text"
+                    value={aircraftSearchQuery}
+                    onChange={(e) => { setAircraftSearchQuery(e.target.value); setAircraftSearchIndex(-1); setAircraftHighlightReg(null) }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        if (aircraftSearchResults.length === 0) return
+                        const nextIdx = e.shiftKey
+                          ? (aircraftSearchIndex - 1 + aircraftSearchResults.length) % aircraftSearchResults.length
+                          : aircraftSearchIndex < 0 ? 0 : (aircraftSearchIndex + 1) % aircraftSearchResults.length
+                        setAircraftSearchIndex(nextIdx)
+                        const result = aircraftSearchResults[nextIdx]
+                        scrollToAircraft(result)
+                        // Scroll results list to keep current visible
+                        const listEl = aircraftResultsRef.current
+                        if (listEl) {
+                          const rowEl = listEl.children[nextIdx] as HTMLElement
+                          if (rowEl) rowEl.scrollIntoView({ block: 'nearest' })
+                        }
+                      }
+                      if (e.key === 'Escape') { closeAircraftSearch() }
+                    }}
+                    placeholder="e.g. A-615 or VN-A615"
+                    className="w-full pl-3 pr-8 py-1.5 rounded-lg text-[13px] font-medium glass outline-none focus:ring-2 focus:ring-primary/30 border border-border placeholder:text-muted-foreground/50"
+                  />
+                  <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+                </div>
+              </div>
+
+              <div className="mx-4 border-t" />
+
+              {/* Results */}
+              <div className="flex-1 min-h-0 flex flex-col px-4 pt-2 pb-3">
+                {aircraftSearchQuery.trim() === '' ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
+                    <Search className="h-8 w-8 text-muted-foreground/30" />
+                    <div className="text-[11px] text-muted-foreground">Type a registration to search</div>
+                  </div>
+                ) : aircraftSearchResults.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
+                    <Plane className="h-8 w-8 text-muted-foreground/30" />
+                    <div className="text-[12px] font-medium">No aircraft found</div>
+                    <div className="text-[10px] text-muted-foreground leading-relaxed">
+                      No matches for &ldquo;{aircraftSearchQuery}&rdquo;
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-1.5">
+                      <div className="text-[11px] font-semibold">Found {aircraftSearchResults.length} result{aircraftSearchResults.length !== 1 ? 's' : ''}</div>
+                      {aircraftSearchIndex >= 0 && (
+                        <div className="text-[10px] text-muted-foreground">Showing {aircraftSearchIndex + 1} of {aircraftSearchResults.length}</div>
+                      )}
+                    </div>
+                    <div className="text-[9px] text-muted-foreground mb-2">
+                      Press Enter to cycle through results<br />Press Escape to close search
+                    </div>
+                    <div ref={aircraftResultsRef} className="flex-1 min-h-0 overflow-y-auto space-y-0.5" style={{ maxHeight: 8 * 32 }}>
+                      {aircraftSearchResults.map((result, i) => {
+                        const isCurrent = i === aircraftSearchIndex
+                        return (
+                          <button
+                            key={result.registration}
+                            onClick={() => {
+                              setAircraftSearchIndex(i)
+                              scrollToAircraft(result)
+                            }}
+                            className="w-full flex items-center gap-1.5 text-left rounded-md transition-colors hover:bg-muted/40"
+                            style={{
+                              padding: '6px 8px',
+                              borderRadius: 6,
+                              background: isCurrent ? 'rgba(59, 130, 246, 0.08)' : undefined,
+                              borderLeft: isCurrent ? '2px solid #3b82f6' : '2px solid transparent',
+                            }}
+                          >
+                            <span className="text-[10px] w-3 shrink-0" style={{ color: isCurrent ? '#3b82f6' : 'transparent' }}>▸</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] font-semibold">{result.registration}</span>
+                                <span className="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground font-medium">{result.icaoType}</span>
+                              </div>
+                              {result.cabin && (
+                                <div className="text-[10px] text-muted-foreground">{result.cabin}</div>
+                              )}
+                            </div>
+                            {result.filteredOut && (
+                              <span className="text-[8px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-medium shrink-0">filtered</span>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           {panelMode === 'day-stats' && dayPanelData ? (
             <>
-              {/* Day Stats Panel Header */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              {/* ── Schedule Statistics Header ── */}
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">Day Statistics</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">{dayPanelData.label}</div>
+                  <div className="text-[15px] font-bold truncate">Schedule Statistics</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">{dayPanelData.label}</div>
                 </div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   <button
@@ -2831,88 +3675,199 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 </div>
               </div>
 
-              {/* Day Stats Panel Body */}
+              {/* ── Schedule Statistics Body ── */}
               <div className="flex-1 overflow-y-auto custom-scrollbar">
-                <div className="p-3 space-y-3">
-                  {/* Fleet Summary */}
-                  <div>
-                    <div className="text-[10px] font-medium text-muted-foreground mb-1.5">Fleet Summary</div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="rounded-lg border border-border/50 p-2 text-center">
-                        <div className="text-[15px] font-bold">{dayPanelData.totalFlights}</div>
-                        <div className="text-[8px] text-muted-foreground">Flights</div>
-                      </div>
-                      <div className="rounded-lg border border-border/50 p-2 text-center">
-                        <div className="text-[15px] font-bold">{dayPanelData.totalBlockHours}</div>
-                        <div className="text-[8px] text-muted-foreground">Block hrs</div>
-                      </div>
-                      <div className="rounded-lg border border-border/50 p-2 text-center">
-                        <div className="text-[15px] font-bold">{dayPanelData.aircraftInService}</div>
-                        <div className="text-[8px] text-muted-foreground">Aircraft</div>
-                      </div>
+
+                {/* ── Section 1: Summary ── */}
+                <div className="px-4 pt-3.5 pb-2.5">
+                  <div className="text-[12px] font-bold mb-2">Summary</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="text-center">
+                      <div className="text-[22px] font-medium text-primary leading-tight">{dayPanelData.totalFlights}</div>
+                      <div className="text-[9px] font-medium uppercase tracking-[0.5px] text-[#9CA3AF] mt-0.5">Flights</div>
                     </div>
-                    {dayPanelData.avgDailyFlights !== null && (
-                      <div className="mt-2 flex items-center justify-between text-[9px] text-muted-foreground/70 px-1">
-                        <span>Avg/day: {dayPanelData.avgDailyFlights} flights</span>
-                        <span>{dayPanelData.avgDailyBlockHours}h block</span>
+                    <div className="text-center">
+                      <div className="text-[22px] font-medium text-primary leading-tight">{dayPanelData.totalBlockHours}</div>
+                      <div className="text-[9px] font-medium uppercase tracking-[0.5px] text-[#9CA3AF] mt-0.5">Block hrs</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="leading-tight">
+                        <span className="text-[22px] font-medium text-primary">{dayPanelData.aircraftInService}</span>
+                        <span className="text-[13px] font-medium text-muted-foreground">/{dayPanelData.totalAcInFleet}</span>
                       </div>
-                    )}
+                      <div className="text-[9px] font-medium uppercase tracking-[0.5px] text-[#9CA3AF] mt-0.5">AC used</div>
+                    </div>
                   </div>
-
-                  {/* Utilization by Type */}
-                  {dayPanelData.byType.length > 0 && (
-                    <div>
-                      <div className="text-[10px] font-medium text-muted-foreground mb-1.5">Utilization by Type</div>
-                      <div className="rounded-lg border border-border/50 overflow-hidden">
-                        <div className="grid grid-cols-[auto_1fr_1fr_1fr] gap-x-2 px-2.5 py-1.5 text-[8px] font-medium text-muted-foreground/70 border-b border-border/30">
-                          <span>Type</span>
-                          <span className="text-right">Flights</span>
-                          <span className="text-right">Block</span>
-                          <span className="text-right">AC</span>
-                        </div>
-                        {dayPanelData.byType.map(row => {
-                          const typeColor = acTypeColors[row.icao] || '#6B7280'
-                          return (
-                            <div key={row.icao} className="grid grid-cols-[auto_1fr_1fr_1fr] gap-x-2 px-2.5 py-1.5 text-[10px] border-b border-border/10 last:border-b-0">
-                              <span className="flex items-center gap-1.5">
-                                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: typeColor }} />
-                                <span className="font-semibold">{row.icao}</span>
-                              </span>
-                              <span className="text-right">{row.flights}</span>
-                              <span className="text-right">{row.blockHours}h</span>
-                              <span className="text-right">{row.regs}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Overnight Stations */}
-                  {dayPanelData.overnightStations.length > 0 && (
-                    <div>
-                      <div className="text-[10px] font-medium text-muted-foreground mb-1.5">Overnight Stations</div>
-                      <div className="space-y-1">
-                        {dayPanelData.overnightStations.slice(0, 10).map(({ station, count }) => {
-                          const maxCount = dayPanelData.overnightStations[0].count
-                          const pct = Math.round((count / maxCount) * 100)
-                          return (
-                            <div key={station} className="flex items-center gap-2">
-                              <span className="text-[10px] font-semibold w-8 shrink-0">{station}</span>
-                              <div className="flex-1 h-[6px] rounded-full bg-muted overflow-hidden">
-                                <div
-                                  className="h-full rounded-full"
-                                  style={{ width: `${pct}%`, background: 'var(--gantt-histogram-bar)' }}
-                                />
-                              </div>
-                              <span className="text-[9px] text-muted-foreground w-4 text-right shrink-0">{count}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
+                  {dayPanelData.avgDailyFlights !== null && (
+                    <div className="mt-2.5 pt-2 border-t border-[#F3F4F6] dark:border-[#1F2937] text-center text-[10px] text-muted-foreground">
+                      Avg/day: {dayPanelData.avgDailyFlights} flights · {dayPanelData.avgDailyBlockHours} block hours
                     </div>
                   )}
                 </div>
+
+                {/* ── Section 2: Activity by Type ── */}
+                {dayPanelData.byType.length > 0 && (
+                  <div className="px-4 pt-3.5 pb-2.5 border-t border-[#F3F4F6] dark:border-[#1F2937]">
+                    <div className="text-[12px] font-bold mb-2">Activity by Type</div>
+                    <div className="grid grid-cols-[auto_1fr_1fr_1fr] gap-x-2 px-0.5 pb-1 text-[10px] font-semibold text-muted-foreground">
+                      <span>Type</span>
+                      <span className="text-right">Flt</span>
+                      <span className="text-right">Block</span>
+                      <span className="text-right">AC</span>
+                    </div>
+                    {dayPanelData.byType.map(row => {
+                      const typeColor = acTypeColors[row.icao] || '#6B7280'
+                      return (
+                        <div key={row.icao} className="grid grid-cols-[auto_1fr_1fr_1fr] gap-x-2 px-0.5 py-1 text-[10px]">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: typeColor }} />
+                            <span className="font-semibold">{row.icao}</span>
+                          </span>
+                          <span className="text-right font-semibold">{row.flights}</span>
+                          <span className="text-right font-medium">{row.blockHours}h</span>
+                          <span className="text-right">
+                            <span className="font-semibold">{row.activeRegs}</span>
+                            <span className="text-muted-foreground">/{row.totalRegs}</span>
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* ── Section 3: Utilization ── */}
+                {dayPanelData.utilData.length > 0 && (
+                  <div className="px-4 pt-3.5 pb-2.5 border-t border-[#F3F4F6] dark:border-[#1F2937]">
+                    <div className="text-[12px] font-bold mb-0.5">Utilization</div>
+                    <div className="text-[9px] text-muted-foreground mb-2.5">Average block hours per aircraft per day</div>
+                    {dayPanelData.utilData.map(row => {
+                      const typeColor = acTypeColors[row.icao] || '#6B7280'
+                      const maxBar = row.target * 1.2
+                      const fillPct = Math.min(row.avgActive / maxBar * 100, 100)
+                      const targetPct = Math.min(row.target / maxBar * 100, 100)
+                      return (
+                        <div key={row.icao} className="mb-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="flex items-center gap-1.5 text-[10px] font-semibold">
+                              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: typeColor }} />
+                              {row.icao}
+                            </span>
+                            <div className="flex items-center gap-3 text-[10px]">
+                              <span>
+                                <span className="font-bold text-primary">{row.avgActive}h</span>
+                                <span className="text-[8px] text-muted-foreground ml-0.5">active</span>
+                              </span>
+                              <span>
+                                <span className="font-medium text-muted-foreground">{row.avgFleet}h</span>
+                                <span className="text-[8px] text-muted-foreground/60 ml-0.5">fleet</span>
+                              </span>
+                            </div>
+                          </div>
+                          <div className="relative h-1 rounded-full bg-[#F3F4F6] dark:bg-[#1F2937]">
+                            <div
+                              className="absolute top-0 left-0 h-full rounded-full"
+                              style={{ width: `${fillPct}%`, background: typeColor }}
+                            />
+                            <div
+                              className="absolute"
+                              style={{ left: `${targetPct}%`, top: -2, width: 1.5, height: 8, background: '#374151', borderRadius: 1 }}
+                            />
+                          </div>
+                          <div className="relative mt-0.5" style={{ height: 10 }}>
+                            <span
+                              className="absolute text-[7px] text-muted-foreground"
+                              style={{ left: `${targetPct}%`, transform: 'translateX(-50%)' }}
+                            >
+                              {row.target}h target
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* ── Section 4: Overnight Stations ── */}
+                {dayPanelData.overnightStations.length > 0 && (() => {
+                  const DONUT_COLORS = ['#991B1B', '#DC2626', '#F87171', '#FCA5A5', '#FECACA']
+                  const sorted = dayPanelData.overnightStations
+                  const showTop = sorted.length > 5 ? 4 : sorted.length
+                  const topStations = sorted.slice(0, showTop)
+                  const othersCount = sorted.slice(showTop).reduce((s, st) => s + st.count, 0)
+                  const othersPct = dayPanelData.overnightTotal > 0 ? Math.round(othersCount / dayPanelData.overnightTotal * 100) : 0
+                  const displayStations = othersCount > 0
+                    ? [...topStations, { station: 'Others', count: othersCount, pct: othersPct }]
+                    : topStations
+
+                  // SVG donut
+                  const size = 110
+                  const cx = size / 2, cy = size / 2
+                  const outerR = 53, innerR = 33
+                  const total = dayPanelData.overnightTotal
+                  const gap = 0.01 // radians gap between segments
+
+                  const donutPaths: { d: string; fill: string }[] = []
+                  let angle = -Math.PI / 2
+                  displayStations.forEach((st, i) => {
+                    const frac = st.count / total
+                    const sweep = frac * Math.PI * 2 - (displayStations.length > 1 ? gap : 0)
+                    if (sweep <= 0) return
+                    const a1 = angle
+                    const a2 = angle + sweep
+                    const largeArc = sweep > Math.PI ? 1 : 0
+                    const ox1 = cx + outerR * Math.cos(a1), oy1 = cy + outerR * Math.sin(a1)
+                    const ox2 = cx + outerR * Math.cos(a2), oy2 = cy + outerR * Math.sin(a2)
+                    const ix2 = cx + innerR * Math.cos(a2), iy2 = cy + innerR * Math.sin(a2)
+                    const ix1 = cx + innerR * Math.cos(a1), iy1 = cy + innerR * Math.sin(a1)
+                    donutPaths.push({
+                      d: `M ${ox1} ${oy1} A ${outerR} ${outerR} 0 ${largeArc} 1 ${ox2} ${oy2} L ${ix2} ${iy2} A ${innerR} ${innerR} 0 ${largeArc} 0 ${ix1} ${iy1} Z`,
+                      fill: DONUT_COLORS[i % DONUT_COLORS.length],
+                    })
+                    angle = a2 + gap
+                  })
+
+                  // Total unique aircraft for donut center
+                  const donutCenter = dayPanelData.aircraftInService
+
+                  return (
+                    <div className="px-4 pt-3.5 pb-4 border-t border-[#F3F4F6] dark:border-[#1F2937]">
+                      <div className="text-[12px] font-bold mb-2.5">Overnight Stations</div>
+                      <div className="flex items-center gap-4">
+                        {/* Donut chart */}
+                        <div className="shrink-0">
+                          <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                            {donutPaths.map((p, i) => (
+                              <path key={i} d={p.d} fill={p.fill} stroke={isDark ? 'var(--background)' : '#fff'} strokeWidth={1.5} />
+                            ))}
+                            <text x={cx} y={cy - 4} textAnchor="middle" className="fill-foreground" style={{ fontSize: 18, fontWeight: 800 }}>{donutCenter}</text>
+                            <text x={cx} y={cy + 10} textAnchor="middle" className="fill-muted-foreground" style={{ fontSize: 9, fontWeight: 500 }}>aircraft</text>
+                          </svg>
+                        </div>
+                        {/* Station list */}
+                        <div className="flex-1 min-w-0">
+                          {displayStations.map((st, i) => (
+                            <div
+                              key={st.station}
+                              className="flex items-center justify-between px-1.5 py-1 rounded-md hover:bg-[rgba(153,27,27,0.04)] dark:hover:bg-[rgba(153,27,27,0.08)] transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <span
+                                  className="w-2 h-2 rounded-sm shrink-0"
+                                  style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }}
+                                />
+                                <span className="text-[11px] font-semibold">{st.station}</span>
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <span className="text-[12px] font-bold">{st.count}</span>
+                                <span className="text-[9px] text-muted-foreground">({st.pct}%)</span>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
               </div>
             </>
           ) : selectedFlight && panelData ? (
@@ -3291,7 +4246,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
       {/* ── DELETE MODAL ──────────────────────────────────────────── */}
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
-        <DialogContent className="sm:max-w-[380px]">
+        <DialogContent className="sm:max-w-[380px]" container={dialogContainer}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               <Trash2 className="h-4 w-4 text-destructive" />
@@ -3372,6 +4327,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           route={miniBuilderRoute}
           loading={miniBuilderLoading}
           onSaved={refreshFlights}
+          container={dialogContainer}
         />
       )}
 
@@ -3428,6 +4384,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           seatingConfigs={seatingConfigs}
           flightsByReg={flightsByReg}
           acTypeByIcao={acTypeByIcao}
+          container={dialogContainer}
           onAssigned={(items, registration) => {
             setAssignModalOpen(false)
             setSelectedFlights(new Set())
@@ -3442,6 +4399,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         open={unassignModalOpen}
         onClose={() => setUnassignModalOpen(false)}
         selectedFlightObjects={selectedFlightObjects}
+        container={dialogContainer}
         onConfirm={async (finalItems) => {
           const res = await unassignFlightsTail(finalItems)
           if (res.error) { toast.error(friendlyError(res.error)); return }
@@ -3460,6 +4418,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           onClose={cancelDrop}
           onConfirm={confirmDrop}
           pendingDrop={pendingDrop}
+          container={dialogContainer}
           getFlightDetails={(eid) => {
             const ef = assignedFlights.find(f => f.id === eid)
             if (!ef) return null
@@ -3521,6 +4480,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         onUpdateTatOverride={updateTatOverride}
         onResetTatOverride={resetTatOverride}
         onResetAll={resetAllSettings}
+        container={dialogContainer}
       />
 
       {/* ── Fixed-position tooltip (rendered outside scroll containers) ── */}
@@ -3535,6 +4495,119 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         />
       )}
 
+    </div>
+  )
+}
+
+// ─── Schedule Filter Dropdown ────────────────────────────────────────────
+
+const SCHEDULE_FILTER_OPTIONS = [
+  { key: 'published' as const,   label: 'Published',      description: 'Published flights',            color: '#3b82f6', dashed: false },
+  { key: 'draftSsim' as const,   label: 'Draft (SSIM)',   description: 'Imported from SSIM files',     color: '#f59e0b', dashed: true },
+  { key: 'draftManual' as const, label: 'Draft (Manual)', description: 'Created via Schedule Builder', color: '#8b5cf6', dashed: true },
+]
+
+type ScheduleFilters = { published: boolean; draftSsim: boolean; draftManual: boolean }
+
+function ScheduleFilterDropdown({
+  filters,
+  onChange,
+  scale,
+}: {
+  filters: ScheduleFilters
+  onChange: (v: ScheduleFilters) => void
+  scale?: (px: number) => number
+}) {
+  const s = scale || ((px: number) => px)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleEsc)
+    }
+  }, [open])
+
+  const activeCount = [filters.published, filters.draftSsim, filters.draftManual].filter(Boolean).length
+  const pillLabel = activeCount === 3 ? `All (3)` : activeCount === 0 ? 'None' : `${activeCount} of 3`
+  const pillColor = activeCount === 3 ? '#16a34a' : activeCount > 0 ? '#3b82f6' : '#ef4444'
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center border border-border rounded-full transition-all duration-200 hover:bg-muted/40"
+        style={{
+          height: s(28),
+          padding: `0 ${s(12)}px`,
+          gap: s(6),
+          fontSize: s(11),
+          fontWeight: 500,
+          cursor: 'pointer',
+        }}
+      >
+        <span style={{ width: s(7), height: s(7), borderRadius: '50%', background: pillColor, flexShrink: 0 }} />
+        <span>{pillLabel}</span>
+        <ChevronDown
+          className="text-muted-foreground transition-transform duration-200"
+          style={{ width: s(10), height: s(10), transform: open ? 'rotate(180deg)' : undefined }}
+        />
+      </button>
+
+      {open && (
+        <div
+          className="absolute top-full mt-1 border border-border rounded-xl overflow-hidden"
+          style={{
+            width: 260,
+            zIndex: 50,
+            background: 'hsl(var(--background))',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+          }}
+        >
+          {SCHEDULE_FILTER_OPTIONS.map((opt, i) => {
+            const checked = filters[opt.key]
+            return (
+              <button
+                key={opt.key}
+                onClick={() => onChange({ ...filters, [opt.key]: !checked })}
+                className="w-full flex items-center gap-2.5 text-left transition-colors hover:bg-muted/40"
+                style={{
+                  padding: '8px 12px',
+                  borderTop: i > 0 ? '1px solid var(--border)' : undefined,
+                }}
+              >
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                  background: opt.dashed ? 'transparent' : opt.color,
+                  border: `1.5px ${opt.dashed ? 'dashed' : 'solid'} ${opt.color}`,
+                }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium">{opt.label}</div>
+                  <div className="text-[10px] text-muted-foreground">{opt.description}</div>
+                </div>
+                <div style={{
+                  width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                  border: checked ? 'none' : '1.5px solid var(--border)',
+                  background: checked ? 'var(--primary)' : 'transparent',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {checked && <Check className="text-primary-foreground" style={{ width: 11, height: 11 }} />}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -3656,7 +4729,7 @@ function FlightTooltip({
               className="text-[9px] font-medium uppercase tracking-wider"
               style={{ color: isPublished ? '#16a34a' : '#d97706' }}
             >
-              {flight.status}
+              {isPublished ? 'Active' : 'Draft'}
             </span>
           </div>
         )}
@@ -3813,11 +4886,12 @@ function GanttContextMenu({
 // ─── Unassign Modal ─────────────────────────────────────────────────────
 
 function UnassignModal({
-  open, onClose, selectedFlightObjects, onConfirm,
+  open, onClose, selectedFlightObjects, container, onConfirm,
 }: {
   open: boolean
   onClose: () => void
   selectedFlightObjects: ExpandedFlight[]
+  container?: HTMLElement | null
   onConfirm: (items: FlightDateItem[]) => Promise<void>
 }) {
   const [unassigning, setUnassigning] = useState(false)
@@ -3843,7 +4917,7 @@ function UnassignModal({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[420px]">
+      <DialogContent className="sm:max-w-[420px]" container={container}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
             <Unlink className="h-4 w-4" />
@@ -3896,11 +4970,12 @@ interface AssignModalProps {
   flightsByReg: Map<string, ExpandedFlight[]>
   acTypeByIcao: Map<string, AircraftType>
   onAssigned: (items: FlightDateItem[], registration: string) => void
+  container?: HTMLElement | null
 }
 
 function AssignToAircraftModal({
   open, onClose, selectedFlights, registrations,
-  aircraftTypes, seatingConfigs, flightsByReg, acTypeByIcao, onAssigned,
+  aircraftTypes, seatingConfigs, flightsByReg, acTypeByIcao, onAssigned, container,
 }: AssignModalProps) {
   const [selectedReg, setSelectedReg] = useState<string | null>(null)
   const [assigning, setAssigning] = useState(false)
@@ -4076,7 +5151,7 @@ function AssignToAircraftModal({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[440px] p-0 gap-0 overflow-hidden" style={{
+      <DialogContent className="sm:max-w-[440px] p-0 gap-0 overflow-hidden" container={container} style={{
         background: 'var(--glass-bg-heavy)',
         backdropFilter: 'blur(24px) saturate(180%)',
         WebkitBackdropFilter: 'blur(24px) saturate(180%)',
@@ -4186,7 +5261,7 @@ function AssignToAircraftModal({
 // ─── Drop Confirm Dialog ────────────────────────────────────────────────
 
 function DropConfirmDialog({
-  open, onClose, onConfirm, pendingDrop, getFlightDetails, getTypeName,
+  open, onClose, onConfirm, pendingDrop, getFlightDetails, getTypeName, container,
 }: {
   open: boolean
   onClose: () => void
@@ -4194,6 +5269,7 @@ function DropConfirmDialog({
   pendingDrop: PendingDrop
   getFlightDetails: (expandedId: string) => { flightNumber: string; depStation: string; arrStation: string; date: Date; stdLocal: string } | null
   getTypeName: (icao: string) => string
+  container?: HTMLElement | null
 }) {
   const formatDate = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
 
@@ -4202,7 +5278,7 @@ function DropConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[420px]">
+      <DialogContent className="sm:max-w-[420px]" container={container}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
             <Plane className="h-4 w-4" />
