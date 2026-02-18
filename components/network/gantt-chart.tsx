@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
 import { AircraftType, AircraftSeatingConfig, CabinEntry, Airport, FlightServiceType } from '@/types/database'
-import { getGanttFlights, GanttFlight, getRouteWithLegs, excludeFlightDates, deleteFlightSeries, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, type GanttRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/gantt'
+import { getGanttFlights, GanttFlight, getRouteWithLegs, excludeFlightDates, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, type GanttRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/gantt'
 import { toast } from '@/components/ui/visionos-toast'
 import { friendlyError } from '@/lib/utils/error-handler'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -381,7 +381,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
   // Delete modal state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
-  const [deleteChoice, setDeleteChoice] = useState<'dates' | 'series'>('dates')
   const [deleting, setDeleting] = useState(false)
 
   // Settings panel
@@ -634,7 +633,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         // Fullscreen CSS fallback exit handled by its own effect
       }
       if (e.key === 'Delete' && selectedFlights.size > 0 && !deleteModalOpen && !miniBuilderOpen && !assignModalOpen) {
-        setDeleteChoice('dates')
         setDeleteModalOpen(true)
       }
     }
@@ -1590,35 +1588,24 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     if (selectedFlightObjects.length === 0 || deleting) return
     setDeleting(true)
     try {
-      if (deleteChoice === 'series') {
-        // Delete entire flight series (all dates)
-        const uniqueFlightIds = Array.from(new Set(selectedFlightObjects.map(ef => ef.flightId)))
-        const result = await deleteFlightSeries(uniqueFlightIds)
-        if (result.error) {
-          toast.error(friendlyError(result.error))
-          return
-        }
-        toast.success(uniqueFlightIds.length === 1 ? 'Flight series deleted' : `${uniqueFlightIds.length} flight series deleted`)
-      } else {
-        // Date-specific delete: exclude only selected date instances
-        const items: FlightDateItem[] = selectedFlightObjects.map(ef => ({
-          flightId: ef.flightId,
-          flightDate: formatISO(ef.date),
-        }))
-        const result = await excludeFlightDates(items)
-        if (result.error) {
-          toast.error(friendlyError(result.error))
-          return
-        }
-        toast.success(items.length === 1 ? 'Flight date excluded' : `${items.length} flight dates excluded`)
+      const items: FlightDateItem[] = selectedFlightObjects.map(ef => ({
+        flightId: ef.flightId,
+        flightDate: formatISO(ef.date),
+      }))
+      const result = await excludeFlightDates(items)
+      if (result.error) {
+        toast.error(friendlyError(result.error))
+        return
       }
+      const n = items.length
+      toast.success(`${n} flight${n > 1 ? 's' : ''} removed`)
       setDeleteModalOpen(false)
       setSelectedFlights(new Set())
       refreshFlights()
     } finally {
       setDeleting(false)
     }
-  }, [selectedFlightObjects, deleteChoice, deleting, refreshFlights])
+  }, [selectedFlightObjects, deleting, refreshFlights])
 
   // ─── Right-click handler ───────────────────────────────────────
   const handleBarContextMenu = useCallback((e: React.MouseEvent, flightId: string, rowReg?: string) => {
@@ -4292,7 +4279,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       {/* ── DELETE MODAL ──────────────────────────────────────────── */}
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
         <DialogContent
-          className="sm:max-w-[420px]"
+          className="sm:max-w-[380px]"
           container={dialogContainer}
           onKeyDown={(e) => {
             if ((e.key === 'Enter' || e.key === ' ') && !deleting) {
@@ -4302,85 +4289,41 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           }}
         >
           {(() => {
-            const selCount = selectedFlightObjects.length
-            const uniqueFlightNums = Array.from(new Set(selectedFlightObjects.map(ef => ef.flightNumber)))
             const uniqueDates = Array.from(new Set(selectedFlightObjects.map(ef => formatISO(ef.date)))).sort()
-            const fmtDate = (iso: string) => {
+            const isMultiDate = uniqueDates.length > 1
+            const fmtShort = (iso: string) => {
               const d = new Date(iso + 'T00:00:00')
               return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
             }
-            const dateLabel = uniqueDates.length <= 3
-              ? uniqueDates.map(fmtDate).join(', ')
-              : `${uniqueDates.length} dates`
-            const flightLabel = uniqueFlightNums.length <= 3
-              ? uniqueFlightNums.join(', ')
-              : `${uniqueFlightNums.slice(0, 2).join(', ')} +${uniqueFlightNums.length - 2} more`
-            const uniqueFlightIds = Array.from(new Set(selectedFlightObjects.map(ef => ef.flightId)))
-            const firstFlight = selectedFlightObjects[0]
+            const fmtFull = (iso: string) => {
+              const [y, m, d] = iso.split('-')
+              return `${d}/${m}/${y}`
+            }
+            const flightCount = selectedFlightObjects.length
+            const displayFlights = selectedFlightObjects.slice(0, 5)
+            const overflow = flightCount - displayFlights.length
 
             return (
               <>
                 <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2 text-sm">
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                    {selCount === 1 ? 'Delete Flight' : `Delete ${selCount} Flights`}
+                  <DialogTitle className="text-[15px] font-bold leading-snug">
+                    {isMultiDate ? (
+                      <>Remove the following flights for {fmtFull(uniqueDates[0])} to {fmtFull(uniqueDates[uniqueDates.length - 1])}?</>
+                    ) : (
+                      <>Remove {flightCount} flight{flightCount > 1 ? 's' : ''} from {fmtShort(uniqueDates[0])}?</>
+                    )}
                   </DialogTitle>
                 </DialogHeader>
 
-                <div className="text-[11px] text-muted-foreground -mt-1 space-y-0.5">
-                  <div className="font-medium text-foreground/80">{flightLabel}{firstFlight ? ` · ${firstFlight.depStation} → ${firstFlight.arrStation}` : ''}</div>
-                  <div>Selected: {dateLabel}</div>
-                </div>
-
-                <p className="text-[11px] text-muted-foreground">What would you like to delete?</p>
-
-                <div className="space-y-2">
-                  {/* Option: Selected dates only */}
-                  <label
-                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                      deleteChoice === 'dates'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:bg-muted/30'
-                    }`}
-                    onClick={() => setDeleteChoice('dates')}
-                  >
-                    <input type="radio" name="deleteChoice" checked={deleteChoice === 'dates'} onChange={() => setDeleteChoice('dates')} className="mt-0.5 accent-primary" />
-                    <div className="min-w-0">
-                      <div className="text-[12px] font-medium">
-                        {uniqueDates.length === 1 ? `This date only (${fmtDate(uniqueDates[0])})` : `Selected dates (${uniqueDates.length} dates)`}
-                      </div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5">
-                        {uniqueDates.length === 1
-                          ? `Remove ${flightLabel} from ${fmtDate(uniqueDates[0])} only. Flight continues operating on other dates.`
-                          : `Remove ${flightLabel} from ${dateLabel}. Flight continues on remaining dates.`
-                        }
-                      </div>
+                <div className="space-y-1 -mt-1">
+                  {displayFlights.map(ef => (
+                    <div key={ef.id} className="text-[12px] text-foreground">
+                      {ef.flightNumber} {ef.depStation} → {ef.arrStation} · {ef.stdLocal} - {ef.staLocal}
                     </div>
-                  </label>
-
-                  {/* Option: Entire series */}
-                  <label
-                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                      deleteChoice === 'series'
-                        ? 'border-destructive/60 bg-destructive/5'
-                        : 'border-border hover:bg-muted/30'
-                    }`}
-                    onClick={() => setDeleteChoice('series')}
-                  >
-                    <input type="radio" name="deleteChoice" checked={deleteChoice === 'series'} onChange={() => setDeleteChoice('series')} className="mt-0.5 accent-destructive" />
-                    <div className="min-w-0">
-                      <div className="text-[12px] font-medium">
-                        Entire series{uniqueFlightIds.length > 1 ? ` (${uniqueFlightIds.length} flights)` : ''}
-                      </div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5">
-                        Delete {flightLabel} completely from the schedule ({firstFlight ? `${firstFlight.periodStart} to ${firstFlight.periodEnd}` : 'all dates'}).
-                      </div>
-                      <div className="flex items-center gap-1 mt-1 text-[10px] text-destructive">
-                        <AlertTriangle className="h-3 w-3" />
-                        This cannot be undone
-                      </div>
-                    </div>
-                  </label>
+                  ))}
+                  {overflow > 0 && (
+                    <div className="text-[11px] text-muted-foreground">and {overflow} more flight{overflow > 1 ? 's' : ''}</div>
+                  )}
                 </div>
 
                 <DialogFooter className="mt-2">
@@ -4393,9 +4336,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   <button
                     onClick={handleDelete}
                     disabled={deleting}
-                    className="px-3 py-1.5 text-[11px] font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 text-[11px] font-medium rounded-md text-white transition-colors disabled:opacity-50"
+                    style={{ backgroundColor: '#DC2626' }}
                   >
-                    {deleting ? 'Deleting...' : 'Delete'}
+                    {deleting ? 'Removing...' : 'Remove'}
                   </button>
                 </DialogFooter>
               </>
@@ -4445,7 +4389,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           }}
           onDelete={() => {
             setContextMenu(null)
-            setDeleteChoice('dates')
             setDeleteModalOpen(true)
           }}
         />
@@ -4894,7 +4837,7 @@ function GanttContextMenu({
     { label: '', onClick: () => {}, show: true, separator: true },
     { label: 'Edit Flight', onClick: onEdit, show: isSingle },
     { label: '', onClick: () => {}, show: true, separator: true },
-    { label: isSingle ? 'Delete Flight' : `Delete ${selectionCount} Flights`, onClick: onDelete, show: true, destructive: true },
+    { label: 'Remove from Date', shortcut: 'Del', onClick: onDelete, show: true, destructive: true },
   ]
 
   return (

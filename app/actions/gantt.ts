@@ -96,9 +96,15 @@ export async function getGanttFlights(
     serviceType: (r.service_type as string) || 'J',
     source: (r.source as string) || 'manual',
     finalized: Boolean(r.finalized),
-    excludedDates: ((r.excluded_dates as (string | Date)[]) || []).map(d =>
-      d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10)
-    ),
+    excludedDates: ((r.excluded_dates as (string | Date)[]) || []).map(d => {
+      if (d instanceof Date) {
+        const y = d.getFullYear()
+        const m = String(d.getMonth() + 1).padStart(2, '0')
+        const dy = String(d.getDate()).padStart(2, '0')
+        return `${y}-${m}-${dy}`
+      }
+      return String(d).slice(0, 10)
+    }),
   }))
 }
 
