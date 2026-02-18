@@ -27,6 +27,7 @@ export interface MovementFlight {
   serviceType: string
   source: string
   finalized: boolean
+  excludedDates: string[]
 }
 
 export async function getMovementFlights(
@@ -55,7 +56,8 @@ export async function getMovementFlights(
        COALESCE(arl.day_offset, 0) AS day_offset,
        COALESCE(sf.service_type, 'J') AS service_type,
        COALESCE(sf.source, 'manual') AS source,
-       COALESCE(sf.finalized, FALSE) AS finalized
+       COALESCE(sf.finalized, FALSE) AS finalized,
+       COALESCE(sf.excluded_dates, '{}') AS excluded_dates
      FROM scheduled_flights sf
      LEFT JOIN aircraft_types at ON sf.aircraft_type_id = at.id
      LEFT JOIN city_pairs cp ON cp.departure_airport = sf.dep_station
@@ -94,6 +96,9 @@ export async function getMovementFlights(
     serviceType: (r.service_type as string) || 'J',
     source: (r.source as string) || 'manual',
     finalized: Boolean(r.finalized),
+    excludedDates: ((r.excluded_dates as (string | Date)[]) || []).map(d =>
+      d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10)
+    ),
   }))
 }
 
@@ -259,6 +264,90 @@ export async function deleteSingleFlight(
   } catch (err) {
     await client.query('ROLLBACK')
     return { routeDeleted: false, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    client.release()
+  }
+}
+
+// ─── Exclude specific dates from a flight (date-specific delete) ───
+
+export async function excludeFlightDates(
+  items: FlightDateItem[]
+): Promise<{ error?: string }> {
+  if (items.length === 0) return {}
+  try {
+    // Group dates by flightId
+    const byFlight = new Map<string, string[]>()
+    for (const item of items) {
+      const dates = byFlight.get(item.flightId) || []
+      dates.push(item.flightDate)
+      byFlight.set(item.flightId, dates)
+    }
+    // For each flight, append new dates to excluded_dates (deduplicated)
+    for (const [flightId, dates] of Array.from(byFlight)) {
+      await pool.query(
+        `UPDATE scheduled_flights
+         SET excluded_dates = (
+           SELECT COALESCE(array_agg(DISTINCT d ORDER BY d), '{}')
+           FROM unnest(COALESCE(excluded_dates, '{}') || $2::date[]) AS d
+         )
+         WHERE id = $1`,
+        [flightId, dates]
+      )
+    }
+    return {}
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+// ─── Delete entire flight series (cascade) ──────────────────
+
+export async function deleteFlightSeries(
+  flightIds: string[]
+): Promise<{ error?: string }> {
+  if (flightIds.length === 0) return {}
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    // 1. Remove tail assignments
+    await client.query(
+      `DELETE FROM flight_tail_assignments WHERE scheduled_flight_id = ANY($1::uuid[])`,
+      [flightIds]
+    )
+
+    // 2. Remove route legs and clean up empty routes
+    const legRes = await client.query(
+      `SELECT DISTINCT route_id FROM aircraft_route_legs WHERE flight_id = ANY($1::uuid[])`,
+      [flightIds]
+    )
+    await client.query(
+      `DELETE FROM aircraft_route_legs WHERE flight_id = ANY($1::uuid[])`,
+      [flightIds]
+    )
+    // Delete routes that now have 0 legs
+    for (const row of legRes.rows) {
+      const remaining = await client.query(
+        `SELECT COUNT(*) AS cnt FROM aircraft_route_legs WHERE route_id = $1`,
+        [row.route_id]
+      )
+      if (parseInt(remaining.rows[0].cnt, 10) === 0) {
+        await client.query(`DELETE FROM aircraft_routes WHERE id = $1`, [row.route_id])
+      }
+    }
+
+    // 3. Delete the scheduled flights
+    await client.query(
+      `DELETE FROM scheduled_flights WHERE id = ANY($1::uuid[])`,
+      [flightIds]
+    )
+
+    await client.query('COMMIT')
+    return {}
+  } catch (err) {
+    await client.query('ROLLBACK')
+    return { error: err instanceof Error ? err.message : String(err) }
   } finally {
     client.release()
   }

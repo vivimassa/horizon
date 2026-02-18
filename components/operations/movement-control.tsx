@@ -29,8 +29,7 @@ import {
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
 import { AircraftType, AircraftSeatingConfig, CabinEntry, Airport, FlightServiceType } from '@/types/database'
-import { getMovementFlights, MovementFlight, getRouteWithLegs, deleteSingleFlight, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, type MovementRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/movement-control'
-import { deleteRoute } from '@/app/actions/aircraft-routes'
+import { getMovementFlights, MovementFlight, getRouteWithLegs, excludeFlightDates, deleteFlightSeries, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, type MovementRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/movement-control'
 import { toast } from '@/components/ui/visionos-toast'
 import { friendlyError } from '@/lib/utils/error-handler'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -361,7 +360,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
   // Delete modal state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
-  const [deleteChoice, setDeleteChoice] = useState<'single' | 'route'>('single')
+  const [deleteChoice, setDeleteChoice] = useState<'dates' | 'series'>('dates')
   const [deleting, setDeleting] = useState(false)
 
   // Settings panel
@@ -604,7 +603,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         // Fullscreen CSS fallback exit handled by its own effect
       }
       if (e.key === 'Delete' && selectedFlights.size > 0 && !deleteModalOpen && !miniBuilderOpen && !assignModalOpen) {
-        setDeleteChoice('single')
+        setDeleteChoice('dates')
         setDeleteModalOpen(true)
       }
     }
@@ -758,6 +757,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
         // Per-date tail assignment takes priority over scheduled_flights.aircraft_reg
         const dateStr = formatISO(date)
+
+        // Skip dates that have been soft-deleted
+        if (f.excludedDates && f.excludedDates.includes(dateStr)) continue
         const perDateReg = tailAssignments.get(`${f.id}__${dateStr}`) || null
 
         result.push({
@@ -1292,23 +1294,30 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
   // ─── Delete handler ───────────────────────────────────────────
   const handleDelete = useCallback(async () => {
-    if (!selectedFlight || deleting) return
+    if (selectedFlightObjects.length === 0 || deleting) return
     setDeleting(true)
     try {
-      if (deleteChoice === 'route' && selectedFlight.routeId) {
-        const result = await deleteRoute(selectedFlight.routeId)
+      if (deleteChoice === 'series') {
+        // Delete entire flight series (all dates)
+        const uniqueFlightIds = Array.from(new Set(selectedFlightObjects.map(ef => ef.flightId)))
+        const result = await deleteFlightSeries(uniqueFlightIds)
         if (result.error) {
           toast.error(friendlyError(result.error))
           return
         }
-        toast.success('Route deleted')
+        toast.success(uniqueFlightIds.length === 1 ? 'Flight series deleted' : `${uniqueFlightIds.length} flight series deleted`)
       } else {
-        const result = await deleteSingleFlight(selectedFlight.flightId)
+        // Date-specific delete: exclude only selected date instances
+        const items: FlightDateItem[] = selectedFlightObjects.map(ef => ({
+          flightId: ef.flightId,
+          flightDate: formatISO(ef.date),
+        }))
+        const result = await excludeFlightDates(items)
         if (result.error) {
           toast.error(friendlyError(result.error))
           return
         }
-        toast.success(result.routeDeleted ? 'Flight and empty route deleted' : 'Flight deleted')
+        toast.success(items.length === 1 ? 'Flight date excluded' : `${items.length} flight dates excluded`)
       }
       setDeleteModalOpen(false)
       setSelectedFlights(new Set())
@@ -1316,7 +1325,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     } finally {
       setDeleting(false)
     }
-  }, [selectedFlight, deleteChoice, deleting, refreshFlights])
+  }, [selectedFlightObjects, deleteChoice, deleting, refreshFlights])
 
   // ─── Right-click handler ───────────────────────────────────────
   const handleBarContextMenu = useCallback((e: React.MouseEvent, flightId: string, rowReg?: string) => {
@@ -3628,75 +3637,116 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
       {/* ── DELETE MODAL ──────────────────────────────────────────── */}
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
-        <DialogContent className="sm:max-w-[380px]" container={dialogContainer}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-sm">
-              <Trash2 className="h-4 w-4 text-destructive" />
-              Delete from Schedule
-            </DialogTitle>
-          </DialogHeader>
+        <DialogContent
+          className="sm:max-w-[420px]"
+          container={dialogContainer}
+          onKeyDown={(e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && !deleting) {
+              e.preventDefault()
+              handleDelete()
+            }
+          }}
+        >
+          {(() => {
+            const selCount = selectedFlightObjects.length
+            const uniqueFlightNums = Array.from(new Set(selectedFlightObjects.map(ef => ef.flightNumber)))
+            const uniqueDates = Array.from(new Set(selectedFlightObjects.map(ef => formatISO(ef.date)))).sort()
+            const fmtDate = (iso: string) => {
+              const d = new Date(iso + 'T00:00:00')
+              return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+            }
+            const dateLabel = uniqueDates.length <= 3
+              ? uniqueDates.map(fmtDate).join(', ')
+              : `${uniqueDates.length} dates`
+            const flightLabel = uniqueFlightNums.length <= 3
+              ? uniqueFlightNums.join(', ')
+              : `${uniqueFlightNums.slice(0, 2).join(', ')} +${uniqueFlightNums.length - 2} more`
+            const uniqueFlightIds = Array.from(new Set(selectedFlightObjects.map(ef => ef.flightId)))
+            const firstFlight = selectedFlightObjects[0]
 
-          <p className="text-[11px] text-muted-foreground -mt-1">What would you like to remove?</p>
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-sm">
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                    {selCount === 1 ? 'Delete Flight' : `Delete ${selCount} Flights`}
+                  </DialogTitle>
+                </DialogHeader>
 
-          <div className="space-y-2 mt-1">
-            {/* Option: single flight */}
-            <label
-              className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                deleteChoice === 'single'
-                  ? 'border-primary bg-primary/5'
-                  : 'border-border hover:bg-muted/30'
-              }`}
-              onClick={() => setDeleteChoice('single')}
-            >
-              <input type="radio" name="deleteChoice" checked={deleteChoice === 'single'} onChange={() => setDeleteChoice('single')} className="mt-0.5 accent-primary" />
-              <div className="min-w-0">
-                <div className="text-[12px] font-medium">This flight only</div>
-                {selectedFlight && (
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
-                    {selectedFlight.flightNumber} · {selectedFlight.depStation} → {selectedFlight.arrStation} · {selectedFlight.stdLocal}–{selectedFlight.staLocal}
-                    <br />
-                    {selectedFlight.periodStart} to {selectedFlight.periodEnd}
-                  </div>
-                )}
-              </div>
-            </label>
-
-            {/* Option: entire route (only when linked) */}
-            {selectedFlight?.routeId && (
-              <label
-                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                  deleteChoice === 'route'
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:bg-muted/30'
-                }`}
-                onClick={() => setDeleteChoice('route')}
-              >
-                <input type="radio" name="deleteChoice" checked={deleteChoice === 'route'} onChange={() => setDeleteChoice('route')} className="mt-0.5 accent-primary" />
-                <div className="min-w-0">
-                  <div className="text-[12px] font-medium">Entire route</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
-                    Delete the route and all its legs + builder flights
-                  </div>
+                <div className="text-[11px] text-muted-foreground -mt-1 space-y-0.5">
+                  <div className="font-medium text-foreground/80">{flightLabel}{firstFlight ? ` · ${firstFlight.depStation} → ${firstFlight.arrStation}` : ''}</div>
+                  <div>Selected: {dateLabel}</div>
                 </div>
-              </label>
-            )}
-          </div>
 
-          <DialogFooter className="mt-2">
-            <button
-              onClick={() => setDeleteModalOpen(false)}
-              className="px-3 py-1.5 text-[11px] font-medium rounded-md border border-border hover:bg-muted transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
-              className="px-3 py-1.5 text-[11px] font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50"
-            >
-              {deleting ? 'Deleting...' : 'Delete'}
-            </button>
-          </DialogFooter>
+                <p className="text-[11px] text-muted-foreground">What would you like to delete?</p>
+
+                <div className="space-y-2">
+                  {/* Option: Selected dates only */}
+                  <label
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      deleteChoice === 'dates'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:bg-muted/30'
+                    }`}
+                    onClick={() => setDeleteChoice('dates')}
+                  >
+                    <input type="radio" name="deleteChoice" checked={deleteChoice === 'dates'} onChange={() => setDeleteChoice('dates')} className="mt-0.5 accent-primary" />
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-medium">
+                        {uniqueDates.length === 1 ? `This date only (${fmtDate(uniqueDates[0])})` : `Selected dates (${uniqueDates.length} dates)`}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        {uniqueDates.length === 1
+                          ? `Remove ${flightLabel} from ${fmtDate(uniqueDates[0])} only. Flight continues operating on other dates.`
+                          : `Remove ${flightLabel} from ${dateLabel}. Flight continues on remaining dates.`
+                        }
+                      </div>
+                    </div>
+                  </label>
+
+                  {/* Option: Entire series */}
+                  <label
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      deleteChoice === 'series'
+                        ? 'border-destructive/60 bg-destructive/5'
+                        : 'border-border hover:bg-muted/30'
+                    }`}
+                    onClick={() => setDeleteChoice('series')}
+                  >
+                    <input type="radio" name="deleteChoice" checked={deleteChoice === 'series'} onChange={() => setDeleteChoice('series')} className="mt-0.5 accent-destructive" />
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-medium">
+                        Entire series{uniqueFlightIds.length > 1 ? ` (${uniqueFlightIds.length} flights)` : ''}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        Delete {flightLabel} completely from the schedule ({firstFlight ? `${firstFlight.periodStart} to ${firstFlight.periodEnd}` : 'all dates'}).
+                      </div>
+                      <div className="flex items-center gap-1 mt-1 text-[10px] text-destructive">
+                        <AlertTriangle className="h-3 w-3" />
+                        This cannot be undone
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                <DialogFooter className="mt-2">
+                  <button
+                    onClick={() => setDeleteModalOpen(false)}
+                    className="px-3 py-1.5 text-[11px] font-medium rounded-md border border-border hover:bg-muted transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDelete}
+                    disabled={deleting}
+                    className="px-3 py-1.5 text-[11px] font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50"
+                  >
+                    {deleting ? 'Deleting...' : 'Delete'}
+                  </button>
+                </DialogFooter>
+              </>
+            )
+          })()}
         </DialogContent>
       </Dialog>
 
@@ -3741,7 +3791,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           }}
           onDelete={() => {
             setContextMenu(null)
-            setDeleteChoice('single')
+            setDeleteChoice('dates')
             setDeleteModalOpen(true)
           }}
         />
