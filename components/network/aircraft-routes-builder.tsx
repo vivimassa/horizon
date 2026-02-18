@@ -6,8 +6,7 @@ import {
   AircraftRoute, AircraftRouteLeg,
   getAircraftRoutes, getUnassignedFlightCount,
   checkDuplicateFlight, saveRoute, deleteRoute as deleteRouteAction,
-  publishRoute as publishRouteAction, markRouteReady as markRouteReadyAction,
-  publishReadyRoutes as publishReadyRoutesAction, publishAllRoutes as publishAllRoutesAction,
+  finalizeRoute as finalizeRouteAction, bulkFinalizeRoutes as bulkFinalizeRoutesAction,
   getRouteTemplates,
   type RouteTemplate, type SaveRouteInput,
 } from '@/app/actions/aircraft-routes'
@@ -16,7 +15,7 @@ import { getScenarios, createScenario, deleteScenario, getNextScenarioNumber } f
 import { cn, minutesToHHMM } from '@/lib/utils'
 import {
   Plus, Search, RefreshCw, Plane, ChevronDown, ChevronRight,
-  Trash2, Save, RotateCcw, AlertTriangle, Lock, Check, ChevronUp,
+  Trash2, Save, RotateCcw, AlertTriangle, Check,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StatusGreen, StatusYellow, StatusRed, StatusGray } from '@/components/ui/validation-icons'
@@ -476,6 +475,7 @@ interface RouteFormState {
   periodEnd: string
   daysOfOperation: string
   status: string
+  finalized: boolean
   notes: string
 }
 
@@ -567,10 +567,8 @@ export function AircraftRoutesBuilder({
   const [saveWarnings, setSaveWarnings] = useState<string[]>([])
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showDiscardDialog, setShowDiscardDialog] = useState(false)
-  const [showPublishDialog, setShowPublishDialog] = useState(false)
-  const [showBulkPublishDialog, setShowBulkPublishDialog] = useState(false)
-  const [showPublishAllDialog, setShowPublishAllDialog] = useState(false)
-  const [showPublishDropdown, setShowPublishDropdown] = useState(false)
+  const [showUnfinalizeDialog, setShowUnfinalizeDialog] = useState(false)
+  const [showBulkFinalizeDialog, setShowBulkFinalizeDialog] = useState(false)
 
   // ── Save / action state ──
   const [saving, setSaving] = useState(false)
@@ -682,16 +680,12 @@ export function AircraftRoutesBuilder({
     return best || 'VN'
   }, [routes, airportCountryMap])
 
-  // ── Publish workflow computed values ──
-  const readyRoutes = useMemo(() => routes.filter(r => r.status === 'ready'), [routes])
-  const readyCount = readyRoutes.length
-  const unpublishedRoutes = useMemo(() => routes.filter(r => r.status !== 'published'), [routes])
-  const unpublishedCount = unpublishedRoutes.length
-  const totalUnpublishedFlights = useMemo(() => unpublishedRoutes.reduce((sum, r) => sum + r.legs.length, 0), [unpublishedRoutes])
-  const draftSkipCount = useMemo(() => unpublishedRoutes.filter(r => r.status === 'draft').length, [unpublishedRoutes])
-  const allPublished = useMemo(() => routes.length > 0 && routes.every(r => r.status === 'published'), [routes])
-  const totalReadyFlights = useMemo(() => readyRoutes.reduce((sum, r) => sum + r.legs.length, 0), [readyRoutes])
+  // ── Finalize workflow computed values ──
   const isPublished = form?.status === 'published'
+  const isFinalized = !isPublished && form?.finalized === true
+  const unfinalizedDrafts = useMemo(() => routes.filter(r => r.status === 'draft' && !r.finalized), [routes])
+  const unfinalizedCount = unfinalizedDrafts.length
+  const allFinalized = useMemo(() => routes.length > 0 && routes.every(r => r.status === 'published' || r.finalized), [routes])
 
   // ── Recalc helper ──
   const recalcLegs = useCallback((newLegs: LegWithOffsets[]): LegWithOffsets[] => {
@@ -750,6 +744,7 @@ export function AircraftRoutesBuilder({
       periodEnd: route.period_end || '',
       daysOfOperation: route.days_of_operation || '1234567',
       status: route.status || 'draft',
+      finalized: route.finalized || false,
       notes: route.notes || '',
     }
     const legsWithOffsets: LegWithOffsets[] = route.legs.map(l => ({
@@ -1089,6 +1084,7 @@ export function AircraftRoutesBuilder({
       periodEnd: '',
       daysOfOperation: template?.days_of_operation || '1234567',
       status: 'new',
+      finalized: false,
       notes: '',
     })
     setAcTypeSearch(defaultAcType?.icao_type || '')
@@ -1791,76 +1787,46 @@ export function AircraftRoutesBuilder({
     finally { setSaving(false) }
   }, [selectedRouteId, form?.routeName, refresh, refreshTemplates])
 
-  const handlePublishRoute = useCallback(async () => {
-    // Now only handles unpublish (published → ready)
-    if (!selectedRouteId || form?.status !== 'published') return
-    setSaving(true); setShowPublishDialog(false)
-    try {
-      const res = await publishRouteAction(selectedRouteId, false)
-      if (res.error) { toast.error(friendlyError(res.error)); return }
-      toast.success('Route reverted to ready')
-      setForm(prev => prev ? { ...prev, status: 'ready' } : null)
-      await Promise.all([refresh(), refreshTemplates()])
-    } catch { toast.error('Failed to unpublish route') }
-    finally { setSaving(false) }
-  }, [selectedRouteId, form?.status, refresh, refreshTemplates])
-
-  const handleMarkReady = useCallback(async () => {
+  const handleFinalizeRoute = useCallback(async () => {
     if (!selectedRouteId) return
     setSaving(true)
     try {
-      const res = await markRouteReadyAction(selectedRouteId, true)
+      const res = await finalizeRouteAction(selectedRouteId, true)
       if (res.error) { toast.error(friendlyError(res.error)); return }
-      toast.success('Route marked as ready')
-      setForm(prev => prev ? { ...prev, status: 'ready' } : null)
+      toast.success('Route finalized')
+      setForm(prev => prev ? { ...prev, finalized: true } : null)
       await refresh()
-    } catch { toast.error('Failed to mark route ready') }
+    } catch { toast.error('Failed to finalize route') }
     finally { setSaving(false) }
   }, [selectedRouteId, refresh])
 
-  const handleUnmarkReady = useCallback(async () => {
+  const handleUnfinalizeRoute = useCallback(async () => {
     if (!selectedRouteId) return
-    setSaving(true)
+    setSaving(true); setShowUnfinalizeDialog(false)
     try {
-      const res = await markRouteReadyAction(selectedRouteId, false)
+      const res = await finalizeRouteAction(selectedRouteId, false)
       if (res.error) { toast.error(friendlyError(res.error)); return }
       toast.success('Route reverted to draft')
-      setForm(prev => prev ? { ...prev, status: 'draft' } : null)
+      setForm(prev => prev ? { ...prev, finalized: false } : null)
       await refresh()
-    } catch { toast.error('Failed to revert route') }
+    } catch { toast.error('Failed to un-finalize route') }
     finally { setSaving(false) }
   }, [selectedRouteId, refresh])
 
-  const handleBulkPublish = useCallback(async () => {
+  const handleBulkFinalize = useCallback(async () => {
     if (!selectedScenario) return
-    setSaving(true); setShowBulkPublishDialog(false)
+    setSaving(true); setShowBulkFinalizeDialog(false)
     try {
-      const res = await publishReadyRoutesAction(selectedScenario.id)
+      const res = await bulkFinalizeRoutesAction(selectedScenario.id)
       if (res.error) { toast.error(friendlyError(res.error)); return }
-      toast.success(`${res.publishedCount} route${res.publishedCount !== 1 ? 's' : ''} published`)
-      // If the currently selected route was ready, update its form status
-      if (form?.status === 'ready') {
-        setForm(prev => prev ? { ...prev, status: 'published' } : null)
+      toast.success(`${res.finalizedCount} route${res.finalizedCount !== 1 ? 's' : ''} finalized`)
+      if (form && form.status === 'draft' && !form.finalized) {
+        setForm(prev => prev ? { ...prev, finalized: true } : null)
       }
-      await Promise.all([refresh(), refreshTemplates()])
-    } catch { toast.error('Failed to publish routes') }
+      await refresh()
+    } catch { toast.error('Failed to finalize routes') }
     finally { setSaving(false) }
-  }, [selectedScenario, form?.status, refresh, refreshTemplates])
-
-  const handleBulkPublishAll = useCallback(async () => {
-    if (!selectedScenario) return
-    setSaving(true); setShowPublishAllDialog(false)
-    try {
-      const res = await publishAllRoutesAction(selectedScenario.id)
-      if (res.error) { toast.error(friendlyError(res.error)); return }
-      toast.success(`${res.publishedCount} route${res.publishedCount !== 1 ? 's' : ''} published`)
-      if (form?.status === 'draft' || form?.status === 'ready') {
-        setForm(prev => prev ? { ...prev, status: 'published' } : null)
-      }
-      await Promise.all([refresh(), refreshTemplates()])
-    } catch { toast.error('Failed to publish routes') }
-    finally { setSaving(false) }
-  }, [selectedScenario, form?.status, refresh, refreshTemplates])
+  }, [selectedScenario, form, refresh])
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -1979,33 +1945,31 @@ export function AircraftRoutesBuilder({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey
-      const pub = formStatusRef.current === 'published'
-      // Ctrl+S: Save (blocked if published)
-      if (mod && e.key === 's') { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.save(); return }
-      // Ctrl+Z: Undo (blocked if published)
-      if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.undo(); return }
-      // Ctrl+Shift+Z / Ctrl+Y: Redo (blocked if published)
-      if (mod && e.key === 'z' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.redo(); return }
-      if (mod && e.key === 'y') { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.redo(); return }
+      // Ctrl+S: Save
+      if (mod && e.key === 's') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.save(); return }
+      // Ctrl+Z: Undo
+      if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.undo(); return }
+      // Ctrl+Shift+Z / Ctrl+Y: Redo
+      if (mod && e.key === 'z' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.redo(); return }
+      if (mod && e.key === 'y') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.redo(); return }
       // Ctrl+N: New Route
       if (mod && e.key === 'n') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.newRoute(); return }
-      // Ctrl+D: Duplicate Leg (blocked if published)
-      if (mod && e.key === 'd') { e.preventDefault(); e.stopPropagation(); if (!pub) shortcutRefs.current.duplicate(); return }
+      // Ctrl+D: Duplicate Leg
+      if (mod && e.key === 'd') { e.preventDefault(); e.stopPropagation(); shortcutRefs.current.duplicate(); return }
       // Ctrl+F: Focus search
       if (mod && e.key === 'f') { e.preventDefault(); e.stopPropagation(); document.getElementById('route-search')?.focus(); return }
-      // Ctrl+-: Delete selected row  |  Ctrl+=: Insert row below (blocked if published)
+      // Ctrl+-: Delete selected row  |  Ctrl+=: Insert row below
       if (mod && (e.key === '-' || e.key === '=' || e.key === '+')) {
         e.preventDefault(); e.stopPropagation()
-        if (pub) return
         if (e.key === '-') { shortcutRefs.current.deleteSelectedLeg() }
         else { shortcutRefs.current.addRow() }
         return
       }
-      // Delete: Remove selected leg (only when not typing in an input, blocked if published)
+      // Delete: Remove selected leg (only when not typing in an input)
       if (e.key === 'Delete') {
         const el = document.activeElement
         const isTyping = el?.tagName === 'INPUT' || el?.tagName === 'SELECT' || el?.tagName === 'TEXTAREA'
-        if (!isTyping && !pub) { e.preventDefault(); shortcutRefs.current.deleteSelectedLeg(); return }
+        if (!isTyping) { e.preventDefault(); shortcutRefs.current.deleteSelectedLeg(); return }
       }
       // Shift+Space: Select entire row  |  Ctrl+Space: Select entire column
       if (e.key === ' ') {
@@ -2170,62 +2134,24 @@ export function AircraftRoutesBuilder({
 
         {selectedScenario && (
           <div className="shrink-0 border-t border-black/[0.06] dark:border-white/[0.06] px-4 py-2.5 space-y-2">
-            {/* Publish split button */}
-            {allPublished ? (
+            {/* Finalize button */}
+            {allFinalized ? (
               <button disabled
-                className="w-full h-10 flex items-center justify-center gap-2 rounded-lg bg-[#22c55e]/10 text-[#22c55e] text-sm font-medium cursor-default">
-                <Check className="h-4 w-4" /> All routes published
+                className="w-full h-10 flex items-center justify-center gap-2 rounded-lg bg-[#10B981]/10 text-[#10B981] text-sm font-medium cursor-default">
+                <Check className="h-4 w-4" /> All routes finalized
               </button>
             ) : routes.length === 0 ? (
               <button disabled
-                className="w-full h-10 flex items-center justify-center gap-2 rounded-lg bg-[#991b1b]/20 text-[#991b1b]/40 text-sm font-medium cursor-not-allowed">
-                No routes to publish
+                className="w-full h-10 flex items-center justify-center gap-2 rounded-lg bg-muted/40 text-muted-foreground/40 text-sm font-medium cursor-not-allowed">
+                No routes to finalize
               </button>
             ) : (
-              <div className="relative">
-                <div className="flex w-full">
-                  <button
-                    onClick={() => {
-                      if (readyCount > 0) setShowBulkPublishDialog(true)
-                      else setShowPublishAllDialog(true)
-                    }}
-                    disabled={saving}
-                    className="flex-1 h-10 flex items-center justify-center gap-2 rounded-l-lg bg-[#991b1b] text-white text-[13px] font-medium hover:bg-[#7f1d1d] transition-colors disabled:opacity-50">
-                    {readyCount > 0
-                      ? `Publish ${readyCount} Route${readyCount !== 1 ? 's' : ''}`
-                      : `Publish All ${unpublishedCount} Route${unpublishedCount !== 1 ? 's' : ''}`}
-                  </button>
-                  <button
-                    onClick={() => setShowPublishDropdown(prev => !prev)}
-                    disabled={saving}
-                    className="w-9 h-10 flex items-center justify-center rounded-r-lg bg-[#7f1d1d] text-white hover:bg-[#6b1717] transition-colors disabled:opacity-50"
-                    style={{ borderLeft: '1px solid rgba(255,255,255,0.2)' }}>
-                    <ChevronUp className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                {showPublishDropdown && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowPublishDropdown(false)} />
-                    <div className="absolute bottom-[48px] left-0 right-0 z-50 rounded-[10px] overflow-hidden"
-                      style={{ background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(20px)', boxShadow: '0 -8px 24px rgba(0,0,0,0.1)', border: '1px solid rgba(0,0,0,0.06)' }}>
-                      <button
-                        onClick={() => { setShowPublishDropdown(false); setShowBulkPublishDialog(true) }}
-                        disabled={readyCount === 0}
-                        className={cn('w-full h-9 px-3 text-left text-[13px] transition-colors',
-                          readyCount > 0 ? 'hover:bg-black/[0.04] text-foreground' : 'text-muted-foreground/40 cursor-not-allowed'
-                        )}>
-                        Publish Ready Routes ({readyCount})
-                      </button>
-                      <button
-                        onClick={() => { setShowPublishDropdown(false); setShowPublishAllDialog(true) }}
-                        disabled={unpublishedCount === 0}
-                        className="w-full h-9 px-3 text-left text-[13px] hover:bg-black/[0.04] text-foreground transition-colors border-t border-black/[0.04]">
-                        Publish All Routes ({unpublishedCount})
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
+              <button
+                onClick={() => setShowBulkFinalizeDialog(true)}
+                disabled={saving || unfinalizedCount === 0}
+                className="w-full h-10 flex items-center justify-center gap-2 rounded-lg bg-[#10B981] text-white text-[13px] font-medium hover:bg-[#059669] transition-colors disabled:opacity-50">
+                Finalize {unfinalizedCount} Route{unfinalizedCount !== 1 ? 's' : ''}
+              </button>
             )}
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">Unassigned Flights</span>
@@ -2249,9 +2175,8 @@ export function AircraftRoutesBuilder({
                   <input id="route-name-input" type="text" value={form.routeName} tabIndex={TAB_ROUTE_NO}
                     onChange={e => { hasManualRouteNameRef.current = true; updateForm({ routeName: e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase() }) }}
                     onFocus={e => e.target.select()}
-                    disabled={isPublished}
                     placeholder="SGNHAN01" maxLength={8}
-                    className={cn(inputClass, 'w-[90px] font-mono text-xs font-semibold h-[30px]', isPublished && 'opacity-60 cursor-not-allowed')} />
+                    className={cn(inputClass, 'w-[90px] font-mono text-xs font-semibold h-[30px]')} />
                 </div>
 
                 <div className="relative">
@@ -2294,9 +2219,8 @@ export function AircraftRoutesBuilder({
                         setAcTypeOpen(false)
                       }
                     }}
-                    disabled={isPublished}
                     placeholder="A321" maxLength={8}
-                    className={cn(inputClass, 'w-[80px] text-xs font-mono h-[30px]', formErrors.aircraftType && 'border-red-500 ring-1 ring-red-500/30', isPublished && 'opacity-60 cursor-not-allowed')} autoComplete="off" />
+                    className={cn(inputClass, 'w-[80px] text-xs font-mono h-[30px]', formErrors.aircraftType && 'border-red-500 ring-1 ring-red-500/30')} autoComplete="off" />
                   {acTypeOpen && acTypeSearch && (() => {
                     const filtered = filterAndSortAcTypes(aircraftTypes, acTypeSearch)
                     return (
@@ -2338,9 +2262,8 @@ export function AircraftRoutesBuilder({
                       else if (!fromDisplay) updateForm({ periodStart: '' })
                     }}
                     onFocus={e => e.target.select()}
-                    disabled={isPublished}
                     placeholder="DD/MM/YYYY" maxLength={10}
-                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodStart && 'border-red-500 ring-1 ring-red-500/30', isPublished && 'opacity-60 cursor-not-allowed')} />
+                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodStart && 'border-red-500 ring-1 ring-red-500/30')} />
                 </div>
 
                 <span className="text-xs text-muted-foreground pb-[7px]">&mdash;</span>
@@ -2360,15 +2283,14 @@ export function AircraftRoutesBuilder({
                       else if (!toDisplay) updateForm({ periodEnd: '' })
                     }}
                     onFocus={e => e.target.select()}
-                    disabled={isPublished}
                     placeholder="DD/MM/YYYY" maxLength={10}
-                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodEnd && 'border-red-500 ring-1 ring-red-500/30', isPublished && 'opacity-60 cursor-not-allowed')} />
+                    className={cn(inputClass, 'w-[95px] text-xs font-mono h-[30px]', formErrors.periodEnd && 'border-red-500 ring-1 ring-red-500/30')} />
                 </div>
 
                 <div>
                   <span className="block text-[10px] uppercase text-[#9ca3af] tracking-[0.5px] leading-[14px] mb-0.5 text-center">Day of Week</span>
                   <div className={cn('h-[30px] flex items-center rounded-lg px-1', formErrors.daysOfOperation && 'ring-1 ring-red-500/30')}>
-                    <DowCirclesInteractive value={form.daysOfOperation} onChange={v => updateForm({ daysOfOperation: v })} disabled={isPublished} />
+                    <DowCirclesInteractive value={form.daysOfOperation} onChange={v => updateForm({ daysOfOperation: v })} />
                   </div>
                 </div>
 
@@ -2397,22 +2319,15 @@ export function AircraftRoutesBuilder({
                 <div className="flex items-center gap-1.5 ml-auto pb-[5px]">
                   {form.status === 'published' ? (
                     <>
-                      <div className="w-2 h-2 rounded-full bg-[#991b1b]" />
-                      <span className="text-xs font-medium text-[#991b1b]">Published</span>
-                      <Lock className="h-3 w-3 text-[#991b1b]/60 ml-0.5" />
-                      {!isDirty && selectedRouteId && !isNewRoute && (
-                        <button onClick={() => setShowPublishDialog(true)} disabled={saving} tabIndex={-1}
-                          className="ml-1 text-[11px] text-muted-foreground/60 hover:text-muted-foreground underline underline-offset-2 transition-colors disabled:opacity-50">
-                          Unpublish
-                        </button>
-                      )}
+                      <div className="w-2 h-2 rounded-full bg-[#3b82f6]" />
+                      <span className="text-xs font-medium text-[#3b82f6]">Published</span>
                     </>
-                  ) : form.status === 'ready' ? (
+                  ) : isFinalized ? (
                     <>
-                      <div className="w-2 h-2 rounded-full bg-[#22c55e]" />
-                      <span className="text-xs font-medium text-[#22c55e]">Ready</span>
+                      <div className="w-2 h-2 rounded-full bg-[#10B981]" />
+                      <span className="text-xs font-medium text-[#10B981]">Finalized</span>
                       {!isDirty && selectedRouteId && !isNewRoute && (
-                        <button onClick={handleUnmarkReady} disabled={saving} tabIndex={-1}
+                        <button onClick={() => setShowUnfinalizeDialog(true)} disabled={saving} tabIndex={-1}
                           className="ml-1 text-[11px] text-muted-foreground/50 hover:text-muted-foreground underline underline-offset-2 transition-colors disabled:opacity-50">
                           Undo
                         </button>
@@ -2423,9 +2338,9 @@ export function AircraftRoutesBuilder({
                       <div className={cn('w-2 h-2 rounded-full', isNewRoute ? 'bg-blue-500' : 'bg-gray-400')} />
                       <span className="text-xs font-medium capitalize">{isNewRoute ? 'New' : 'Draft'}</span>
                       {!isDirty && selectedRouteId && !isNewRoute && (
-                        <button onClick={handleMarkReady} disabled={saving} tabIndex={-1}
-                          className="ml-1 text-[11px] text-[#991b1b]/70 hover:text-[#991b1b] transition-colors disabled:opacity-50">
-                          Mark Ready &#10003;
+                        <button onClick={handleFinalizeRoute} disabled={saving} tabIndex={-1}
+                          className="ml-1 text-[11px] text-[#10B981]/70 hover:text-[#10B981] transition-colors disabled:opacity-50">
+                          Finalize &#10003;
                         </button>
                       )}
                     </>
@@ -2444,9 +2359,9 @@ export function AircraftRoutesBuilder({
 
             {/* ── PUBLISHED BANNER ── */}
             {isPublished && (
-              <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 rounded-xl bg-[#991b1b]/5 text-[#991b1b]">
-                <Lock className="h-3.5 w-3.5" />
-                <span className="text-xs font-medium">Published route &mdash; read-only</span>
+              <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 rounded-xl bg-[#3b82f6]/5 text-[#3b82f6]">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                <span className="text-xs font-medium">Published &mdash; changes will take effect immediately</span>
               </div>
             )}
 
@@ -2501,29 +2416,29 @@ export function AircraftRoutesBuilder({
                           index={idx}
                           flightLabel={fltLabel}
                           validation={legValidations[idx]}
-                          editingCell={isPublished ? null : editingCell}
+                          editingCell={editingCell}
                           editValue={editValue}
-                          onStartEdit={isPublished ? () => {} : startEdit}
+                          onStartEdit={startEdit}
                           onEditChange={setEditValue}
                           onCommitEdit={commitEdit}
                           onCancelEdit={cancelEdit}
                           operatorIataCode={operatorIataCode}
                           airportIataSet={airportIataSet}
                           cellInputClass={cellInputClass}
-                          onDragStart={isPublished ? ((e: React.DragEvent) => e.preventDefault()) : (e: React.DragEvent) => handleDragStart(e, idx)}
+                          onDragStart={(e: React.DragEvent) => handleDragStart(e, idx)}
                           onDragEnd={handleDragEnd}
-                          onDragOver={isPublished ? ((e: React.DragEvent) => e.preventDefault()) : (e: React.DragEvent) => handleDragOver(e, idx)}
-                          onDrop={isPublished ? () => {} : () => handleDrop(idx)}
+                          onDragOver={(e: React.DragEvent) => handleDragOver(e, idx)}
+                          onDrop={() => handleDrop(idx)}
                           dropAbove={showDropAbove}
                           dropBelow={showDropBelow}
-                          isRowSelected={isPublished ? false : selectedRows.has(idx)}
-                          onRowSelect={isPublished ? () => {} : () => { setSelectedRows(new Set([idx])); setSelectedCell(null); setHighlightedCol(null) }}
-                          selectedCol={isPublished ? null : (selectedCell?.row === idx ? selectedCell.col : null)}
-                          highlightedCol={isPublished ? null : highlightedCol}
-                          onSelectCell={isPublished ? () => {} : (r: number, c: number) => { selectCell(r, c); setHighlightedCol(null) }}
+                          isRowSelected={selectedRows.has(idx)}
+                          onRowSelect={() => { setSelectedRows(new Set([idx])); setSelectedCell(null); setHighlightedCol(null) }}
+                          selectedCol={selectedCell?.row === idx ? selectedCell.col : null}
+                          highlightedCol={highlightedCol}
+                          onSelectCell={(r: number, c: number) => { selectCell(r, c); setHighlightedCol(null) }}
                           onDeselectCell={deselectCell}
-                          onClearCell={isPublished ? () => {} : clearCellValue}
-                          readOnly={isPublished}
+                          onClearCell={clearCellValue}
+                          readOnly={false}
                           timeDisplayMode={timeDisplayMode}
                           airportUtcMap={airportUtcMap}
                           homeBaseUtcOffset={homeBaseUtcOffset}
@@ -2531,8 +2446,8 @@ export function AircraftRoutesBuilder({
                       )
                     })}
 
-                    {/* Empty grid rows (8 always visible below last filled, hidden when published) */}
-                    {!isPublished && Array.from({ length: 8 }, (_, i) => {
+                    {/* Empty grid rows (8 always visible below last filled) */}
+                    {Array.from({ length: 8 }, (_, i) => {
                       const rowIdx = legs.length + i
                       const isActive = isAdding && activeEmptyRow === rowIdx
                       const isDisabled = hasRedErrors || (isAdding && activeEmptyRow !== rowIdx)
@@ -2848,30 +2763,31 @@ export function AircraftRoutesBuilder({
       </Dialog>
 
       {/* Unpublish dialog (published → ready) */}
-      <Dialog open={showPublishDialog} onOpenChange={setShowPublishDialog}>
+      {/* Un-finalize confirmation dialog */}
+      <Dialog open={showUnfinalizeDialog} onOpenChange={setShowUnfinalizeDialog}>
         <DialogContent className="glass-heavy max-w-sm">
           <DialogHeader><DialogTitle className="flex items-center gap-2">
-            <RotateCcw className="h-5 w-5 text-muted-foreground" /> Unpublish Route
+            <RotateCcw className="h-5 w-5 text-muted-foreground" /> Revert Finalization
           </DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">Revert <span className="font-mono font-semibold">{form?.routeName || 'this route'}</span> to ready status?</p>
+          <p className="text-sm text-muted-foreground">Revert <span className="font-mono font-semibold">{form?.routeName || 'this route'}</span> to draft status?</p>
           <DialogFooter className="gap-2 sm:gap-2">
-            <button onClick={() => setShowPublishDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
-            <button onClick={handlePublishRoute} disabled={saving}
+            <button onClick={() => setShowUnfinalizeDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
+            <button onClick={handleUnfinalizeRoute} disabled={saving}
               className="h-8 px-4 rounded-lg bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium transition-colors disabled:opacity-50">
-              {saving ? 'Updating...' : 'Unpublish'}
+              {saving ? 'Reverting...' : 'Revert to Draft'}
             </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Bulk publish dialog */}
-      <Dialog open={showBulkPublishDialog} onOpenChange={setShowBulkPublishDialog}>
+      {/* Bulk finalize dialog */}
+      <Dialog open={showBulkFinalizeDialog} onOpenChange={setShowBulkFinalizeDialog}>
         <DialogContent className="glass-heavy max-w-md">
           <DialogHeader><DialogTitle className="flex items-center gap-2">
-            <Plane className="h-5 w-5 text-[#991b1b]" /> Publish {readyCount} Route{readyCount !== 1 ? 's' : ''}
+            <Check className="h-5 w-5 text-[#10B981]" /> Finalize {unfinalizedCount} Route{unfinalizedCount !== 1 ? 's' : ''}
           </DialogTitle></DialogHeader>
           <div className="space-y-2 max-h-[200px] overflow-y-auto custom-scrollbar">
-            {readyRoutes.map(r => (
+            {unfinalizedDrafts.map(r => (
               <div key={r.id} className="flex items-center justify-between text-sm py-1.5 px-2 rounded-lg bg-black/[0.02] dark:bg-white/[0.03]">
                 <span className="font-mono font-medium">{r.route_name || `Route ${r.route_number}`}</span>
                 <span className="text-xs text-muted-foreground">
@@ -2880,54 +2796,12 @@ export function AircraftRoutesBuilder({
               </div>
             ))}
           </div>
-          <p className="text-xs text-muted-foreground">{totalReadyFlights} flight{totalReadyFlights !== 1 ? 's' : ''} will be published</p>
+          <p className="text-xs text-muted-foreground">Finalized routes are ready for publish review in Schedule Publisher.</p>
           <DialogFooter className="gap-2 sm:gap-2">
-            <button onClick={() => setShowBulkPublishDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
-            <button onClick={handleBulkPublish} disabled={saving}
-              className="h-8 px-4 rounded-lg bg-[#991b1b] hover:bg-[#7f1d1d] text-white text-sm font-medium transition-colors disabled:opacity-50">
-              {saving ? 'Publishing...' : 'Publish'}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Publish All dialog */}
-      <Dialog open={showPublishAllDialog} onOpenChange={setShowPublishAllDialog}>
-        <DialogContent className="glass-heavy max-w-md">
-          <DialogHeader><DialogTitle className="flex items-center gap-2">
-            <Plane className="h-5 w-5 text-[#991b1b]" /> Publish All Routes
-          </DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Publishing ALL {unpublishedCount} route{unpublishedCount !== 1 ? 's' : ''} to the live schedule:
-          </p>
-          <div className="space-y-1.5 max-h-[200px] overflow-y-auto custom-scrollbar">
-            {unpublishedRoutes.map(r => (
-              <div key={r.id} className="flex items-center justify-between text-sm py-1.5 px-2 rounded-lg bg-black/[0.02] dark:bg-white/[0.03]">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-mono font-medium truncate">{r.route_name || `Route ${r.route_number}`}</span>
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {r.chain ? r.chain.replace(/ \u2192 /g, '-') : ''} ({r.legs.length} leg{r.legs.length !== 1 ? 's' : ''})
-                  </span>
-                </div>
-                <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
-                  r.status === 'ready' ? 'bg-[#22c55e]/10 text-[#22c55e]' : 'bg-gray-100 text-gray-500'
-                )}>
-                  {r.status === 'ready' ? 'Ready' : 'Draft'}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="space-y-1">
-            {draftSkipCount > 0 && (
-              <p className="text-xs text-amber-600">{draftSkipCount} draft route{draftSkipCount !== 1 ? 's' : ''} will skip the Ready step.</p>
-            )}
-            <p className="text-xs text-muted-foreground">All routes become read-only after publishing. {totalUnpublishedFlights} flight{totalUnpublishedFlights !== 1 ? 's' : ''} affected.</p>
-          </div>
-          <DialogFooter className="gap-2 sm:gap-2">
-            <button onClick={() => setShowPublishAllDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
-            <button onClick={handleBulkPublishAll} disabled={saving}
-              className="h-8 px-4 rounded-lg bg-[#991b1b] hover:bg-[#7f1d1d] text-white text-sm font-medium transition-colors disabled:opacity-50">
-              {saving ? 'Publishing...' : 'Publish All'}
+            <button onClick={() => setShowBulkFinalizeDialog(false)} className="h-8 px-4 rounded-lg border border-black/[0.1] dark:border-white/[0.1] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors">Cancel</button>
+            <button onClick={handleBulkFinalize} disabled={saving}
+              className="h-8 px-4 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-sm font-medium transition-colors disabled:opacity-50">
+              {saving ? 'Finalizing...' : 'Finalize All'}
             </button>
           </DialogFooter>
         </DialogContent>
@@ -3538,8 +3412,8 @@ function RouteItem({ route, isSelected, onClick }: { route: AircraftRoute; isSel
           <span className={cn('text-[13px] font-semibold font-mono truncate', isSelected ? 'text-[#991b1b]' : 'text-[#111827] dark:text-foreground')}>
             {route.route_name || `Route ${route.route_number}`}
           </span>
-          {route.status === 'ready' && <span className="text-[10px] text-[#22c55e] shrink-0" title="Ready">&#10003;</span>}
-          {route.status === 'published' && <span className="text-[10px] shrink-0" title="Published">&#128274;</span>}
+          {route.finalized && route.status === 'draft' && <span className="text-[10px] text-[#10B981] shrink-0" title="Finalized">&#10003;</span>}
+          {route.status === 'published' && <span className="w-[6px] h-[6px] rounded-full bg-[#3b82f6] shrink-0" title="Published" />}
         </div>
         <div className="flex items-center gap-[2px] shrink-0 ml-2">
           {DOW_LABELS.map((label, i) => (

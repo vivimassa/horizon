@@ -74,14 +74,16 @@ export interface UseGanttDragReturn {
   cancelDrop: () => void
   /** Reset all workspace overrides */
   resetWorkspace: () => void
+  /** Merge workspace overrides (used by clipboard paste) */
+  addWorkspaceOverrides: (entries: [string, string][]) => void
   /** Check if a flight is being dragged */
   isDragged: (expandedId: string) => boolean
   /** Check if a flight is a ghost placeholder (its original position while being dragged) */
   isGhostPlaceholder: (expandedId: string) => boolean
   /** Get the visual Y offset for a dragged bar (delta from original row) */
   getDragDeltaY: (originalRowY: number) => number
-  /** Get workspace override reg for a flight (or null) */
-  getWorkspaceReg: (flightId: string) => string | undefined
+  /** Get workspace override reg for an expanded flight id (flightId_date) */
+  getWorkspaceReg: (expandedId: string) => string | undefined
 }
 
 /** Minimal row layout info needed for hit-testing */
@@ -286,9 +288,7 @@ export function useGanttDrag({
       setWorkspaceOverrides(prev => {
         const next = new Map(prev)
         Array.from(dragState.draggedIds).forEach(id => {
-          // Extract the flightId from expandedId (format: "uuid_YYYY-MM-DD")
-          const flightId = id.includes('_') ? id.substring(0, id.lastIndexOf('_')) : id
-          next.delete(flightId)
+          next.delete(id) // key is expanded ID (flightId_date) — date-specific
         })
         return next
       })
@@ -319,7 +319,8 @@ export function useGanttDrag({
     if (!pendingDrop) return
     setWorkspaceOverrides(prev => {
       const next = new Map(prev)
-      pendingDrop.flightIds.forEach(fid => next.set(fid, pendingDrop.targetReg))
+      // Use draggedIds (expanded IDs with dates) so each date instance moves independently
+      pendingDrop.draggedIds.forEach(eid => next.set(eid, pendingDrop.targetReg))
       return next
     })
     setPendingDrop(null)
@@ -388,9 +389,17 @@ export function useGanttDrag({
     return dragState.currentY - originalRowY
   }, [dragState])
 
-  const getWorkspaceReg = useCallback((flightId: string) => {
-    return workspaceOverrides.get(flightId)
+  const getWorkspaceReg = useCallback((expandedId: string) => {
+    return workspaceOverrides.get(expandedId)
   }, [workspaceOverrides])
+
+  const addWorkspaceOverrides = useCallback((entries: [string, string][]) => {
+    setWorkspaceOverrides(prev => {
+      const next = new Map(prev)
+      for (const [k, v] of entries) next.set(k, v)
+      return next
+    })
+  }, [])
 
   return {
     workspaceOverrides,
@@ -404,6 +413,7 @@ export function useGanttDrag({
     confirmDrop,
     cancelDrop,
     resetWorkspace,
+    addWorkspaceOverrides,
     isDragged,
     isGhostPlaceholder,
     getDragDeltaY,

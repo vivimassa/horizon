@@ -198,8 +198,8 @@ export async function saveFlightNumber(input: {
            dep_station, arr_station, std_local, sta_local,
            block_minutes, days_of_operation, aircraft_type_id, service_type,
            period_start, period_end, arrival_day_offset,
-           dep_airport_id, arr_airport_id, source
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7::time,$8::time,$9,$10,$11,$12,$13,$14,$15,$16,$17,'manual')
+           dep_airport_id, arr_airport_id, source, status
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7::time,$8::time,$9,$10,$11,$12,$13,$14,$15,$16,$17,'manual','draft')
          RETURNING id`,
         [
           operatorId, input.season_id, airlineCode, flightNum,

@@ -43,8 +43,6 @@ import { MovementSettingsPanel, type FleetPreviewItem } from './movement-setting
 import { useMovementClipboard } from '@/lib/hooks/use-movement-clipboard'
 import { useMovementDrag, type RowLayoutItem, type PendingDrop } from '@/lib/hooks/use-movement-drag'
 import { MovementClipboardPill } from './movement-clipboard-pill'
-import { MovementPasteTargetDialog } from './movement-paste-target-dialog'
-import { MovementPasteModal } from './movement-paste-modal'
 import { MovementWorkspaceIndicator } from './movement-workspace-indicator'
 
 // ─── Types & Constants ───────────────────────────────────────────────────
@@ -107,6 +105,7 @@ interface ExpandedFlight {
   assignedReg: string | null
   serviceType: string
   source: string
+  finalized: boolean
 }
 
 const OVERFLOW_ROW_ID_PREFIX = '__overflow__'
@@ -239,7 +238,14 @@ function getBarColor(
   isDbAssigned: boolean,
   isDark: boolean,
 ): { bg: string; text: string; useVars: boolean } {
+  const isPub = ef.status === 'published'
+  const isFin = !isPub && ef.finalized
+  const isWip = !isPub && !ef.finalized
+
   if (colorMode === 'assignment') {
+    if (isWip || isFin) {
+      return { bg: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)', text: '', useVars: false }
+    }
     return {
       bg: isDbAssigned ? 'var(--gantt-bar-bg-assigned)' : 'var(--gantt-bar-bg-unassigned)',
       text: isDbAssigned ? 'var(--gantt-bar-text-assigned)' : '',
@@ -254,6 +260,12 @@ function getBarColor(
     bg = settings.colorServiceType[ef.serviceType] || '#3B82F6'
   } else if (colorMode === 'destination_type') {
     bg = isRouteDomestic(ef.routeType) ? settings.colorDestType.domestic : settings.colorDestType.international
+  }
+
+  if (isWip) {
+    bg = desaturate(bg, 0.3)
+  } else if (isFin) {
+    bg = desaturate(bg, 0.6)
   }
 
   return {
@@ -291,7 +303,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const [startDate, setStartDate] = useState(() => startOfDay(new Date()))
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('4D')
   const [acTypeFilter, setAcTypeFilter] = useState<string | null>(null)
-  const [scheduleFilters, setScheduleFilters] = useState({ published: true, draftSsim: true, draftManual: true })
+  const [scheduleFilters, setScheduleFilters] = useState<ScheduleFilters>({ published: true, finalized: true, wip: true })
   const [selectedFlights, setSelectedFlights] = useState<Set<string>>(new Set())
   const [hoveredFlightId, setHoveredFlightId] = useState<string | null>(null)
   const tooltipPosRef = useRef({ x: 0, y: 0 })
@@ -384,7 +396,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const [rubberBand, setRubberBand] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
 
   // Context menu state
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rowReg?: string } | null>(null)
 
   // Assign modal state
   const [assignModalOpen, setAssignModalOpen] = useState(false)
@@ -726,11 +738,12 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const expandedFlights = useMemo<ExpandedFlight[]>(() => {
     const result: ExpandedFlight[] = []
     for (const f of flights) {
-      const isDraft = f.status === 'draft' || f.status === 'ready'
       const isPub = f.status === 'published'
+      const isFin = !isPub && f.finalized
+      const isWip = !isPub && !f.finalized
       if (isPub && !scheduleFilters.published) continue
-      if (isDraft && f.source === 'ssim' && !scheduleFilters.draftSsim) continue
-      if (isDraft && f.source !== 'ssim' && !scheduleFilters.draftManual) continue
+      if (isFin && !scheduleFilters.finalized) continue
+      if (isWip && !scheduleFilters.wip) continue
 
       const pStart = new Date(f.periodStart + 'T00:00:00')
       const pEnd = new Date(f.periodEnd + 'T00:00:00')
@@ -772,11 +785,12 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           assignedReg: null, // set by tail assignment engine
           serviceType: f.serviceType || 'J',
           source: f.source || 'manual',
+          finalized: f.finalized ?? false,
         })
       }
     }
     return result
-  }, [flights, startDate, zoomConfig.days, scheduleFilters.published, scheduleFilters.draftSsim, scheduleFilters.draftManual, tailAssignments])
+  }, [flights, startDate, zoomConfig.days, scheduleFilters.published, scheduleFilters.finalized, scheduleFilters.wip, tailAssignments])
 
   // ─── Flight search results (live-filtered) ─────────────────────────
   const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
@@ -1055,7 +1069,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const {
     workspaceOverrides, dragState, targetRow, pendingDrop,
     onBarMouseDown, onBodyMouseMove, onBodyMouseUp,
-    resetWorkspace, isDragged, isGhostPlaceholder,
+    resetWorkspace, addWorkspaceOverrides, isDragged, isGhostPlaceholder,
     getDragDeltaY, getWorkspaceReg, confirmDrop, cancelDrop,
   } = useMovementDrag({
     selectedFlights,
@@ -1064,21 +1078,20 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     getFlightIcao,
     getRouteCycleMates,
     anyModalOpen: deleteModalOpen || miniBuilderOpen || assignModalOpen || unassignModalOpen,
-    clipboardActive: false, // clipboard hook runs after drag — anyModalOpen covers paste dialogs
+    clipboardActive: false,
   })
 
-  // ─── Clipboard (Cut/Copy/Paste) ──────────────────────────────────
+  // ─── Clipboard (Cut/Paste via workspace overrides) ──────────────
   const {
-    clipboard, undo: clipboardUndo, pasteModalOpen, setPasteModalOpen,
-    pasteTargetOpen, setPasteTargetOpen, justPastedIds,
+    clipboard, justPastedIds,
     isFlightGhosted, clearClipboard, setTargetReg: setClipboardTargetReg,
-    executePaste, executeUndo: executeClipboardUndo, pasting,
+    pasteToTarget,
   } = useMovementClipboard({
     selectedFlights,
-    selectedFlightObjects,
-    refreshFlights,
     clearSelection: () => setSelectedFlights(new Set()),
     anyModalOpen: deleteModalOpen || miniBuilderOpen || assignModalOpen || unassignModalOpen || !!pendingDrop,
+    onAssign: () => setAssignModalOpen(true),
+    onPaste: (expandedIds, targetReg) => addWorkspaceOverrides(expandedIds.map(id => [id, targetReg])),
   })
 
   // ─── Workspace-aware flight placement ──────────────────────────
@@ -1088,7 +1101,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
     const map = new Map<string, ExpandedFlight[]>()
     for (const ef of assignedFlights) {
-      const wsReg = workspaceOverrides.get(ef.flightId)
+      const wsReg = workspaceOverrides.get(ef.id)
       const effectiveReg = wsReg || ef.aircraftReg || ef.assignedReg
       if (!effectiveReg) continue
       const list = map.get(effectiveReg) || []
@@ -1104,7 +1117,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
     const map = new Map<string, ExpandedFlight[]>()
     for (const ef of assignedFlights) {
-      const wsReg = workspaceOverrides.get(ef.flightId)
+      const wsReg = workspaceOverrides.get(ef.id)
       const effectiveReg = wsReg || ef.aircraftReg || ef.assignedReg
       if (effectiveReg) continue
       const key = ef.aircraftTypeIcao || 'UNKN'
@@ -1306,14 +1319,14 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   }, [selectedFlight, deleteChoice, deleting, refreshFlights])
 
   // ─── Right-click handler ───────────────────────────────────────
-  const handleBarContextMenu = useCallback((e: React.MouseEvent, flightId: string) => {
+  const handleBarContextMenu = useCallback((e: React.MouseEvent, flightId: string, rowReg?: string) => {
     e.preventDefault()
     e.stopPropagation()
     // If the right-clicked flight isn't already selected, select it alone
     if (!selectedFlights.has(flightId)) {
       setSelectedFlights(new Set([flightId]))
     }
-    setContextMenu({ x: e.clientX, y: e.clientY })
+    setContextMenu({ x: e.clientX, y: e.clientY, rowReg })
   }, [selectedFlights])
 
   // Close context menu on click outside
@@ -2529,6 +2542,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                     const isHovered = hoveredFlightId === ef.id
                     const num = stripFlightPrefix(ef.flightNumber)
                     const isPublished = ef.status === 'published'
+                    const isFin = !isPublished && ef.finalized
+                    const isWip = !isPublished && !ef.finalized
                     const isDbAssigned = !!ef.aircraftReg
 
                     // Color mode
@@ -2647,27 +2662,36 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                     const isSearchHighlight = searchHighlightId === ef.id
                     const barIsDragged = isDragged(ef.id)
                     const barIsGhost = isGhostPlaceholder(ef.id)
-                    const wsReg = getWorkspaceReg(ef.flightId)
+                    const wsReg = getWorkspaceReg(ef.id)
                     const hasDbReg = !!ef.aircraftReg
                     const hasWsOverride = wsReg !== undefined
 
                     // Bar status icon (top-right corner)
                     let barStatusIcon: React.ReactNode = null
-                    if ((movementSettings.display?.workspaceIcons ?? true) && w >= 28) {
-                      if (hasDbReg && !isOverflow) {
+                    if (w >= 28) {
+                      if (isFin) {
                         barStatusIcon = (
-                          <span className="absolute -top-0.5 -right-0.5 text-[7px] leading-none" style={{ color: '#16a34a', opacity: 0.7 }}>✓</span>
+                          <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center"
+                            style={{ width: 11, height: 11, borderRadius: 3, fontSize: 7, fontWeight: 700,
+                              fontStyle: 'normal', lineHeight: 1,
+                              background: '#10B981', color: '#fff' }}>✓</span>
                         )
-                      } else if (hasWsOverride) {
-                        barStatusIcon = (
-                          <span className="absolute -top-0.5 -right-0.5 text-[7px] leading-none" style={{ color: '#2563eb', opacity: 0.7 }}>⟳</span>
-                        )
+                      } else if (isPublished && (movementSettings.display?.workspaceIcons ?? true)) {
+                        if (hasDbReg && !isOverflow) {
+                          barStatusIcon = (
+                            <span className="absolute -top-0.5 -right-0.5 text-[7px] leading-none" style={{ color: '#16a34a', opacity: 0.7 }}>✓</span>
+                          )
+                        } else if (hasWsOverride) {
+                          barStatusIcon = (
+                            <span className="absolute -top-0.5 -right-0.5 text-[7px] leading-none" style={{ color: '#2563eb', opacity: 0.7 }}>⟳</span>
+                          )
+                        }
                       }
                     }
 
-                    // Origin badge for draft flights (bottom-left corner)
+                    // Origin badge for WIP flights (bottom-left corner)
                     let originBadge: React.ReactNode = null
-                    if (!isPublished && w >= 30) {
+                    if (isWip && w >= 30) {
                       const src = ef.source
                       if (src === 'ssim') {
                         originBadge = (
@@ -2726,7 +2750,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                             }
                           }}
                           onMouseDown={(e) => onBarMouseDown(ef.id, regCode, e)}
-                          onContextMenu={(e) => handleBarContextMenu(e, ef.id)}
+                          onContextMenu={(e) => handleBarContextMenu(e, ef.id, regCode)}
                           onDoubleClick={(e) => { e.stopPropagation(); handleBarDoubleClick(ef) }}
                           onTouchEnd={() => {
                             const now = Date.now()
@@ -2742,20 +2766,20 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                           onMouseLeave={() => setHoveredFlightId(null)}
                         >
                           <div
-                            className={`w-full h-full flex items-center px-1 overflow-hidden relative${justPastedIds.has(ef.flightId) ? ' animate-pulse' : ''}`}
+                            className={`w-full h-full flex items-center px-1 overflow-hidden relative${justPastedIds.has(ef.id) ? ' animate-pulse' : ''}`}
                             style={{
                               borderRadius: 5,
                               background: barBg,
                               border: isSearchHighlight
                                 ? '2px solid #EF4444'
-                                : !isPublished
-                                  ? isDbAssigned
-                                    ? '2px dashed var(--gantt-bar-border-draft)'
-                                    : '1.5px dashed var(--gantt-bar-border-draft)'
-                                  : isDbAssigned
-                                    ? '2px solid var(--gantt-bar-border-pub-assigned)'
-                                    : '1.5px solid var(--gantt-bar-border-pub)',
-                              fontStyle: isPublished ? 'normal' : 'italic',
+                                : isWip
+                                  ? `${isDbAssigned ? '2px' : '1.5px'} dashed #F59E0B`
+                                  : isFin
+                                    ? `${isDbAssigned ? '2px' : '1.5px'} dashed #10B981`
+                                    : isDbAssigned
+                                      ? '2px solid var(--gantt-bar-border-pub-assigned)'
+                                      : '1.5px solid var(--gantt-bar-border-pub)',
+                              fontStyle: isWip ? 'italic' : 'normal',
                               color: barText,
                               fontSize: BAR_FONT + 'px',
                               boxShadow: isSearchHighlight
@@ -2764,11 +2788,11 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                                   ? '0 8px 24px rgba(0,0,0,0.15)'
                                   : isSelected
                                     ? '0 0 0 3px rgba(59, 130, 246, 0.35), 0 0 14px rgba(59, 130, 246, 0.15)'
-                                    : justPastedIds.has(ef.flightId)
+                                    : justPastedIds.has(ef.id)
                                       ? '0 0 0 2px rgba(34, 197, 94, 0.4), 0 0 12px rgba(34, 197, 94, 0.15)'
                                       : 'none',
-                              opacity: isFlightGhosted(ef.id, ef.flightId) ? 0.25 : 1,
-                              backgroundImage: isFlightGhosted(ef.id, ef.flightId)
+                              opacity: isFlightGhosted(ef.id) ? 0.25 : 1,
+                              backgroundImage: isFlightGhosted(ef.id)
                                 ? 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.03) 3px, rgba(0,0,0,0.03) 6px)'
                                 : undefined,
                             }}
@@ -3293,6 +3317,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                         const isSel = rf.id === selectedFlight.id
                         const num = stripFlightPrefix(rf.flightNumber)
                         const isPub = rf.status === 'published'
+                        const rfFin = !isPub && rf.finalized
+                        const rfWip = !isPub && !rf.finalized
                         const nextFlight = i < panelData.rotation.length - 1 ? panelData.rotation[i + 1] : null
                         const sameRouteAsNext = nextFlight && rf.routeId && nextFlight.routeId && rf.routeId === nextFlight.routeId
                         return (
@@ -3322,13 +3348,13 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                                   {rf.stdLocal}-{rf.staLocal}
                                 </span>
                                 <span
-                                  className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold ${
-                                    isPub
-                                      ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-                                      : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                                  }`}
+                                  className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold"
+                                  style={{
+                                    background: isPub ? 'rgba(59,130,246,0.15)' : rfFin ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
+                                    color: isPub ? '#3b82f6' : rfFin ? '#10B981' : '#F59E0B',
+                                  }}
                                 >
-                                  {isPub ? 'P' : 'D'}
+                                  {isPub ? 'P' : rfFin ? 'F' : 'W'}
                                 </span>
                               </div>
                             </div>
@@ -3581,9 +3607,16 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           <div className="flex items-center gap-1.5">
             <div
               className="w-5 h-3 rounded-[3px]"
-              style={{ background: 'var(--gantt-bar-bg-unassigned)', border: '1.5px dashed var(--gantt-bar-border-draft)' }}
+              style={{ background: 'var(--gantt-bar-bg-unassigned)', border: '1.5px dashed #10B981' }}
             />
-            <span>Draft</span>
+            <span>Finalized</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div
+              className="w-5 h-3 rounded-[3px]"
+              style={{ background: 'var(--gantt-bar-bg-unassigned)', border: '1.5px dashed #F59E0B' }}
+            />
+            <span>WIP</span>
           </div>
           <div className="w-px h-3 bg-border" />
           <div className="flex items-center gap-1.5">
@@ -3687,22 +3720,14 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           y={contextMenu.y}
           selectionCount={selectedFlights.size}
           hasDbAssigned={selectedFlightObjects.some(f => !!f.aircraftReg)}
-          hasClipboard={!!clipboard}
+          clipboardCount={clipboard?.expandedIds.size ?? 0}
+          onPaste={clipboard && contextMenu.rowReg ? () => {
+            setContextMenu(null)
+            pasteToTarget(contextMenu.rowReg!)
+          } : undefined}
           onCut={() => {
             setContextMenu(null)
-            // Trigger cut via same logic as Ctrl+X
             window.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', ctrlKey: true }))
-          }}
-          onCopy={() => {
-            setContextMenu(null)
-            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
-          }}
-          onPaste={() => {
-            setContextMenu(null)
-            if (clipboard) {
-              if (!clipboard.targetReg) setPasteTargetOpen(true)
-              else setPasteModalOpen(true)
-            }
           }}
           onAssign={() => { setContextMenu(null); setAssignModalOpen(true) }}
           onUnassign={() => {
@@ -3734,6 +3759,10 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           flightsByReg={flightsByReg}
           acTypeByIcao={acTypeByIcao}
           container={dialogContainer}
+          preselectedReg={(() => {
+            const regs = Array.from(new Set(selectedFlightObjects.map(f => f.aircraftReg || f.assignedReg).filter(Boolean)))
+            return regs.length === 1 ? regs[0]! : null
+          })()}
           onAssigned={(items, registration) => {
             setAssignModalOpen(false)
             setSelectedFlights(new Set())
@@ -3780,33 +3809,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       {/* ── CLIPBOARD PILL ─────────────────────────────────────── */}
       <MovementClipboardPill
         clipboard={clipboard}
-        undo={clipboardUndo}
         onClear={clearClipboard}
-        onUndo={executeClipboardUndo}
       />
-
-      {/* ── PASTE TARGET DIALOG ────────────────────────────────── */}
-      <MovementPasteTargetDialog
-        open={pasteTargetOpen}
-        onClose={() => setPasteTargetOpen(false)}
-        registrations={registrations}
-        onSelect={(reg) => {
-          setClipboardTargetReg(reg)
-          setPasteTargetOpen(false)
-          setPasteModalOpen(true)
-        }}
-      />
-
-      {/* ── PASTE MODAL ────────────────────────────────────────── */}
-      {clipboard && clipboard.targetReg && (
-        <MovementPasteModal
-          open={pasteModalOpen}
-          onClose={() => setPasteModalOpen(false)}
-          clipboard={clipboard}
-          onPaste={executePaste}
-          pasting={pasting}
-        />
-      )}
 
       {/* ── SETTINGS MODAL ──────────────────────────────────── */}
       <MovementSettingsPanel
@@ -3851,12 +3855,12 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 // ─── Schedule Filter Dropdown ────────────────────────────────────────────
 
 const SCHEDULE_FILTER_OPTIONS = [
-  { key: 'published' as const,   label: 'Published',      description: 'Published flights',            color: '#3b82f6', dashed: false },
-  { key: 'draftSsim' as const,   label: 'Draft (SSIM)',   description: 'Imported from SSIM files',     color: '#f59e0b', dashed: true },
-  { key: 'draftManual' as const, label: 'Draft (Manual)', description: 'Created via Schedule Builder', color: '#8b5cf6', dashed: true },
+  { key: 'published' as const,  label: 'Published',        description: 'Live operating schedule',        color: '#3b82f6', dashed: false },
+  { key: 'finalized' as const,  label: 'Finalized Drafts', description: 'Ready for publish review',       color: '#10B981', dashed: true },
+  { key: 'wip' as const,        label: 'Work in Progress', description: 'Drafts still being edited',      color: '#F59E0B', dashed: true },
 ]
 
-type ScheduleFilters = { published: boolean; draftSsim: boolean; draftManual: boolean }
+type ScheduleFilters = { published: boolean; finalized: boolean; wip: boolean }
 
 function ScheduleFilterDropdown({
   filters,
@@ -3887,7 +3891,7 @@ function ScheduleFilterDropdown({
     }
   }, [open])
 
-  const activeCount = [filters.published, filters.draftSsim, filters.draftManual].filter(Boolean).length
+  const activeCount = [filters.published, filters.finalized, filters.wip].filter(Boolean).length
   const pillLabel = activeCount === 3 ? `All (3)` : activeCount === 0 ? 'None' : `${activeCount} of 3`
   const pillColor = activeCount === 3 ? '#16a34a' : activeCount > 0 ? '#3b82f6' : '#ef4444'
 
@@ -3979,6 +3983,10 @@ function FlightTooltip({
   tooltipSettings: MovementSettingsData['tooltip']
 }) {
   const isPublished = flight.status === 'published'
+  const isFin = !isPublished && flight.finalized
+  const isWip = !isPublished && !flight.finalized
+  const statusColor = isPublished ? '#3b82f6' : isFin ? '#10B981' : '#F59E0B'
+  const statusText = isPublished ? 'Published' : isFin ? 'Draft \u2014 Finalized \u2713' : 'Draft \u2014 Work in Progress'
   const dateStr = flight.date.toLocaleDateString('en-GB', {
     day: 'numeric',
     month: 'short',
@@ -4075,10 +4083,10 @@ function FlightTooltip({
               {flight.flightNumber}
             </span>
             <span
-              className="text-[9px] font-medium uppercase tracking-wider"
-              style={{ color: isPublished ? '#16a34a' : '#d97706' }}
+              className="text-[9px] font-medium tracking-wider"
+              style={{ color: statusColor }}
             >
-              {isPublished ? 'Active' : 'Draft'}
+              {statusText}
             </span>
           </div>
         )}
@@ -4162,22 +4170,22 @@ function FlightTooltip({
 // ─── Context Menu ──────────────────────────────────────────────────────
 
 function MovementContextMenu({
-  x, y, selectionCount, hasDbAssigned, hasClipboard,
-  onCut, onCopy, onPaste,
+  x, y, selectionCount, hasDbAssigned, clipboardCount,
+  onPaste, onCut,
   onAssign, onUnassign, onEdit, onDelete,
 }: {
-  x: number; y: number; selectionCount: number; hasDbAssigned: boolean; hasClipboard: boolean
-  onCut: () => void; onCopy: () => void; onPaste: () => void
+  x: number; y: number; selectionCount: number; hasDbAssigned: boolean; clipboardCount: number
+  onPaste?: () => void; onCut: () => void
   onAssign: () => void; onUnassign: () => void; onEdit: () => void; onDelete: () => void
 }) {
   const isSingle = selectionCount === 1
 
   const menuItems: { label: string; shortcut?: string; onClick: () => void; show: boolean; separator?: boolean; destructive?: boolean; disabled?: boolean }[] = [
-    { label: isSingle ? 'Cut Flight' : `Cut ${selectionCount} Flights`, shortcut: 'Ctrl+X', onClick: onCut, show: true },
-    { label: isSingle ? 'Copy Flight' : `Copy ${selectionCount} Flights`, shortcut: 'Ctrl+C', onClick: onCopy, show: true },
-    { label: 'Paste', shortcut: 'Ctrl+V', onClick: onPaste, show: true, disabled: !hasClipboard },
+    { label: `Paste ${clipboardCount} Flight${clipboardCount > 1 ? 's' : ''} here`, shortcut: 'Ctrl+V', onClick: onPaste || (() => {}), show: !!onPaste },
+    { label: '', onClick: () => {}, show: !!onPaste, separator: true },
+    { label: 'Cut', shortcut: 'Ctrl+X', onClick: onCut, show: true },
     { label: '', onClick: () => {}, show: true, separator: true },
-    { label: isSingle ? 'Assign to Aircraft...' : `Assign ${selectionCount} flights to Aircraft...`, onClick: onAssign, show: true },
+    { label: 'Assign Aircraft Registration', shortcut: 'Ctrl+A', onClick: onAssign, show: true },
     { label: 'Unassign Tail', onClick: onUnassign, show: hasDbAssigned },
     { label: '', onClick: () => {}, show: true, separator: true },
     { label: 'Edit Flight', onClick: onEdit, show: isSingle },
@@ -4320,24 +4328,26 @@ interface AssignModalProps {
   acTypeByIcao: Map<string, AircraftType>
   onAssigned: (items: FlightDateItem[], registration: string) => void
   container?: HTMLElement | null
+  preselectedReg?: string | null
 }
 
 function AssignToAircraftModal({
   open, onClose, selectedFlights, registrations,
   aircraftTypes, seatingConfigs, flightsByReg, acTypeByIcao, onAssigned, container,
+  preselectedReg,
 }: AssignModalProps) {
-  const [selectedReg, setSelectedReg] = useState<string | null>(null)
+  const [selectedReg, setSelectedReg] = useState<string | null>(preselectedReg ?? null)
   const [assigning, setAssigning] = useState(false)
   const [warningState, setWarningState] = useState<'none' | 'category' | 'family'>('none')
 
-  // Reset state when opened
+  // Reset state when opened — use preselection if available
   useEffect(() => {
     if (open) {
-      setSelectedReg(null)
+      setSelectedReg(preselectedReg ?? null)
       setAssigning(false)
       setWarningState('none')
     }
-  }, [open])
+  }, [open, preselectedReg])
 
   // Flight AC type info
   const flightIcaoTypes = Array.from(new Set(selectedFlights.map(f => f.aircraftTypeIcao).filter(Boolean))) as string[]
@@ -4466,6 +4476,31 @@ function AssignToAircraftModal({
     onAssigned(items, selectedReg)
   }, [selectedReg, assigning, selectedFlights, registrations, acTypeByIcao, primaryAcType, warningState, onAssigned])
 
+  // Enter key shortcut — quick-assign when preselected
+  useEffect(() => {
+    if (!open || !selectedReg) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !assigning) {
+        e.preventDefault()
+        handleAssign()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [open, selectedReg, assigning, handleAssign])
+
+  // Determine which group contains the preselected reg (for auto-expand)
+  const preselectedGroup = useMemo(() => {
+    if (!preselectedReg) return null
+    if (grouped.sameType.some((r: AircraftWithRelations) => r.registration === preselectedReg)) return 'same-type'
+    if (grouped.sameFamily.some((r: AircraftWithRelations) => r.registration === preselectedReg)) return 'same-family'
+    const otherEntries = Array.from(grouped.other.entries())
+    for (let i = 0; i < otherEntries.length; i++) {
+      if (otherEntries[i][1].some((r: AircraftWithRelations) => r.registration === preselectedReg)) return otherEntries[i][0]
+    }
+    return null
+  }, [preselectedReg, grouped])
+
   // ── Build flight summary line ──
   const flightNumbers = Array.from(new Set(selectedFlights.map(f => f.flightNumber)))
   const flightSummary = selectedFlights.length === 1
@@ -4520,9 +4555,9 @@ function AssignToAircraftModal({
 
         {/* Aircraft groups with dropdowns */}
         <div className="px-4 py-3 max-h-[300px] overflow-y-auto custom-scrollbar space-y-3">
-          {/* Same type group — expanded by default */}
+          {/* Same type group — expanded by default, or when preselection is here */}
           {grouped.sameType.length > 0 && (
-            <details open>
+            <details open={!preselectedGroup || preselectedGroup === 'same-type'}>
               <summary className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 cursor-pointer select-none list-none flex items-center gap-1.5">
                 <ChevronDown className="h-3 w-3 transition-transform [details:not([open])>&]:-rotate-90" />
                 {primaryIcao} — Same type ({grouped.sameType.length})
@@ -4531,9 +4566,9 @@ function AssignToAircraftModal({
             </details>
           )}
 
-          {/* Same family group — collapsed by default */}
+          {/* Same family group — auto-expand if preselection is here */}
           {grouped.sameFamily.length > 0 && (
-            <details>
+            <details open={preselectedGroup === 'same-family' || undefined}>
               <summary className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 cursor-pointer select-none list-none flex items-center gap-1.5">
                 <ChevronDown className="h-3 w-3 transition-transform [details:not([open])>&]:-rotate-90" />
                 {primaryAcType?.family || 'Family'} — Same family ({grouped.sameFamily.length})
@@ -4542,9 +4577,9 @@ function AssignToAircraftModal({
             </details>
           )}
 
-          {/* Other families — collapsed by default */}
+          {/* Other families — auto-expand if preselection is here */}
           {Array.from(grouped.other.entries()).map(([family, regs]) => (
-            <details key={family}>
+            <details key={family} open={preselectedGroup === family || undefined}>
               <summary className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 cursor-pointer select-none list-none flex items-center gap-1.5">
                 <ChevronDown className="h-3 w-3 transition-transform [details:not([open])>&]:-rotate-90" />
                 {family} ({regs.length})
@@ -4587,20 +4622,27 @@ function AssignToAircraftModal({
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 text-[11px] font-medium rounded-md border border-border hover:bg-muted transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleAssign}
-            disabled={!selectedReg || assigning}
-            className="px-3 py-1.5 text-[11px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            {assigning ? 'Assigning...' : warningState !== 'none' ? 'Proceed with Assign' : selectedReg ? `Assign to ${selectedReg}` : 'Select a registration'}
-          </button>
+        <div className="px-4 py-3 border-t space-y-1.5">
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 text-[11px] font-medium rounded-md border border-border hover:bg-muted transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleAssign}
+              disabled={!selectedReg || assigning}
+              className="px-3 py-1.5 text-[11px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {assigning ? 'Assigning...' : warningState !== 'none' ? 'Proceed with Assign' : selectedReg ? `Assign to ${selectedReg}` : 'Select a registration'}
+            </button>
+          </div>
+          {selectedReg && !assigning && warningState === 'none' && (
+            <div className="text-[9px] text-muted-foreground/60 text-right">
+              Press Enter to assign to {selectedReg}
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
-import { RotateCcw, Check, Loader2, Settings2, Eye, Palette, Timer, BarChart3, MessageSquare, ChevronDown } from 'lucide-react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { RotateCcw, Check, Loader2, Settings2, Eye, Palette, Timer, BarChart3, MessageSquare, ChevronDown, GripVertical } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { AircraftType, Airport, FlightServiceType } from '@/types/database'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
@@ -61,6 +61,7 @@ interface MovementSettingsPanelProps {
   onUpdateTatOverride: (icaoType: string, overrides: { dd?: number; di?: number; id?: number; ii?: number }) => void
   onResetTatOverride: (icaoType: string) => void
   onResetAll: () => void
+  container?: HTMLElement | null
 }
 
 // ─── Component ────────────────────────────────────────────────────────────
@@ -70,7 +71,7 @@ export function MovementSettingsPanel({
   onUpdateDisplay, onUpdateColorAssignment, onUpdateColorAcType, onUpdateColorServiceType,
   onUpdateTooltip, onUpdateSettings,
   onUpdateUtilTarget, onResetUtilTarget,
-  onUpdateTatOverride, onResetTatOverride, onResetAll,
+  onUpdateTatOverride, onResetTatOverride, onResetAll, container,
 }: MovementSettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
@@ -137,6 +138,7 @@ export function MovementSettingsPanel({
     <>
       <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
         <DialogContent
+          container={container}
           className="max-w-[640px] max-h-[80vh] p-0 gap-0 overflow-hidden"
           style={{
             background: 'var(--glass-bg-heavy)',
@@ -402,6 +404,12 @@ export function MovementSettingsPanel({
                       />
                     </div>
                   </section>
+
+                  <AcTypeSortSection
+                    activeTypes={activeTypes}
+                    acTypeOrder={settings.acTypeOrder}
+                    onUpdateSettings={onUpdateSettings}
+                  />
                 </div>
               )}
 
@@ -419,7 +427,6 @@ export function MovementSettingsPanel({
                       className="w-full text-[11px] px-2.5 py-1.5 rounded-md border border-border bg-transparent"
                     >
                       <option value="assignment">By Assignment Status</option>
-                      <option value="ac_type">By Aircraft Type</option>
                       <option value="service_type">By Service Type</option>
                       <option value="destination_type">By Destination Type</option>
                     </select>
@@ -791,7 +798,7 @@ export function MovementSettingsPanel({
 
       {/* Reset Confirmation Dialog */}
       <Dialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
-        <DialogContent className="sm:max-w-[360px]">
+        <DialogContent container={container} className="sm:max-w-[360px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               <RotateCcw className="h-4 w-4" />
@@ -957,6 +964,86 @@ function BarLabelPreview({ barLabels }: { barLabels: MovementSettingsData['barLa
     >
       <span className="truncate">{text}</span>
     </div>
+  )
+}
+
+function AcTypeSortSection({ activeTypes, acTypeOrder, onUpdateSettings }: {
+  activeTypes: AircraftType[]
+  acTypeOrder: string[]
+  onUpdateSettings: (partial: Partial<MovementSettingsData>) => void
+}) {
+  const sortedTypes = useMemo(() => {
+    if (acTypeOrder.length > 0) {
+      const orderMap = new Map(acTypeOrder.map((icao, i) => [icao, i]))
+      const ordered = [...activeTypes].sort((a, b) => {
+        const ai = orderMap.get(a.icao_type) ?? 9999
+        const bi = orderMap.get(b.icao_type) ?? 9999
+        return ai - bi || a.icao_type.localeCompare(b.icao_type)
+      })
+      return ordered
+    }
+    return [...activeTypes].sort((a, b) => a.icao_type.localeCompare(b.icao_type))
+  }, [activeTypes, acTypeOrder])
+
+  const dragItem = useRef<number | null>(null)
+  const dragOverItem = useRef<number | null>(null)
+
+  const handleDragStart = useCallback((idx: number) => {
+    dragItem.current = idx
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent, idx: number) => {
+    e.preventDefault()
+    dragOverItem.current = idx
+  }, [])
+
+  const handleDrop = useCallback(() => {
+    if (dragItem.current === null || dragOverItem.current === null) return
+    if (dragItem.current === dragOverItem.current) return
+    const items = sortedTypes.map(t => t.icao_type)
+    const [removed] = items.splice(dragItem.current, 1)
+    items.splice(dragOverItem.current, 0, removed)
+    dragItem.current = null
+    dragOverItem.current = null
+    onUpdateSettings({ acTypeOrder: items })
+  }, [sortedTypes, onUpdateSettings])
+
+  if (activeTypes.length === 0) return null
+
+  return (
+    <section>
+      <h3 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+        Aircraft Type Sorting
+      </h3>
+      <p className="text-[9px] text-muted-foreground/60 mb-2">
+        Drag to reorder AC type groups in the fleet panel.
+      </p>
+      <div className="space-y-0.5">
+        {sortedTypes.map((t, idx) => (
+          <div
+            key={t.icao_type}
+            draggable
+            onDragStart={() => handleDragStart(idx)}
+            onDragOver={(e) => handleDragOver(e, idx)}
+            onDrop={handleDrop}
+            className="flex items-center gap-2 px-1.5 py-1 rounded-md hover:bg-muted/30 cursor-grab active:cursor-grabbing transition-colors"
+          >
+            <GripVertical className="h-3 w-3 text-muted-foreground/40 shrink-0" />
+            <span className="text-[10px] font-semibold w-[50px]">{t.icao_type}</span>
+            <span className="text-[9px] text-muted-foreground truncate">{t.name}</span>
+          </div>
+        ))}
+      </div>
+      {acTypeOrder.length > 0 && (
+        <button
+          onClick={() => onUpdateSettings({ acTypeOrder: [] })}
+          className="mt-2 flex items-center gap-1 text-[9px] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <RotateCcw className="h-2.5 w-2.5" />
+          Reset to alphabetical
+        </button>
+      )}
+    </section>
   )
 }
 

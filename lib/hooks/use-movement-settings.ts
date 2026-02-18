@@ -47,13 +47,15 @@ function mergeWithDefaults(partial: Record<string, unknown>): MovementSettingsDa
 
     display: { ...d.display, ...(partial.display as object | undefined) },
 
-    colorMode: (partial.colorMode as MovementSettingsData['colorMode'] | undefined) ?? d.colorMode,
+    colorMode: (partial.colorMode === 'ac_type' ? 'assignment' : partial.colorMode as MovementSettingsData['colorMode'] | undefined) ?? d.colorMode,
     colorAssignment,
     colorAcType: (partial.colorAcType as Record<string, string> | undefined) ?? { ...d.colorAcType },
     colorServiceType: (partial.colorServiceType as Record<string, string> | undefined) ?? { ...d.colorServiceType },
     colorDestType: { ...d.colorDestType, ...(partial.colorDestType as object | undefined) },
 
     tooltip: { ...d.tooltip, ...(partial.tooltip as object | undefined) },
+
+    acTypeOrder: Array.isArray(partial.acTypeOrder) ? partial.acTypeOrder as string[] : [],
 
     tatOverrides: (partial.tatOverrides as MovementSettingsData['tatOverrides'] | undefined) ?? { ...d.tatOverrides },
     utilizationTargets: (partial.utilizationTargets as Record<string, number> | undefined) ?? { ...d.utilizationTargets },

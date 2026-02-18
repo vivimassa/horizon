@@ -40,6 +40,7 @@ export interface AircraftRoute {
   period_end: string | null
   duration_days: number
   status: string
+  finalized: boolean
   notes: string | null
   created_at: string
   updated_at: string
@@ -283,11 +284,6 @@ export interface SaveRouteInput {
 export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; error?: string }> {
   if (input.legs.length === 0) return { error: 'Cannot save route with no legs' }
 
-  // Guard: cannot save a published route
-  if (input.id && input.status === 'published') {
-    return { error: 'Cannot edit a published route. Unpublish it first.' }
-  }
-
   const operatorId = await getCurrentOperatorId()
   const client = await pool.connect()
 
@@ -310,6 +306,7 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
           duration_days = $9,
           status = $10,
           notes = $11,
+          finalized = FALSE,
           updated_at = NOW()
         WHERE id = $1 AND operator_id = $12
       `, [
@@ -355,6 +352,7 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
             period_start = $10::date, period_end = $11::date,
             aircraft_type_icao = $12, aircraft_type_id = $13,
             service_type = $14, arrival_day_offset = $15,
+            finalized = FALSE,
             updated_at = NOW()
           WHERE id = $1 AND operator_id = $16
         `, [
@@ -592,6 +590,84 @@ export async function markRouteReady(routeId: string, ready: boolean): Promise<{
     return {}
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Finalize or un-finalize a route and its linked flights.
+ * Sets `finalized` on both aircraft_routes and scheduled_flights.
+ */
+export async function finalizeRoute(routeId: string, finalize: boolean): Promise<{ error?: string }> {
+  const operatorId = await getCurrentOperatorId()
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    await client.query(
+      'UPDATE aircraft_routes SET finalized = $1, updated_at = NOW() WHERE id = $2 AND operator_id = $3',
+      [finalize, routeId, operatorId]
+    )
+
+    await client.query(`
+      UPDATE scheduled_flights SET finalized = $1, updated_at = NOW()
+      WHERE id IN (
+        SELECT flight_id FROM aircraft_route_legs
+        WHERE route_id = $2 AND flight_id IS NOT NULL
+      )
+    `, [finalize, routeId])
+
+    await client.query('COMMIT')
+    return {}
+  } catch (err) {
+    await client.query('ROLLBACK')
+    return { error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * Bulk-finalize all draft, non-finalized routes in a scenario.
+ */
+export async function bulkFinalizeRoutes(scenarioId: string): Promise<{ finalizedCount?: number; error?: string }> {
+  const operatorId = await getCurrentOperatorId()
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    const res = await client.query(
+      `SELECT id FROM aircraft_routes WHERE scenario_id = $1 AND operator_id = $2 AND status = 'draft' AND (finalized IS NULL OR finalized = FALSE)`,
+      [scenarioId, operatorId]
+    )
+    const routeIds = res.rows.map((r: { id: string }) => r.id)
+
+    if (routeIds.length === 0) {
+      await client.query('ROLLBACK')
+      return { finalizedCount: 0 }
+    }
+
+    await client.query(
+      `UPDATE aircraft_routes SET finalized = TRUE, updated_at = NOW() WHERE id = ANY($1)`,
+      [routeIds]
+    )
+
+    await client.query(`
+      UPDATE scheduled_flights SET finalized = TRUE, updated_at = NOW()
+      WHERE id IN (
+        SELECT flight_id FROM aircraft_route_legs
+        WHERE route_id = ANY($1) AND flight_id IS NOT NULL
+      )
+    `, [routeIds])
+
+    await client.query('COMMIT')
+    return { finalizedCount: routeIds.length }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    return { error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    client.release()
   }
 }
 

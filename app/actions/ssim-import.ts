@@ -321,7 +321,7 @@ export async function importFlightBatch(
 
   for (let j = 0; j < flights.length; j++) {
     const f = flights[j]
-    const offset = j * 23
+    const offset = j * 24
     const acResolved = resolveAircraftTypeId(f.aircraftType)
     const stdUtc = toUtcTime(f.stdLocal, f.depUtcOffset)
     const staUtc = toUtcTime(f.staLocal, f.arrUtcOffset)
@@ -331,7 +331,7 @@ export async function importFlightBatch(
     const staUtcTime = staUtc ? staUtc.slice(0, 2) + ':' + staUtc.slice(2, 4) : null
 
     placeholders.push(
-      `($${offset + 1},$${offset + 2},$${offset + 3},$${offset + 4},$${offset + 5},$${offset + 6},$${offset + 7},$${offset + 8},$${offset + 9},$${offset + 10},$${offset + 11},$${offset + 12},$${offset + 13},$${offset + 14},$${offset + 15},$${offset + 16},$${offset + 17},$${offset + 18},$${offset + 19},$${offset + 20},$${offset + 21},$${offset + 22},$${offset + 23})`
+      `($${offset + 1},$${offset + 2},$${offset + 3},$${offset + 4},$${offset + 5},$${offset + 6},$${offset + 7},$${offset + 8},$${offset + 9},$${offset + 10},$${offset + 11},$${offset + 12},$${offset + 13},$${offset + 14},$${offset + 15},$${offset + 16},$${offset + 17},$${offset + 18},$${offset + 19},$${offset + 20},$${offset + 21},$${offset + 22},$${offset + 23},$${offset + 24})`
     )
     values.push(
       operatorId, seasonId, f.airlineCode, f.flightNumber,
@@ -340,7 +340,7 @@ export async function importFlightBatch(
       f.depStation, f.arrStation, stdTime, staTime,
       f.depUtcOffset, f.arrUtcOffset, stdUtcTime, staUtcTime,
       f.blockMinutes, acResolved.icao, acResolved.id,
-      JSON.stringify(f.seatConfig), 'ssim',
+      JSON.stringify(f.seatConfig), 'ssim', 'draft',
     )
   }
 
@@ -363,7 +363,7 @@ export async function importFlightBatch(
           dep_station, arr_station, std_local, sta_local,
           dep_utc_offset, arr_utc_offset, std_utc, sta_utc,
           block_minutes, aircraft_type_icao, aircraft_type_id,
-          seat_config, source
+          seat_config, source, status
         ) VALUES ${placeholders.join(',')}`,
         values
       )
@@ -373,8 +373,8 @@ export async function importFlightBatch(
       console.error(`SSIM Import: ${label}: BATCH FAILED:`, batchErr instanceof Error ? batchErr.message : String(batchErr))
       // Fallback: one-by-one to identify bad records
       for (let j = 0; j < flights.length; j++) {
-        const singleValues = values.slice(j * 23, (j + 1) * 23)
-        const singlePh = Array.from({ length: 23 }, (_, k) => `$${k + 1}`).join(',')
+        const singleValues = values.slice(j * 24, (j + 1) * 24)
+        const singlePh = Array.from({ length: 24 }, (_, k) => `$${k + 1}`).join(',')
         try {
           await pool.query(
             `INSERT INTO scheduled_flights (
@@ -384,7 +384,7 @@ export async function importFlightBatch(
               dep_station, arr_station, std_local, sta_local,
               dep_utc_offset, arr_utc_offset, std_utc, sta_utc,
               block_minutes, aircraft_type_icao, aircraft_type_id,
-              seat_config, source
+              seat_config, source, status
             ) VALUES (${singlePh})`,
             singleValues
           )

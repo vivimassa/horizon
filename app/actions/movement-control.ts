@@ -25,6 +25,8 @@ export interface MovementFlight {
   /** Departure day offset within route (0 = first day, 1 = next day, etc.) */
   dayOffset: number
   serviceType: string
+  source: string
+  finalized: boolean
 }
 
 export async function getMovementFlights(
@@ -41,7 +43,7 @@ export async function getMovementFlights(
        to_char(sf.sta_local, 'HH24:MI') AS sta_local,
        COALESCE(sf.block_minutes, 0) AS block_minutes,
        sf.days_of_operation,
-       sf.status,
+       COALESCE(sf.status, 'draft') AS status,
        at.icao_type AS aircraft_type_icao,
        to_char(sf.period_start, 'YYYY-MM-DD') AS period_start,
        to_char(sf.period_end, 'YYYY-MM-DD') AS period_end,
@@ -51,7 +53,9 @@ export async function getMovementFlights(
        cp.route_type,
        arl.route_id,
        COALESCE(arl.day_offset, 0) AS day_offset,
-       COALESCE(sf.service_type, 'J') AS service_type
+       COALESCE(sf.service_type, 'J') AS service_type,
+       COALESCE(sf.source, 'manual') AS source,
+       COALESCE(sf.finalized, FALSE) AS finalized
      FROM scheduled_flights sf
      LEFT JOIN aircraft_types at ON sf.aircraft_type_id = at.id
      LEFT JOIN city_pairs cp ON cp.departure_airport = sf.dep_station
@@ -63,7 +67,7 @@ export async function getMovementFlights(
        sf.period_start IS NOT NULL AND sf.period_end IS NOT NULL
        AND sf.period_start <= $2::date AND sf.period_end >= $1::date
      )
-     AND sf.status IN ('draft', 'published')
+     AND COALESCE(sf.status, 'draft') IN ('draft', 'ready', 'published')
      ORDER BY sf.flight_number`,
     [rangeStart, rangeEnd]
   )
@@ -88,6 +92,8 @@ export async function getMovementFlights(
     aircraftReg: (r.aircraft_reg as string) || null,
     dayOffset: Number(r.day_offset ?? 0),
     serviceType: (r.service_type as string) || 'J',
+    source: (r.source as string) || 'manual',
+    finalized: Boolean(r.finalized),
   }))
 }
 

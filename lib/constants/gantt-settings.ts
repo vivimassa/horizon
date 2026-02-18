@@ -37,6 +37,9 @@ export interface GanttSettingsData {
     tat: boolean
   }
 
+  // AC type display order (empty = alphabetical)
+  acTypeOrder: string[]
+
   // Existing
   tatOverrides: Record<string, { dd?: number; di?: number; id?: number; ii?: number }>
   utilizationTargets: Record<string, number>
@@ -80,6 +83,8 @@ export const DEFAULT_GANTT_SETTINGS: GanttSettingsData = {
     cabin: true,
     tat: true,
   },
+
+  acTypeOrder: [],
 
   tatOverrides: {},
   utilizationTargets: {},

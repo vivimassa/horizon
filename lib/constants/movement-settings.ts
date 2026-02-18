@@ -37,6 +37,9 @@ export interface MovementSettingsData {
     tat: boolean
   }
 
+  // AC type display order (empty = alphabetical)
+  acTypeOrder: string[]
+
   // Existing
   tatOverrides: Record<string, { dd?: number; di?: number; id?: number; ii?: number }>
   utilizationTargets: Record<string, number>
@@ -80,6 +83,8 @@ export const DEFAULT_MOVEMENT_SETTINGS: MovementSettingsData = {
     cabin: true,
     tat: true,
   },
+
+  acTypeOrder: [],
 
   tatOverrides: {},
   utilizationTargets: {},

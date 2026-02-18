@@ -56,6 +56,7 @@ export interface MiniBuilderProps {
   route: MovementRouteData | null
   loading: boolean
   onSaved: () => void
+  container?: HTMLElement | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────
@@ -135,7 +136,7 @@ const DOW_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 
 // ─── Component ────────────────────────────────────────────────
 
-export function MiniBuilderModal({ open, onClose, flight, route, loading, onSaved }: MiniBuilderProps) {
+export function MiniBuilderModal({ open, onClose, flight, route, loading, onSaved, container }: MiniBuilderProps) {
   const [legs, setLegs] = useState<MiniLeg[]>([])
   const [dow, setDow] = useState('1234567')
   const [periodStart, setPeriodStart] = useState('')
@@ -456,6 +457,7 @@ export function MiniBuilderModal({ open, onClose, flight, route, loading, onSave
       <DialogContent
         className="sm:max-w-[680px] p-0 gap-0 overflow-hidden"
         hideClose
+        container={container}
         style={{
           background: 'var(--gantt-tooltip-bg, hsl(var(--card)))',
           backdropFilter: 'blur(20px) saturate(180%)',
