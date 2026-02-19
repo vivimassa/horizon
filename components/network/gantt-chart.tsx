@@ -2258,6 +2258,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     const totalBlock = dayFlights.reduce((s, f) => s + f.blockMinutes, 0)
     const uniqueRegs = new Set(dayFlights.map(f => f.assignedReg || f.aircraftReg).filter(Boolean))
 
+    // Average daily AC used: count unique regs per day, then average
+    const regsPerDay = days.map(day => {
+      const df = dayFlights.filter(f => formatISO(f.date) === day)
+      return new Set(df.map(f => f.assignedReg || f.aircraftReg).filter(Boolean)).size
+    })
+    const avgDailyAcUsed = numDays > 0 ? Math.round(regsPerDay.reduce((s, c) => s + c, 0) / numDays * 10) / 10 : 0
+
     // Total AC in fleet (from registrations, active/operational only)
     const totalAcInFleet = registrations.filter(r => r.status === 'active' || r.status === 'operational').length
 
@@ -2341,6 +2348,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       avgDailyFlights: numDays > 1 ? Math.round(totalFlights / numDays * 10) / 10 : null,
       avgDailyBlockHours: numDays > 1 ? Math.round(totalBlock / numDays / 6) / 10 : null,
       aircraftInService: uniqueRegs.size,
+      avgDailyAcUsed,
       totalAcInFleet,
       byType: Array.from(byType.entries()).map(([icao, d]) => ({
         icao,
@@ -5464,10 +5472,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                     </div>
                     <div className="text-center">
                       <div className="leading-tight">
-                        <span className="text-[22px] font-medium text-primary">{dayPanelData.aircraftInService}</span>
+                        <span className="text-[22px] font-medium text-primary">{dayPanelData.numDays > 1 ? dayPanelData.avgDailyAcUsed : dayPanelData.aircraftInService}</span>
                         <span className="text-[13px] font-medium text-muted-foreground">/{dayPanelData.totalAcInFleet}</span>
                       </div>
-                      <div className="text-[9px] font-medium uppercase tracking-[0.5px] text-[#9CA3AF] mt-0.5">AC used</div>
+                      <div className="text-[9px] font-medium uppercase tracking-[0.5px] text-[#9CA3AF] mt-0.5">{dayPanelData.numDays > 1 ? 'Avg AC used' : 'AC used'}</div>
                     </div>
                   </div>
                   {dayPanelData.avgDailyFlights !== null && (
@@ -5615,7 +5623,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   return (
                     <div className="px-4 pt-3.5 pb-4 border-t border-[#F3F4F6] dark:border-[#1F2937]">
                       <div className="text-[12px] font-bold mb-2.5">Overnight Stations</div>
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-start gap-4">
                         {/* Donut chart */}
                         <div className="shrink-0">
                           <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
