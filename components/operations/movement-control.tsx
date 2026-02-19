@@ -2989,7 +2989,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         </div>
         {loadingPhase !== 'idle' && (
           <div style={{
-            position: 'fixed', top: 20, right: 20, zIndex: 99998,
+            position: 'fixed', top: 56, right: 20, zIndex: 99998,
             animation: 'gantt-toast-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
           }}>
             <div className="rounded-xl px-4 py-3 flex items-center gap-3 min-w-[260px]" style={{
@@ -3075,7 +3075,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       {/* ── LOADING TOAST ──────────────────────────────────────────── */}
       {loadingPhase !== 'idle' && (
         <div style={{
-          position: 'fixed', top: 20, right: 20, zIndex: 99998,
+          position: 'fixed', top: 56, right: 20, zIndex: 99998,
           animation: 'gantt-toast-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div className="rounded-xl px-4 py-3 flex items-center gap-3 min-w-[260px]" style={{
