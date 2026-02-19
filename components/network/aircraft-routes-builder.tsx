@@ -132,7 +132,7 @@ function DowCirclesInteractive({ value, onChange, disabled }: { value: string; o
           className={cn(
             'w-[22px] h-[22px] rounded-full text-[10px] font-semibold leading-none flex items-center justify-center transition-colors select-none',
             isDayActive(value, i)
-              ? 'bg-[#991b1b] text-white hover:bg-[#7f1d1d]'
+              ? 'bg-primary text-primary-foreground hover:bg-primary/80'
               : 'bg-transparent text-[#d1d5db] dark:text-[#4b5563] border-[1.5px] border-[#e5e7eb] dark:border-[#374151] hover:border-[#d1d5db] hover:text-[#9ca3af]',
             disabled && 'opacity-50 cursor-not-allowed'
           )}
@@ -1612,7 +1612,7 @@ export function AircraftRoutesBuilder({
     clone.style.backdropFilter = 'blur(20px)'
     clone.style.borderRadius = '8px'
     clone.style.boxShadow = '0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)'
-    clone.style.border = '1px solid rgba(153, 27, 27, 0.3)'
+    clone.style.border = '1px solid hsl(var(--primary) / 0.3)'
     clone.style.zIndex = '9999'
     clone.style.display = 'table-row'
     clone.style.opacity = '0.95'
@@ -2028,7 +2028,7 @@ export function AircraftRoutesBuilder({
               <div className="space-y-0.5">
                 <p className="text-[13px] text-[#6b7280] italic leading-tight">Currently editing {selectedScenario.scenario_name}</p>
                 <div className="flex items-center justify-between">
-                  <button onClick={() => setShowScenarioList(true)} className="text-sm font-bold hover:text-[#991b1b] transition-colors">{selectedScenario.scenario_number}</button>
+                  <button onClick={() => setShowScenarioList(true)} className="text-sm font-bold hover:text-primary transition-colors">{selectedScenario.scenario_number}</button>
                   <div className="flex items-center gap-1">
                     <button onClick={openCreateScenarioDialog} className="h-6 w-6 flex items-center justify-center rounded-md hover:bg-black/5 dark:hover:bg-white/10 transition-colors" title="Create scenario">
                       <Plus className="h-3.5 w-3.5" />
@@ -2062,9 +2062,9 @@ export function AircraftRoutesBuilder({
                               className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-left">
                               <div className={cn(
                                 'w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0',
-                                checked ? 'bg-[#991b1b] border-[#991b1b]' : 'border-black/20 dark:border-white/20'
+                                checked ? 'bg-primary border-primary' : 'border-black/20 dark:border-white/20'
                               )}>
-                                {checked && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                {checked && <svg className="w-2.5 h-2.5 text-primary-foreground" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                               </div>
                               <span className="font-mono font-semibold">{icao}</span>
                               <span className="text-muted-foreground truncate">{name}</span>
@@ -2085,7 +2085,7 @@ export function AircraftRoutesBuilder({
           ) : (
             <div className="flex items-center gap-2">
               <button onClick={openCreateScenarioDialog}
-                className="flex-1 h-8 flex items-center justify-center gap-1.5 rounded-lg bg-[#991b1b] text-white text-xs font-medium hover:bg-[#7f1d1d] transition-colors">
+                className="flex-1 h-8 flex items-center justify-center gap-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/80 transition-colors">
                 <Plus className="h-3.5 w-3.5" /> Create Scenario
               </button>
               <button onClick={() => setShowScenarioList(true)}
@@ -2235,7 +2235,7 @@ export function AircraftRoutesBuilder({
                               acTypeInputRef.current?.blur()
                             }}
                             className={cn('w-full text-left px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10 transition-colors',
-                              form.aircraftTypeId === t.id && 'bg-[#991b1b]/10 font-semibold')}>
+                              form.aircraftTypeId === t.id && 'bg-primary/10 font-semibold')}>
                             <span className="font-mono font-semibold">{t.icao_type}</span>
                             <span className="text-muted-foreground ml-1.5">{t.name}</span>
                           </button>
@@ -2383,7 +2383,7 @@ export function AircraftRoutesBuilder({
                   <thead>
                     {(() => {
                       const thBase = 'py-1.5 text-center border border-black/[0.08] dark:border-white/[0.08]'
-                      const hlStyle = (col: number): React.CSSProperties | undefined => highlightedCol === col ? { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' } : undefined
+                      const hlStyle = (col: number): React.CSSProperties | undefined => highlightedCol === col ? { outline: '2px solid hsl(var(--primary))', outlineOffset: '-2px', background: 'hsl(var(--primary) / 0.05)' } : undefined
                       return (
                         <tr className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-[#f8f9fa] dark:bg-white/[0.03] sticky top-0 z-10">
                           <th className={thBase} style={{ width: '4%' }}>#</th>
@@ -2499,8 +2499,8 @@ export function AircraftRoutesBuilder({
                   className={cn(
                     'h-8 px-4 flex items-center gap-1.5 rounded-lg text-sm font-medium transition-colors',
                     isDirty && !saving && !hasRedErrors && legs.length > 0
-                      ? 'bg-[#991b1b] text-white hover:bg-[#7f1d1d] cursor-pointer'
-                      : 'bg-[#991b1b]/50 text-white/70 cursor-not-allowed'
+                      ? 'bg-primary text-primary-foreground hover:bg-primary/80 cursor-pointer'
+                      : 'bg-primary/50 text-primary-foreground/70 cursor-not-allowed'
                   )}>
                   {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                   {saving ? 'Saving...' : 'Save Route'}
@@ -2560,7 +2560,7 @@ export function AircraftRoutesBuilder({
                 <div className="relative">
                   <input type="text" maxLength={20} placeholder="e.g. W25 Draft"
                     value={newScenario.name} onChange={e => setNewScenario(p => ({ ...p, name: e.target.value }))}
-                    className="w-full h-9 px-3 rounded-lg border border-black/[0.08] text-sm focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                    className="w-full h-9 px-3 rounded-lg border border-black/[0.08] text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#9ca3af] tabular-nums">{newScenario.name.length}/20</span>
                 </div>
               </div>
@@ -2570,11 +2570,11 @@ export function AircraftRoutesBuilder({
                 <div className="flex items-center gap-2">
                   <input type="text" placeholder="DD/MM/YYYY" maxLength={10} value={newScenario.from}
                     onChange={e => setNewScenario(p => ({ ...p, from: formatDateInput(e.target.value), season: '' }))}
-                    className="flex-1 h-9 px-3 rounded-lg border border-black/[0.08] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                    className="flex-1 h-9 px-3 rounded-lg border border-black/[0.08] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" />
                   <span className="text-[#9ca3af] text-sm">—</span>
                   <input type="text" placeholder="DD/MM/YYYY" maxLength={10} value={newScenario.to}
                     onChange={e => setNewScenario(p => ({ ...p, to: formatDateInput(e.target.value), season: '' }))}
-                    className="flex-1 h-9 px-3 rounded-lg border border-black/[0.08] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                    className="flex-1 h-9 px-3 rounded-lg border border-black/[0.08] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" />
                   <input type="text" placeholder="W25" maxLength={3} value={newScenario.season}
                     onChange={e => {
                       const val = e.target.value.toUpperCase()
@@ -2584,7 +2584,7 @@ export function AircraftRoutesBuilder({
                         setNewScenario(p => ({ ...p, season: val, from: fmtDateDisplay(parsed.start), to: fmtDateDisplay(parsed.end) }))
                       }
                     }}
-                    className="w-[60px] h-9 px-2 rounded-lg border border-black/[0.08] text-sm font-mono text-center focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                    className="w-[60px] h-9 px-2 rounded-lg border border-black/[0.08] text-sm font-mono text-center focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" />
                 </div>
               </div>
               {/* Description */}
@@ -2593,7 +2593,7 @@ export function AircraftRoutesBuilder({
                 <div className="relative">
                   <input type="text" maxLength={100} placeholder="Brief description..."
                     value={newScenario.description} onChange={e => setNewScenario(p => ({ ...p, description: e.target.value }))}
-                    className="w-full h-9 px-3 rounded-lg border border-black/[0.08] text-sm focus:outline-none focus:ring-2 focus:ring-[#991b1b]/30 focus:border-[#991b1b]" />
+                    className="w-full h-9 px-3 rounded-lg border border-black/[0.08] text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#9ca3af] tabular-nums">{newScenario.description.length}/100</span>
                 </div>
               </div>
@@ -2614,7 +2614,7 @@ export function AircraftRoutesBuilder({
                 Cancel
               </button>
               <button onClick={handleCreateScenario} disabled={scenarioLoading}
-                className="h-9 px-5 rounded-lg bg-[#991b1b] text-white text-sm font-medium hover:bg-[#7f1d1d] transition-colors disabled:opacity-50">
+                className="h-9 px-5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/80 transition-colors disabled:opacity-50">
                 {scenarioLoading ? 'Creating...' : 'Create Scenario'}
               </button>
             </div>
@@ -2629,7 +2629,7 @@ export function AircraftRoutesBuilder({
             <div className="flex items-center justify-between mb-4">
               <DialogTitle className="text-lg font-semibold">Scenarios</DialogTitle>
               <button onClick={() => { setShowScenarioList(false); openCreateScenarioDialog() }}
-                className="h-7 px-3 flex items-center gap-1.5 rounded-lg bg-[#991b1b] text-white text-xs font-medium hover:bg-[#7f1d1d] transition-colors">
+                className="h-7 px-3 flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/80 transition-colors">
                 <Plus className="h-3 w-3" /> Create New
               </button>
             </div>
@@ -2652,7 +2652,7 @@ export function AircraftRoutesBuilder({
                       onClick={() => { selectScenario(s); setShowScenarioList(false) }}
                       className={cn(
                         'cursor-pointer border-t border-black/[0.04] hover:bg-[#f3f4f6] transition-colors group',
-                        selectedScenario?.id === s.id && 'bg-[#fef2f2]'
+                        selectedScenario?.id === s.id && 'bg-primary/5'
                       )}>
                       <td className="px-3 py-2 font-mono font-semibold text-xs">{s.scenario_number}</td>
                       <td className="px-3 py-2 text-xs">{s.scenario_name}</td>
@@ -2919,13 +2919,13 @@ function LegRow({
   // Returns outline style for a <td> based on selection/editing/highlight state
   function cellOutlineStyle(colIdx: number, field?: string): React.CSSProperties | undefined {
     if (field && isEditing(field)) {
-      return { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fff' }
+      return { outline: '2px solid hsl(var(--primary))', outlineOffset: '-2px', background: '#fff' }
     }
     if (isCellSelected(colIdx)) {
-      return { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' }
+      return { outline: '2px solid hsl(var(--primary))', outlineOffset: '-2px', background: 'hsl(var(--primary) / 0.05)' }
     }
     if (highlightedCol === colIdx) {
-      return { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' }
+      return { outline: '2px solid hsl(var(--primary))', outlineOffset: '-2px', background: 'hsl(var(--primary) / 0.05)' }
     }
     return undefined
   }
@@ -3021,8 +3021,8 @@ function LegRow({
       data-draggable-row
       className={cn('group hover:bg-blue-50/50 dark:hover:bg-white/[0.02] transition-colors h-[36px] relative', readOnly && 'cursor-default')}
       style={{
-        ...(isRowSelected ? { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' } : {}),
-        ...(dropAbove ? { boxShadow: 'inset 0 2px 0 0 #991b1b' } : dropBelow ? { boxShadow: 'inset 0 -2px 0 0 #991b1b' } : {}),
+        ...(isRowSelected ? { outline: '2px solid hsl(var(--primary))', outlineOffset: '-2px', background: 'hsl(var(--primary) / 0.05)' } : {}),
+        ...(dropAbove ? { boxShadow: 'inset 0 2px 0 0 hsl(var(--primary))' } : dropBelow ? { boxShadow: 'inset 0 -2px 0 0 hsl(var(--primary))' } : {}),
       }}
       draggable={!readOnly} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDragOver} onDrop={onDrop}
     >
@@ -3253,7 +3253,7 @@ function GridEntryRow({
   const bdr = 'border border-black/[0.08] dark:border-white/[0.08]'
   return (
     <>
-      <tr className="h-[36px] bg-blue-50 dark:bg-blue-950/20 border-l-[3px] border-l-[#991b1b]">
+      <tr className="h-[36px] bg-blue-50 dark:bg-blue-950/20 border-l-[3px] border-l-primary">
         <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground/50 tabular-nums')}>{index + 1}</td>
         <td className={cn(bdr, 'py-1 text-center text-[12px] font-mono text-muted-foreground/40 tabular-nums')}>D+?</td>
 
@@ -3404,12 +3404,12 @@ function RouteItem({ route, isSelected, onClick }: { route: AircraftRoute; isSel
   return (
     <button onClick={onClick}
       className={cn('w-full text-left rounded-xl px-2 py-2 transition-all duration-150',
-        isSelected ? 'bg-[#991b1b]/10 dark:bg-[#991b1b]/20 border-l-[3px] border-l-[#991b1b]'
+        isSelected ? 'bg-primary/10 dark:bg-primary/20 border-l-[3px] border-l-primary'
           : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.05] border-l-[3px] border-l-transparent',
         route.status === 'published' && !isSelected && 'opacity-70')}>
       <div className="flex items-center justify-between mb-0.5">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className={cn('text-[13px] font-semibold font-mono truncate', isSelected ? 'text-[#991b1b]' : 'text-[#111827] dark:text-foreground')}>
+          <span className={cn('text-[13px] font-semibold font-mono truncate', isSelected ? 'text-primary' : 'text-[#111827] dark:text-foreground')}>
             {route.route_name || `Route ${route.route_number}`}
           </span>
           {route.finalized && route.status === 'draft' && <span className="text-[10px] text-[#10B981] shrink-0" title="Finalized">&#10003;</span>}
@@ -3420,7 +3420,7 @@ function RouteItem({ route, isSelected, onClick }: { route: AircraftRoute; isSel
             <div key={i} className={cn(
               'w-[16px] h-[16px] rounded-full text-[8px] font-semibold leading-none flex items-center justify-center',
               isDayActive(route.days_of_operation, i)
-                ? 'bg-[#991b1b] text-white'
+                ? 'bg-primary text-primary-foreground'
                 : 'text-[#d1d5db] dark:text-[#4b5563]'
             )}>{label}</div>
           ))}

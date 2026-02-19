@@ -22,7 +22,7 @@ export function getFlightRowStyle(status: string): CSSProperties {
       borderBottom: '1px dashed #d1d5db',
       fontStyle: 'italic',
       color: '#6b7280',
-      background: 'rgba(153, 27, 27, 0.02)',
+      background: 'hsl(var(--primary) / 0.02)',
     }
   }
   if (status === 'cancelled') {
@@ -50,7 +50,7 @@ export function getFlightStatusBadge(status: string): { label: string; color: st
     case 'published':
       return { label: 'Published', color: '#111827', bg: '#f3f4f6' }
     case 'draft':
-      return { label: 'Draft', color: '#991b1b', bg: 'rgba(153, 27, 27, 0.08)' }
+      return { label: 'Draft', color: 'hsl(var(--primary))', bg: 'hsl(var(--primary) / 0.08)' }
     case 'cancelled':
       return { label: 'Cancelled', color: '#9ca3af', bg: '#f9fafb' }
     default:

@@ -56,8 +56,7 @@ const sections: Section[] = [
       { code: '1.1.1', name: 'Schedule Builder', description: 'Create and manage aircraft routes with flight legs, frequencies, and seasonal periods.', icon: PenLine, route: '/network/control/schedule-builder' },
       { code: '1.1.2', name: 'Schedule Grid', description: 'Tabular view of scheduled flights with inline editing, filtering, and bulk operations.', icon: LayoutGrid, route: '/network/control/schedule-grid' },
       { code: '1.1.3', name: 'Gantt Chart', description: 'Aircraft rotation timeline showing fleet utilization, tail assignment, and conflicts.', icon: GanttChartIcon, route: '/network/control/schedule-gantt' },
-      { code: '1.1.4', name: 'Tail Assignment Optimizer', description: 'Automated aircraft tail assignment optimization across the fleet schedule.', icon: PlaneTakeoff, route: '/network/control/aircraft-tail-assignment' },
-      { code: '1.1.5', name: 'Schedule Comparison', description: 'Compare planning scenarios side by side to analyse utilization, block hours, and coverage.', icon: GitCompareArrows, route: '/network/control/schedule-comparison' },
+      { code: '1.1.4', name: 'Schedule Comparison', description: 'Compare planning scenarios side by side to analyse utilization, block hours, and coverage.', icon: GitCompareArrows, route: '/network/control/schedule-comparison' },
     ],
   },
   {
@@ -66,10 +65,10 @@ const sections: Section[] = [
     title: 'Schedule Administration',
     subtitle: 'Publish schedules and manage compliance',
     screens: [
-      { code: '1.1.6', name: 'Schedule Publish', description: 'Review, approve, and publish planning scenarios to the active schedule with change summaries.', icon: SendHorizonal, route: '/network/control/schedule-publish' },
-      { code: '1.1.7', name: 'Codeshare Manager', description: 'Manage codeshare agreements and partner designators. Map marketing carriers to operating flights.', icon: Link2, route: '/network/control/codeshare-manager' },
-      { code: '1.1.8', name: 'Slot Manager', description: 'Track airport slot allocations, monitor utilization against IATA 80/20 rules, and manage requests.', icon: CalendarClock, route: '/network/control/slot-manager' },
-      { code: '1.1.9', name: 'Charter Manager', description: 'Manage ad-hoc and charter flight operations separately from the mainline published schedule.', icon: PlaneTakeoff, route: '/network/control/charter-manager' },
+      { code: '1.1.5', name: 'Schedule Publish', description: 'Review, approve, and publish planning scenarios to the active schedule with change summaries.', icon: SendHorizonal, route: '/network/control/schedule-publish' },
+      { code: '1.1.6', name: 'Codeshare Manager', description: 'Manage codeshare agreements and partner designators. Map marketing carriers to operating flights.', icon: Link2, route: '/network/control/codeshare-manager' },
+      { code: '1.1.7', name: 'Slot Manager', description: 'Track airport slot allocations, monitor utilization against IATA 80/20 rules, and manage requests.', icon: CalendarClock, route: '/network/control/slot-manager' },
+      { code: '1.1.8', name: 'Charter Manager', description: 'Manage ad-hoc and charter flight operations separately from the mainline published schedule.', icon: PlaneTakeoff, route: '/network/control/charter-manager' },
     ],
   },
   {
@@ -78,16 +77,16 @@ const sections: Section[] = [
     title: 'Schedule Distribution',
     subtitle: 'Distribute schedules to external systems and partners',
     screens: [
-      { code: '1.1.10', name: 'Schedule Messaging', description: 'Generate and process ASM/SSM messages for real-time schedule distribution to partners and GDS.', icon: MessageSquareShare, route: '/network/control/schedule-messaging' },
+      { code: '1.1.9', name: 'Schedule Messaging', description: 'Generate and process ASM/SSM messages for real-time schedule distribution to partners and GDS.', icon: MessageSquareShare, route: '/network/control/schedule-messaging' },
       {
-        code: '1.1.11',
+        code: '1.1.10',
         name: 'SSIM Exchange',
         description: 'Import and export SSIM files (Type 1 and Type 2) for airports, regulators, and distribution systems.',
         icon: FileInput,
         subModules: [
-          { number: '1.1.11.1', name: 'SSIM Import', route: '/network/control/ssim/import' },
-          { number: '1.1.11.2', name: 'SSIM Export', route: '/network/control/ssim/export' },
-          { number: '1.1.11.3', name: 'SSIM Comparison', route: '/network/control/ssim/comparison' },
+          { number: '1.1.10.1', name: 'SSIM Import', route: '/network/control/ssim/import' },
+          { number: '1.1.10.2', name: 'SSIM Export', route: '/network/control/ssim/export' },
+          { number: '1.1.10.3', name: 'SSIM Comparison', route: '/network/control/ssim/comparison' },
         ],
       },
     ],

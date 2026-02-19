@@ -49,7 +49,7 @@ export function ModuleBreadcrumb({ leftOffset = 8, module: moduleProp }: ModuleB
           top: 0,
           width: 2,
           height: 16,
-          backgroundColor: '#991b1b',
+          backgroundColor: 'hsl(var(--primary))',
         }}
       />
       {/* Corner + horizontal line */}
@@ -60,7 +60,7 @@ export function ModuleBreadcrumb({ leftOffset = 8, module: moduleProp }: ModuleB
           top: 14,
           width: 14,
           height: 2,
-          backgroundColor: '#991b1b',
+          backgroundColor: 'hsl(var(--primary))',
           borderRadius: '0 0 0 2px',
         }}
       />

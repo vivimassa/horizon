@@ -58,9 +58,9 @@ function MethodCard({
       className="w-full text-left transition-all duration-150"
       style={{
         padding: '12px 14px',
-        border: selected ? '1.5px solid #991B1B' : '1.5px solid var(--border)',
+        border: selected ? '1.5px solid hsl(var(--primary))' : '1.5px solid var(--border)',
         borderRadius: 10,
-        background: selected ? 'rgba(153,27,27,0.04)' : disabled ? 'transparent' : 'transparent',
+        background: selected ? 'hsl(var(--primary) / 0.04)' : disabled ? 'transparent' : 'transparent',
         opacity: disabled ? 0.4 : 1,
         cursor: disabled ? 'not-allowed' : 'pointer',
         position: 'relative',
@@ -70,7 +70,7 @@ function MethodCard({
       }}
       onMouseLeave={(e) => {
         if (!disabled && !selected) e.currentTarget.style.background = 'transparent'
-        if (selected) e.currentTarget.style.background = 'rgba(153,27,27,0.04)'
+        if (selected) e.currentTarget.style.background = 'hsl(var(--primary) / 0.04)'
       }}
     >
       {badge && (
@@ -100,7 +100,7 @@ function MethodCard({
             height: 16,
             borderRadius: '50%',
             border: selected ? 'none' : '1.5px solid var(--border)',
-            background: selected ? '#991B1B' : 'transparent',
+            background: selected ? 'hsl(var(--primary))' : 'transparent',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -191,7 +191,7 @@ export function GanttOptimizerDialog({
           <div>
             <span
               style={{
-                fontSize: 9,
+                fontSize: 11,
                 fontWeight: 700,
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em',
@@ -200,7 +200,7 @@ export function GanttOptimizerDialog({
               }}
               className="text-muted-foreground"
             >
-              Method
+              Assignment Method
             </span>
             <div className="flex flex-col" style={{ gap: 6 }}>
               <MethodCard
@@ -241,7 +241,7 @@ export function GanttOptimizerDialog({
           <div>
             <span
               style={{
-                fontSize: 9,
+                fontSize: 11,
                 fontWeight: 700,
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em',
@@ -268,7 +268,7 @@ export function GanttOptimizerDialog({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Settings2 style={{ width: 14, height: 14 }} className="text-muted-foreground" />
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>Schedule Preference/Restriction Configurations</span>
+                  <span style={{ fontSize: 13, fontWeight: 500 }}>Configuration</span>
                 </div>
                 <ChevronRight style={{ width: 14, height: 14 }} className="text-muted-foreground" />
               </div>
@@ -317,7 +317,7 @@ export function GanttOptimizerDialog({
                 fontSize: 12,
                 fontWeight: 600,
                 borderRadius: 8,
-                background: running ? '#6b7280' : '#991B1B',
+                background: running ? '#6b7280' : 'hsl(var(--primary))',
                 cursor: running ? 'wait' : 'pointer',
               }}
             >

@@ -271,7 +271,7 @@ function DowCirclesDisplay({ value }: { value: string }) {
           className={cn(
             'w-[22px] h-[22px] rounded-full text-[10px] font-semibold leading-none flex items-center justify-center select-none',
             isDayActive(value, i)
-              ? 'bg-[#991b1b] text-white'
+              ? 'bg-primary text-primary-foreground'
               : 'bg-transparent text-[#d1d5db] dark:text-[#4b5563] border-[1.5px] border-[#e5e7eb] dark:border-[#374151]',
           )}
         >{label}</div>
@@ -1292,7 +1292,7 @@ export function ScheduleGrid({ seasons, aircraftTypes, flightServiceTypes }: Sch
                         borderLeftColor: hasConflict ? '#ef4444' : getLeftBorderColor(f),
                         borderLeftStyle: 'solid',
                         height: '36px',
-                        ...(selectedRows.has(f.id) ? { outline: '2px solid #991b1b', outlineOffset: '-2px', background: '#fef2f2' } : {}),
+                        ...(selectedRows.has(f.id) ? { outline: '2px solid hsl(var(--primary))', outlineOffset: '-2px', background: 'hsl(var(--primary) / 0.05)' } : {}),
                       }}
                     >
                       {/* FLT NO */}
@@ -1502,7 +1502,7 @@ export function ScheduleGrid({ seasons, aircraftTypes, flightServiceTypes }: Sch
               type="button"
               onClick={saveAllChanges}
               disabled={saving}
-              className="px-4 py-1.5 text-xs font-medium rounded-lg bg-[#991b1b] hover:bg-[#7f1d1d] text-white transition-colors disabled:opacity-50"
+              className="px-4 py-1.5 text-xs font-medium rounded-lg bg-primary hover:bg-primary/80 text-primary-foreground transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save'}
             </button>
@@ -1566,7 +1566,7 @@ export function ScheduleGrid({ seasons, aircraftTypes, flightServiceTypes }: Sch
               type="button"
               onClick={saveAllChanges}
               disabled={saving || pendingChanges.length === 0}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-[#991b1b] hover:bg-[#7f1d1d] text-white transition-colors disabled:opacity-50"
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary/80 text-primary-foreground transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : `Save ${pendingChanges.length} Change${pendingChanges.length !== 1 ? 's' : ''}`}
             </button>

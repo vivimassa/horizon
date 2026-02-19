@@ -151,7 +151,7 @@ export function SwapFlightsDialog({
         {/* ── Two-card layout ─────────────────────────────── */}
         <div className="flex items-stretch gap-3 mt-1">
           {/* Side A card */}
-          <div className="flex-1 rounded-lg border border-border/60 bg-muted/20 overflow-hidden" style={{ borderLeft: '3px solid #991B1B' }}>
+          <div className="flex-1 rounded-lg border border-border/60 bg-muted/20 overflow-hidden" style={{ borderLeft: '3px solid hsl(var(--primary))' }}>
             <div className="px-3 py-2">
               <div className="text-[13px] font-semibold">{regA}</div>
               <div className="text-[10px] text-muted-foreground">{acTypeA}{acConfigA ? ` \u00B7 ${acConfigA}` : ''}</div>
@@ -232,7 +232,7 @@ export function SwapFlightsDialog({
             onClick={handleConfirm}
             disabled={swapping || (hasError)}
             className="px-3 py-1.5 text-[11px] font-medium rounded-md text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
-            style={{ backgroundColor: hasError ? undefined : '#991B1B' }}
+            style={{ backgroundColor: hasError ? undefined : 'hsl(var(--primary))' }}
           >
             <ArrowLeftRight className="h-3 w-3" />
             {swapping ? 'Swapping...' : 'Swap'}

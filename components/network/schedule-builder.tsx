@@ -312,9 +312,9 @@ function DowDisplay({ value, onChange }: { value: string; onChange?: (v: string)
             className={cn(
               'w-[22px] h-[22px] rounded-full text-[10px] font-semibold leading-none flex items-center justify-center transition-colors select-none',
               active
-                ? 'bg-[#991b1b] text-white'
+                ? 'bg-primary text-primary-foreground'
                 : 'bg-transparent text-[#d1d5db] border-[1.5px] border-[#e5e7eb]',
-              onChange && active && 'hover:bg-[#7f1d1d]',
+              onChange && active && 'hover:bg-primary/80',
               onChange && !active && 'hover:border-[#d1d5db] hover:text-[#9ca3af]',
             )}
           >
