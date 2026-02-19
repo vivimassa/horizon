@@ -327,7 +327,7 @@ export function autoAssignFlights(
       windows: [],
       lastSTA: null,
       lastSTADate: null,
-      lastARR: ac.homeBase,
+      lastARR: null,           // Aircraft starts "anywhere"
       assignedFlights: [],
     })
   }
