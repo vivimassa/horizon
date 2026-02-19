@@ -194,13 +194,10 @@ function checkStationChain(
     return false
   }
 
-  // If no previous window, check against aircraft's home base / initial position
-  if (!prevWindow && state.lastARR !== null && state.windows.length === 0) {
-    // Aircraft has never been assigned — use homeBase (stored in lastARR at init)
-    if (state.lastARR !== blockDepStation) {
-      return false
-    }
-  }
+  // Home base is a preference, not a hard constraint
+  // (returning false here would block first assignment entirely
+  //  if aircraft home base differs from first flight departure)
+  // We leave this as "true" — the caller uses chainOk for scoring
 
   return true
 }
@@ -613,19 +610,8 @@ function findBestAircraft(
       continue
     }
 
-    // Station chain check: verify block fits the chain
-    if (!checkStationChain(st, block)) {
-      for (const f of block.flights) {
-        const flightRejections = rejections.get(f.id) || []
-        flightRejections.push({
-          registration: ac.registration,
-          icaoType: ac.icaoType,
-          reason: 'chain',
-        })
-        rejections.set(f.id, flightRejections)
-      }
-      continue
-    }
+    // Station chain — used for priority scoring, NOT hard filter
+    const chainOk = checkStationChain(st, block)
 
     // ── Rule evaluation ──
     const acForEval: AircraftForEval = {
@@ -682,13 +668,16 @@ function findBestAircraft(
     let priority: 1 | 2 | 3
     let gap: number
 
-    if (sameStation && !isIdle) {
+    if (chainOk && sameStation && !isIdle) {
+      // Perfect chain continuation
       priority = 1
       gap = computeGap(st, firstFlight, firstFlightDateMs)
-    } else if (sameStation && isIdle) {
+    } else if (chainOk && isIdle) {
+      // Idle aircraft, chain compatible
       priority = 2
       gap = Infinity
     } else {
+      // Available but station mismatch — still usable
       priority = 3
       gap = Infinity
     }
@@ -803,19 +792,8 @@ function findBalancedAircraft(
       continue
     }
 
-    // Station chain check: verify block fits the chain
-    if (!checkStationChain(st, block)) {
-      for (const f of block.flights) {
-        const flightRejections = rejections.get(f.id) || []
-        flightRejections.push({
-          registration: ac.registration,
-          icaoType: ac.icaoType,
-          reason: 'chain',
-        })
-        rejections.set(f.id, flightRejections)
-      }
-      continue
-    }
+    // Station chain — used for priority scoring, NOT hard filter
+    const chainOk = checkStationChain(st, block)
 
     // ── Rule evaluation ──
     const acForEval: AircraftForEval = {
@@ -874,9 +852,11 @@ function findBalancedAircraft(
     }, 0)
     score -= totalBlockMinutes * 2
 
-    // CHAIN BONUS:
-    if (st.lastARR && st.lastARR === blockFirstDep && st.lastSTA !== null) {
-      score += 500
+    // CHAIN BONUS / PENALTY:
+    if (chainOk && st.lastARR && st.lastARR === blockFirstDep && st.lastSTA !== null) {
+      score += 500     // perfect chain — big bonus
+    } else if (!chainOk && st.windows.length > 0) {
+      score -= 200     // chain break — penalty but don't skip
     }
 
     // EMPTY AIRCRAFT BONUS:
