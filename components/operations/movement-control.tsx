@@ -6,6 +6,7 @@ import {
   Check,
   Plane,
   PlaneTakeoff,
+  PlaneLanding,
   Clock,
   Calendar,
   CalendarRange,
@@ -603,6 +604,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Assign All / De-assign All toggle
+  const [assignmentsEnabled, setAssignmentsEnabled] = useState(true)
 
   // Collapsible right panel + pin state (hydrated from localStorage after mount)
   const [panelPinned, setPanelPinned] = useState(false)
@@ -1309,6 +1313,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
         setMipResult(result)
         setAssignmentMethod('optimal')
+        setAssignmentsEnabled(true)
         setLastOptRun({
           method: `Optimal Solver (${result.mip.status})`,
           time: new Date(),
@@ -1382,6 +1387,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
         setAiResult(result)
         setAssignmentMethod('ai')
+        setAssignmentsEnabled(true)
         setLastOptRun({
           method: `AI Optimizer (${result.sa.improvement.toFixed(1)}% improvement)`,
           time: new Date(),
@@ -1398,6 +1404,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       setOptimizerRunning(true)
       setAiResult(null)
       setMipResult(null)
+      setAssignmentsEnabled(true)
       setAssignmentMethod(method)
       await new Promise(r => setTimeout(r, 300))
       setOptimizerRunning(false)
@@ -1411,6 +1418,18 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
   // ─── Virtual tail assignment engine ──────────────────────────────
   const assignmentResult = useMemo<TailAssignmentResult>(() => {
+    // Guard: when assignments disabled, return empty result
+    if (!assignmentsEnabled) {
+      return {
+        assignments: new Map(),
+        overflow: [],
+        chainBreaks: [],
+        ruleViolations: new Map(),
+        rejections: new Map(),
+        summary: { totalFlights: 0, assigned: 0, overflowed: 0, hardRulesEnforced: 0, softRulesBent: 0, totalPenaltyCost: 0 },
+      }
+    }
+
     // If MIP solver produced a result, use it directly
     if (assignmentMethod === 'optimal' && mipResult) {
       return mipResult
@@ -1447,7 +1466,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       scheduleRules, aircraftFamilies,
       movementSettings.allowFamilySub ?? false, typeFamilyMap
     )
-  }, [expandedFlights, registrations, aircraftTypes, assignmentMethod, scheduleRules, aircraftFamilies, movementSettings.allowFamilySub, aiResult, mipResult])
+  }, [assignmentsEnabled, expandedFlights, registrations, aircraftTypes, assignmentMethod, scheduleRules, aircraftFamilies, movementSettings.allowFamilySub, aiResult, mipResult])
 
   // Annotate expanded flights with their assigned registration
   const assignedFlights = useMemo(() => {
@@ -2918,6 +2937,29 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         title="Movement Settings"
       >
         <Settings2 className="h-3.5 w-3.5" />
+      </button>
+      {/* ── Assign All / De-assign All toggle buttons ── */}
+      <button
+        onClick={() => setAssignmentsEnabled(true)}
+        className={`w-[26px] h-[26px] flex items-center justify-center rounded-[7px] transition-colors text-emerald-600 dark:text-emerald-400 ${
+          assignmentsEnabled
+            ? 'bg-emerald-500/15 border border-emerald-500/40'
+            : 'bg-emerald-500/10 border border-emerald-500/30 opacity-50 hover:opacity-100'
+        }`}
+        title="Assign All"
+      >
+        <PlaneTakeoff className="h-3.5 w-3.5" />
+      </button>
+      <button
+        onClick={() => setAssignmentsEnabled(false)}
+        className={`w-[26px] h-[26px] flex items-center justify-center rounded-[7px] transition-colors text-red-600 dark:text-red-400 ${
+          !assignmentsEnabled
+            ? 'bg-red-500/15 border border-red-500/40'
+            : 'bg-red-500/10 border border-red-500/30 opacity-50 hover:opacity-100'
+        }`}
+        title="De-assign All"
+      >
+        <PlaneLanding className="h-3.5 w-3.5" />
       </button>
       <button
         onClick={toggleFullscreen}
