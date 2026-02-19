@@ -61,9 +61,9 @@ export interface SAResult extends TailAssignmentResult {
 
 // Default config presets
 export const SA_PRESETS = {
-  quick:  { timeBudgetMs: 5000,  initialTemp: 10000, coolingRate: 0.9995, reportIntervalMs: 200 },
-  normal: { timeBudgetMs: 15000, initialTemp: 15000, coolingRate: 0.9998, reportIntervalMs: 300 },
-  deep:   { timeBudgetMs: 30000, initialTemp: 20000, coolingRate: 0.9999, reportIntervalMs: 500 },
+  quick:  { timeBudgetMs: 5000,  initialTemp: 5000,  coolingRate: 0.999,  reportIntervalMs: 200 },
+  normal: { timeBudgetMs: 15000, initialTemp: 8000,  coolingRate: 0.9995, reportIntervalMs: 300 },
+  deep:   { timeBudgetMs: 30000, initialTemp: 10000, coolingRate: 0.9998, reportIntervalMs: 500 },
 } as const
 
 // ─── Block type for SA (simplified) ──────────────────────────
@@ -152,31 +152,6 @@ function calculateSolutionCost(
   }
 
   return cost
-}
-
-// ─── Helper: check if block fits on aircraft ─────────────────
-
-function canPlace(
-  block: SABlock,
-  reg: string,
-  currentAssignments: Map<string, string>,
-  allBlocks: SABlock[],
-  tatMs: Map<string, number>,
-): boolean {
-  const requiredTatMs = tatMs.get(block.icaoType) || 30 * 60000
-
-  for (const other of allBlocks) {
-    if (other.id === block.id) continue
-    const otherReg = currentAssignments.get(other.flights[0].id)
-    if (otherReg !== reg) continue
-
-    // Overlap check with TAT buffer
-    if (block.startMs < other.endMs + requiredTatMs &&
-        other.startMs < block.endMs + requiredTatMs) {
-      return false
-    }
-  }
-  return true
 }
 
 // ─── Main SA function ────────────────────────────────────────
@@ -270,6 +245,52 @@ export async function runSimulatedAnnealing(
   const startTime = performance.now()
   let lastReportTime = startTime
 
+  // Build per-aircraft block index for fast overlap checks
+  const blocksByReg = new Map<string, Set<string>>()
+  for (const ac of aircraft) blocksByReg.set(ac.registration, new Set())
+  for (const block of allBlocks) {
+    const reg = currentAssignments.get(block.flights[0].id)
+    if (reg) blocksByReg.get(reg)?.add(block.id)
+  }
+
+  // Block lookup by id
+  const blockById = new Map<string, SABlock>()
+  for (const b of allBlocks) blockById.set(b.id, b)
+
+  // Indexed canPlace: only check blocks assigned to target reg
+  function canPlaceIndexed(block: SABlock, reg: string, excludeIds?: Set<string>): boolean {
+    const requiredTatMs = tatMs.get(block.icaoType) || 30 * 60000
+    const regBlockIds = blocksByReg.get(reg)
+    if (!regBlockIds) return true
+    for (const otherId of Array.from(regBlockIds)) {
+      if (otherId === block.id) continue
+      if (excludeIds && excludeIds.has(otherId)) continue
+      const other = blockById.get(otherId)
+      if (!other) continue
+      if (block.startMs < other.endMs + requiredTatMs &&
+          other.startMs < block.endMs + requiredTatMs) {
+        return false
+      }
+    }
+    return true
+  }
+
+  // Helper: get eligible aircraft for a block type
+  function getEligible(icaoType: string): AssignableAircraft[] {
+    let eligible = aircraftByType.get(icaoType) || []
+    if (allowFamilySub) {
+      const family = typeFamilyMap.get(icaoType)
+      if (family) {
+        const familyAc: AssignableAircraft[] = []
+        for (const [type, acs] of Array.from(aircraftByType.entries())) {
+          if (typeFamilyMap.get(type) === family) familyAc.push(...acs)
+        }
+        if (familyAc.length >= 2) eligible = familyAc
+      }
+    }
+    return eligible
+  }
+
   // ── Main SA loop ──
   while (true) {
     const elapsed = performance.now() - startTime
@@ -278,80 +299,124 @@ export async function runSimulatedAnnealing(
 
     iteration++
 
-    // ── Generate a random neighbor ──
-    const blockIdx = Math.floor(Math.random() * moveableBlocks.length)
-    const block = moveableBlocks[blockIdx]
-    if (!block) continue
+    // 70% pair swap, 30% relocate
+    const doPairSwap = Math.random() < 0.7
 
-    // Find eligible aircraft (same type, or same family if allowFamilySub)
-    let eligibleAircraft = aircraftByType.get(block.icaoType) || []
+    if (doPairSwap) {
+      // ── PAIR SWAP: exchange two blocks between different aircraft of same type ──
+      const blockA = moveableBlocks[Math.floor(Math.random() * moveableBlocks.length)]
+      if (!blockA) continue
+      const regA = currentAssignments.get(blockA.flights[0].id)
+      if (!regA) continue
 
-    if (allowFamilySub) {
-      const blockFamily = typeFamilyMap.get(block.icaoType)
-      if (blockFamily) {
-        const familyAircraft: AssignableAircraft[] = []
-        for (const [type, acs] of Array.from(aircraftByType.entries())) {
-          if (typeFamilyMap.get(type) === blockFamily) {
-            familyAircraft.push(...acs)
+      // Find blocks on other aircraft of compatible type
+      const sameTypeBlocks = moveableBlocks.filter(b => {
+        const r = currentAssignments.get(b.flights[0].id)
+        if (!r || r === regA) return false
+        if (b.icaoType === blockA.icaoType) return true
+        if (allowFamilySub) {
+          const fA = typeFamilyMap.get(blockA.icaoType)
+          const fB = typeFamilyMap.get(b.icaoType)
+          return fA && fA === fB
+        }
+        return false
+      })
+      if (sameTypeBlocks.length === 0) continue
+
+      const blockB = sameTypeBlocks[Math.floor(Math.random() * sameTypeBlocks.length)]
+      const regB = currentAssignments.get(blockB.flights[0].id)!
+
+      // Check if A fits on regB and B fits on regA (excluding both from overlap)
+      const excludeSet = new Set([blockA.id, blockB.id])
+      if (!canPlaceIndexed(blockA, regB, excludeSet)) continue
+      if (!canPlaceIndexed(blockB, regA, excludeSet)) continue
+
+      // Apply swap
+      for (const f of blockA.flights) currentAssignments.set(f.id, regB)
+      for (const f of blockB.flights) currentAssignments.set(f.id, regA)
+
+      // Update index
+      blocksByReg.get(regA)?.delete(blockA.id)
+      blocksByReg.get(regA)?.add(blockB.id)
+      blocksByReg.get(regB)?.delete(blockB.id)
+      blocksByReg.get(regB)?.add(blockA.id)
+
+      const newCost = calculateSolutionCost(currentAssignments, overflowFlights, allBlocks, aircraft, tatMs)
+      const delta = newCost - currentCost
+
+      if (delta < 0 || Math.random() < Math.exp(-delta / temperature)) {
+        currentCost = newCost
+        acceptedSwaps++
+        if (currentCost < bestCost) {
+          bestCost = currentCost
+          bestAssignments = new Map(currentAssignments)
+          bestOverflow = new Set(currentOverflow)
+        }
+      } else {
+        // Revert swap
+        for (const f of blockA.flights) currentAssignments.set(f.id, regA)
+        for (const f of blockB.flights) currentAssignments.set(f.id, regB)
+        blocksByReg.get(regA)?.add(blockA.id)
+        blocksByReg.get(regA)?.delete(blockB.id)
+        blocksByReg.get(regB)?.add(blockB.id)
+        blocksByReg.get(regB)?.delete(blockA.id)
+        rejectedSwaps++
+      }
+
+    } else {
+      // ── RELOCATE: move a single block to a different aircraft ──
+      const block = moveableBlocks[Math.floor(Math.random() * moveableBlocks.length)]
+      if (!block) continue
+
+      const eligibleAircraft = getEligible(block.icaoType)
+      if (eligibleAircraft.length < 2) continue
+
+      const currentReg = currentAssignments.get(block.flights[0].id) || null
+      const targetAc = eligibleAircraft[Math.floor(Math.random() * eligibleAircraft.length)]
+      if (targetAc.registration === currentReg) continue
+
+      if (!canPlaceIndexed(block, targetAc.registration)) continue
+
+      // Apply move
+      const prevRegs = new Map<string, string | null>()
+      for (const f of block.flights) {
+        prevRegs.set(f.id, currentAssignments.get(f.id) || null)
+        currentAssignments.set(f.id, targetAc.registration)
+        currentOverflow.delete(f.id)
+      }
+
+      // Update index
+      if (currentReg) blocksByReg.get(currentReg)?.delete(block.id)
+      blocksByReg.get(targetAc.registration)?.add(block.id)
+
+      const newOverflowFlights = flights.filter(f => currentOverflow.has(f.id))
+      const newCost = calculateSolutionCost(currentAssignments, newOverflowFlights, allBlocks, aircraft, tatMs)
+      const delta = newCost - currentCost
+
+      if (delta < 0 || Math.random() < Math.exp(-delta / temperature)) {
+        currentCost = newCost
+        acceptedSwaps++
+        if (currentCost < bestCost) {
+          bestCost = currentCost
+          bestAssignments = new Map(currentAssignments)
+          bestOverflow = new Set(currentOverflow)
+        }
+      } else {
+        // Revert
+        for (const f of block.flights) {
+          const prev = prevRegs.get(f.id)
+          if (prev) {
+            currentAssignments.set(f.id, prev)
+          } else {
+            currentAssignments.delete(f.id)
+            currentOverflow.add(f.id)
           }
         }
-        if (familyAircraft.length >= 2) {
-          eligibleAircraft = familyAircraft
-        }
+        // Revert index
+        blocksByReg.get(targetAc.registration)?.delete(block.id)
+        if (currentReg) blocksByReg.get(currentReg)?.add(block.id)
+        rejectedSwaps++
       }
-    }
-
-    if (eligibleAircraft.length < 2) continue
-
-    // Current assignment for this block
-    const currentReg = currentAssignments.get(block.flights[0].id) || null
-
-    // Pick a random different aircraft
-    const targetAc = eligibleAircraft[Math.floor(Math.random() * eligibleAircraft.length)]
-    if (targetAc.registration === currentReg) continue
-
-    // Check if block can fit on target aircraft
-    if (!canPlace(block, targetAc.registration, currentAssignments, allBlocks, tatMs)) continue
-
-    // ── Evaluate the swap ──
-    const prevRegs = new Map<string, string | null>()
-    for (const f of block.flights) {
-      prevRegs.set(f.id, currentAssignments.get(f.id) || null)
-      currentAssignments.set(f.id, targetAc.registration)
-      currentOverflow.delete(f.id)
-    }
-
-    const newOverflowFlights = flights.filter(f => currentOverflow.has(f.id))
-    const newCost = calculateSolutionCost(
-      currentAssignments, newOverflowFlights, allBlocks, aircraft, tatMs
-    )
-
-    const delta = newCost - currentCost
-
-    // Accept or reject
-    const accept = delta < 0 || Math.random() < Math.exp(-delta / temperature)
-
-    if (accept) {
-      currentCost = newCost
-      acceptedSwaps++
-
-      if (currentCost < bestCost) {
-        bestCost = currentCost
-        bestAssignments = new Map(currentAssignments)
-        bestOverflow = new Set(currentOverflow)
-      }
-    } else {
-      // Revert the swap
-      for (const f of block.flights) {
-        const prev = prevRegs.get(f.id)
-        if (prev) {
-          currentAssignments.set(f.id, prev)
-        } else {
-          currentAssignments.delete(f.id)
-          currentOverflow.add(f.id)
-        }
-      }
-      rejectedSwaps++
     }
 
     // Cool down
