@@ -25,6 +25,7 @@ import {
   Maximize2,
   Minimize2,
   Pin,
+  Info,
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
 import { AircraftType, AircraftSeatingConfig, CabinEntry, Airport, FlightServiceType } from '@/types/database'
@@ -506,6 +507,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   // Collapsible right panel + pin state (hydrated from localStorage after mount)
   const [panelPinned, setPanelPinned] = useState(false)
   const [panelVisible, setPanelVisible] = useState(false)
+  const [panelMounted, setPanelMounted] = useState(false)
+  useEffect(() => {
+    if (panelVisible) {
+      setPanelMounted(true)
+    } else {
+      const t = setTimeout(() => setPanelMounted(false), 450)
+      return () => clearTimeout(t)
+    }
+  }, [panelVisible])
   useEffect(() => {
     try {
       const pinned = localStorage.getItem('horizon_gantt_panel_pinned') === 'true'
@@ -513,8 +523,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     } catch { /* ignore */ }
   }, [])
 
-  // Day-stats panel mode
-  const [panelMode, setPanelMode] = useState<'rotation' | 'day-stats'>('rotation')
+  // Panel mode: flight (click bar), aircraft (click reg), rotation (click row bg), day-stats (click day header)
+  const [panelMode, setPanelMode] = useState<'flight' | 'aircraft' | 'rotation' | 'day-stats'>('flight')
+  const [panelAircraftReg, setPanelAircraftReg] = useState<string | null>(null)
+  const [rotationTarget, setRotationTarget] = useState<{ reg: string; date: string } | null>(null)
   const [selectedDays, setSelectedDays] = useState<Set<string>>(new Set())
 
   // Flight search state
@@ -620,10 +632,16 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   useEffect(() => {
     if (panelPinned || flightSearchOpen || aircraftSearchOpen) {
       setPanelVisible(true)
-    } else {
-      setPanelVisible(selectedFlights.size > 0 || panelMode === 'day-stats')
+    } else if (panelMode === 'flight') {
+      setPanelVisible(selectedFlights.size > 0)
+    } else if (panelMode === 'aircraft') {
+      setPanelVisible(!!panelAircraftReg)
+    } else if (panelMode === 'rotation') {
+      setPanelVisible(!!rotationTarget)
+    } else if (panelMode === 'day-stats') {
+      setPanelVisible(selectedDays.size > 0)
     }
-  }, [panelPinned, selectedFlights.size, panelMode, flightSearchOpen, aircraftSearchOpen])
+  }, [panelPinned, selectedFlights.size, panelMode, panelAircraftReg, rotationTarget, selectedDays.size, flightSearchOpen, aircraftSearchOpen])
 
   // Persist pin state (skip until hydrated)
   useEffect(() => {
@@ -725,11 +743,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       }
 
       if (e.key === 'Escape') {
-        // Priority: aircraft search > flight search > modal > context menu > day-stats > ac row select > selection
+        // Priority: aircraft search > flight search > modal > context menu > panel modes > ac row select > selection
         if (aircraftSearchOpen) { closeAircraftSearch(); return }
         if (flightSearchOpen) { closeFlightSearch(); return }
         if (contextMenu) { setContextMenu(null); return }
-        if (panelMode === 'day-stats') { setSelectedDays(new Set()); setPanelMode('rotation'); return }
+        if (panelMode === 'day-stats') { setSelectedDays(new Set()); setPanelMode('flight'); return }
+        if (panelMode === 'aircraft') { setPanelAircraftReg(null); setPanelMode('flight'); setSelectedAircraftRow(null); return }
+        if (panelMode === 'rotation') { setRotationTarget(null); setPanelMode('flight'); setSelectedAircraftRow(null); return }
         if (selectedAircraftRow) { setSelectedAircraftRow(null); return }
         if (selectedFlights.size > 0) { setSelectedFlights(new Set()); return }
         // Fullscreen CSS fallback exit handled by its own effect
@@ -1452,105 +1472,311 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     detail: string
   }
 
-  const panelData = useMemo(() => {
-    if (!selectedFlight) return null
+  // ─── Flight panel data ─────────────────────────────────────────────
+  const flightPanelData = useMemo(() => {
+    if (panelMode !== 'flight' || selectedFlights.size === 0) return null
+    const flights = assignedFlights.filter(f => selectedFlights.has(f.id))
+    if (flights.length === 0) return null
 
-    const icao = selectedFlight.aircraftTypeIcao || 'UNKN'
-    const dateStr = formatISO(selectedFlight.date)
+    if (flights.length === 1) {
+      const ef = flights[0]
+      const assignedReg = ef.aircraftReg
+      const hasDbAssignment = !!assignedReg
+      const dateStr = formatISO(ef.date)
+      const icao = ef.aircraftTypeIcao || 'UNKN'
+      const reg = hasDbAssignment ? registrations.find(r => r.registration === assignedReg) : null
+      const cabin = reg ? getCabinString(reg) : ''
 
-    // Find first matching registration
-    const reg = registrations.find(
-      (r) => r.aircraft_types?.icao_type === icao
-    )
-    const regCode = reg?.registration || icao
-    const cabin = reg ? getCabinString(reg) : ''
-    const homeBase = reg?.home_base?.iata_code || null
+      let utilFlights: typeof assignedFlights = []
+      if (hasDbAssignment) {
+        utilFlights = assignedFlights.filter(f => {
+          const fReg = f.aircraftReg || f.assignedReg
+          return fReg === assignedReg && formatISO(f.date) === dateStr
+        })
+      }
+      const totalBlock = utilFlights.reduce((s, f) => s + f.blockMinutes, 0)
+      const acTypeInfo = icao !== 'UNKN' ? acTypeByIcao.get(icao) : undefined
+      const categoryDefault = acTypeInfo?.category === 'widebody' ? 14 : acTypeInfo?.category === 'regional' ? 10 : 12
+      const targetHours = (ganttSettings.utilizationTargets ?? {})[icao] ?? categoryDefault
+      const utilPct = totalBlock > 0 ? Math.round((totalBlock / 60 / targetHours) * 100) : 0
 
-    // Get all flights for this AC type on the same day, sorted by STD
+      return {
+        mode: 'single' as const,
+        flight: ef,
+        assignedReg,
+        hasDbAssignment,
+        icao,
+        cabin,
+        totalBlock,
+        flightCount: utilFlights.length,
+        targetHours,
+        utilPct,
+      }
+    }
+
+    const totalBlock = flights.reduce((s, f) => s + f.blockMinutes, 0)
+    const uniqueDates = new Set(flights.map(f => formatISO(f.date)))
+    const uniqueRegs = new Set(flights.map(f => f.aircraftReg || f.assignedReg).filter(Boolean))
+    return {
+      mode: 'multi' as const,
+      flights,
+      count: flights.length,
+      totalBlock,
+      dateCount: uniqueDates.size,
+      regCount: uniqueRegs.size,
+    }
+  }, [panelMode, selectedFlights, assignedFlights, registrations, acTypeByIcao, ganttSettings.utilizationTargets])
+
+  // ─── Flight Links panel data (multi-select same row) ────────────
+  const flightLinksPanelData = useMemo(() => {
+    if (panelMode !== 'flight' || selectedFlights.size < 2) return null
+
+    const flights = assignedFlights
+      .filter(f => selectedFlights.has(f.id))
+      .sort((a, b) => {
+        const dateDiff = a.date.getTime() - b.date.getTime()
+        if (dateDiff !== 0) return dateDiff
+        return a.stdMinutes - b.stdMinutes
+      })
+
+    if (flights.length < 2) return null
+
+    // Check if all on same row
+    const rowRegs = flights.map(f => f.aircraftReg || f.assignedReg)
+    const uniqueRegs = new Set(rowRegs.filter(Boolean))
+    if (uniqueRegs.size > 1) return null
+
+    const reg = Array.from(uniqueRegs)[0] || null
+    const regInfo = reg ? registrations.find(r => r.registration === reg) : null
+    const icao = flights[0].aircraftTypeIcao || 'UNKN'
+
+    // Build links between consecutive flights
+    type LinkStatus = 'ok' | 'tight' | 'violated' | 'mismatch'
+    const links: {
+      from: ExpandedFlight
+      to: ExpandedFlight
+      gapMinutes: number
+      minTat: number
+      status: LinkStatus
+      stationMismatch: boolean
+    }[] = []
+
+    for (let i = 0; i < flights.length - 1; i++) {
+      const curr = flights[i]
+      const next = flights[i + 1]
+      const sameDate = formatISO(curr.date) === formatISO(next.date)
+      const stationMismatch = curr.arrStation !== next.depStation
+
+      let gapMinutes = 0
+      if (sameDate) {
+        gapMinutes = next.stdMinutes - curr.staMinutes
+      } else {
+        const currStaAbs = curr.date.getTime() + curr.staMinutes * 60000
+        const nextStdAbs = next.date.getTime() + next.stdMinutes * 60000
+        gapMinutes = Math.round((nextStdAbs - currStaAbs) / 60000)
+      }
+
+      // Calculate min TAT using getTatMinutes
+      const currIcao = curr.aircraftTypeIcao
+      const acType = currIcao ? acTypeByIcao.get(currIcao) : undefined
+      const arrivingDom = isRouteDomestic(curr.routeType)
+      const departingDom = isRouteDomestic(next.routeType)
+      const tatOverride = currIcao ? (ganttSettings.tatOverrides ?? {})[currIcao] : undefined
+      const minTat = getTatMinutes(acType, arrivingDom, departingDom, tatOverride)
+
+      let status: LinkStatus
+      if (stationMismatch) {
+        status = 'mismatch'
+      } else if (minTat > 0 && gapMinutes < minTat) {
+        status = 'violated'
+      } else if (minTat > 0 && gapMinutes < minTat + 5) {
+        status = 'tight'
+      } else {
+        status = 'ok'
+      }
+
+      links.push({ from: curr, to: next, gapMinutes, minTat, status, stationMismatch })
+    }
+
+    // Station sequence
+    const stations = [flights[0].depStation]
+    for (const f of flights) stations.push(f.arrStation)
+
+    // Breaks
+    const stationBreaks = new Set<number>()
+    for (let i = 0; i < links.length; i++) {
+      if (links[i].stationMismatch) stationBreaks.add(i)
+    }
+
+    const isCircular = flights[0].depStation === flights[flights.length - 1].arrStation
+
+    // Summary
+    const totalBlockMinutes = flights.reduce((s, f) => s + f.blockMinutes, 0)
+    const totalGroundMinutes = links
+      .filter(l => !l.stationMismatch)
+      .reduce((s, l) => s + Math.max(0, l.gapMinutes), 0)
+    const mismatchCount = links.filter(l => l.stationMismatch).length
+
+    const firstDate = flights[0].date
+    const lastDate = flights[flights.length - 1].date
+    const singleDate = formatISO(firstDate) === formatISO(lastDate)
+
+    let elapsedMinutes: number
+    if (singleDate) {
+      elapsedMinutes = flights[flights.length - 1].staMinutes - flights[0].stdMinutes
+    } else {
+      const startAbs = firstDate.getTime() + flights[0].stdMinutes * 60000
+      const endAbs = lastDate.getTime() + flights[flights.length - 1].staMinutes * 60000
+      elapsedMinutes = Math.round((endAbs - startAbs) / 60000)
+    }
+
+    const domesticCount = flights.filter(f => isRouteDomestic(f.routeType)).length
+    const internationalCount = flights.length - domesticCount
+
+    // Date groups
+    const dateGroups: string[] = []
+    for (const f of flights) {
+      const ds = formatISO(f.date)
+      if (dateGroups.length === 0 || dateGroups[dateGroups.length - 1] !== ds) dateGroups.push(ds)
+    }
+
+    return {
+      reg,
+      icao,
+      cabin: regInfo ? getCabinString(regInfo) : '',
+      flights,
+      links,
+      stations,
+      stationBreaks,
+      isCircular,
+      singleDate,
+      totalBlockMinutes,
+      totalGroundMinutes,
+      mismatchCount,
+      elapsedMinutes,
+      firstStdLocal: flights[0].stdLocal,
+      lastStaLocal: flights[flights.length - 1].staLocal,
+      firstDate: formatISO(firstDate),
+      lastDate: formatISO(lastDate),
+      legs: flights.length,
+      domesticCount,
+      internationalCount,
+    }
+  }, [panelMode, selectedFlights, assignedFlights, registrations, acTypeByIcao, ganttSettings.tatOverrides])
+
+  // ─── Aircraft panel data ──────────────────────────────────────────
+  const aircraftPanelData = useMemo(() => {
+    if (panelMode !== 'aircraft' || !panelAircraftReg) return null
+    const reg = registrations.find(r => r.registration === panelAircraftReg)
+    if (!reg) return null
+
+    const icao = reg.aircraft_types?.icao_type || 'UNKN'
+    const cabin = getCabinString(reg)
+    const homeBase = reg.home_base?.iata_code || null
+
+    const allFlights = assignedFlights.filter(f => {
+      const fReg = f.aircraftReg || f.assignedReg
+      return fReg === panelAircraftReg
+    })
+    const totalBlock = allFlights.reduce((s, f) => s + f.blockMinutes, 0)
+    const activeDates = new Set(allFlights.map(f => formatISO(f.date)))
+
+    // Overnight stations
+    const stationCounts = new Map<string, number>()
+    for (const dateStr of Array.from(activeDates)) {
+      const dayFlights = allFlights.filter(f => formatISO(f.date) === dateStr).sort((a, b) => b.staMinutes - a.staMinutes)
+      if (dayFlights.length > 0) {
+        const s = dayFlights[0].arrStation
+        stationCounts.set(s, (stationCounts.get(s) || 0) + 1)
+      }
+    }
+    const overnightStations = Array.from(stationCounts.entries())
+      .map(([station, count]) => ({ station, count }))
+      .sort((a, b) => b.count - a.count)
+
+    return {
+      registration: panelAircraftReg,
+      icao,
+      cabin,
+      homeBase,
+      totalBlock,
+      flightCount: allFlights.length,
+      activeDays: activeDates.size,
+      periodDays: periodDays || 1,
+      overnightStations,
+    }
+  }, [panelMode, panelAircraftReg, assignedFlights, registrations, periodDays])
+
+  // ─── Rotation panel data ──────────────────────────────────────────
+  const rotationPanelData = useMemo(() => {
+    if (panelMode !== 'rotation' || !rotationTarget) return null
+    const { reg, date } = rotationTarget
+    const regInfo = registrations.find(r => r.registration === reg)
+    const icao = regInfo?.aircraft_types?.icao_type || 'UNKN'
+    const cabin = regInfo ? getCabinString(regInfo) : ''
+
     const dayFlights = assignedFlights
-      .filter((f) => f.aircraftTypeIcao === icao && formatISO(f.date) === dateStr)
+      .filter(f => {
+        const fReg = f.aircraftReg || f.assignedReg
+        return fReg === reg && formatISO(f.date) === date
+      })
       .sort((a, b) => a.stdMinutes - b.stdMinutes)
 
-    // Build rotation with TAT info and route block boundaries
+    const hasDbAssigned = dayFlights.some(f => !!f.aircraftReg)
+    const hasAutoAssigned = dayFlights.some(f => !f.aircraftReg)
+
     const rotation: RotationFlight[] = dayFlights.map((f, i) => {
       let tatToNext: TatInfo | null = null
       if (i < dayFlights.length - 1) {
         tatToNext = calcTat(f, dayFlights[i + 1])
       }
-      // Mark route block boundaries: first flight, or routeId differs from previous
       const routeBlockStart = i === 0 || !f.routeId || f.routeId !== dayFlights[i - 1].routeId
       return { ...f, tatToNext, routeBlockStart }
     })
 
-    // Check if any flight in the rotation is auto-assigned (not DB-assigned)
-    const hasAutoAssigned = rotation.some(f => !f.aircraftReg)
-
-    // Detect conflicts — only between route blocks, not within
-    // Only flag conflicts between DB-assigned flight pairs
     const conflicts: ConflictInfo[] = []
     for (let i = 0; i < rotation.length - 1; i++) {
       const curr = rotation[i]
       const next = rotation[i + 1]
       const sameRoute = curr.routeId && next.routeId && curr.routeId === next.routeId
       const bothDbAssigned = !!curr.aircraftReg && !!next.aircraftReg
-
-      // Only report conflicts between DB-assigned pairs
       if (!bothDbAssigned) continue
-
-      // Time overlap: next STD < current STA (always flag, even within route)
       if (next.stdMinutes < curr.staMinutes) {
-        conflicts.push({
-          type: 'overlap',
-          flightA: curr,
-          flightB: next,
-          detail: `${stripFlightPrefix(curr.flightNumber)} (STA ${curr.staLocal}) overlaps with ${stripFlightPrefix(next.flightNumber)} (STD ${next.stdLocal})`,
-        })
+        conflicts.push({ type: 'overlap', flightA: curr, flightB: next, detail: `${stripFlightPrefix(curr.flightNumber)} (STA ${curr.staLocal}) overlaps with ${stripFlightPrefix(next.flightNumber)} (STD ${next.stdLocal})` })
       } else if (!sameRoute) {
-        // Station mismatch — only between different routes/standalone flights
         if (curr.arrStation !== next.depStation) {
-          conflicts.push({
-            type: 'station_mismatch',
-            flightA: curr,
-            flightB: next,
-            detail: `${curr.arrStation} ≠ ${next.depStation}: ${stripFlightPrefix(curr.flightNumber)} arrives ${curr.arrStation} but ${stripFlightPrefix(next.flightNumber)} departs ${next.depStation}`,
-          })
+          conflicts.push({ type: 'station_mismatch', flightA: curr, flightB: next, detail: `${curr.arrStation} ≠ ${next.depStation}: ${stripFlightPrefix(curr.flightNumber)} arrives ${curr.arrStation} but ${stripFlightPrefix(next.flightNumber)} departs ${next.depStation}` })
         }
-
-        // Insufficient TAT — only between different routes/standalone flights
         if (curr.tatToNext && !curr.tatToNext.ok) {
-          conflicts.push({
-            type: 'insufficient_tat',
-            flightA: curr,
-            flightB: next,
-            detail: `${curr.tatToNext.gapMinutes}min gap < ${curr.tatToNext.minTat}min minimum between ${stripFlightPrefix(curr.flightNumber)} and ${stripFlightPrefix(next.flightNumber)}`,
-          })
+          conflicts.push({ type: 'insufficient_tat', flightA: curr, flightB: next, detail: `${curr.tatToNext.gapMinutes}min gap < ${curr.tatToNext.minTat}min minimum between ${stripFlightPrefix(curr.flightNumber)} and ${stripFlightPrefix(next.flightNumber)}` })
         }
       }
     }
 
-    // Daily utilization
     const totalBlock = dayFlights.reduce((s, f) => s + f.blockMinutes, 0)
     const acTypeInfo = icao !== 'UNKN' ? acTypeByIcao.get(icao) : undefined
     const categoryDefault = acTypeInfo?.category === 'widebody' ? 14 : acTypeInfo?.category === 'regional' ? 10 : 12
     const targetHours = (ganttSettings.utilizationTargets ?? {})[icao] ?? categoryDefault
-    const utilPct = Math.round((totalBlock / 60 / targetHours) * 100)
+    const utilPct = totalBlock > 0 ? Math.round((totalBlock / 60 / targetHours) * 100) : 0
 
+    const displayDate = new Date(date + 'T00:00:00')
     return {
-      regCode,
+      reg,
+      date,
       icao,
       cabin,
-      homeBase,
       rotation,
       conflicts,
+      hasDbAssigned,
       hasAutoAssigned,
       totalBlock,
       flightCount: dayFlights.length,
       targetHours,
       utilPct,
-      dateStr: selectedFlight.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+      dateStr: displayDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFlight, assignedFlights, registrations, acTypeByIcao, ganttSettings.utilizationTargets, ganttSettings.tatOverrides, ganttSettings.display])
+  }, [panelMode, rotationTarget, assignedFlights, registrations, acTypeByIcao, ganttSettings.utilizationTargets, ganttSettings.tatOverrides])
 
   // ─── Day panel data (day-stats mode) ─────────────────────────────
   const dayPanelData = useMemo(() => {
@@ -1674,9 +1900,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const handleBarClick = (id: string, e: React.MouseEvent) => {
     setSelectedAircraftRow(null)
     setContextMenu(null)
-    // Switch back to rotation panel mode when clicking a flight bar
-    setPanelMode('rotation')
+    setPanelMode('flight')
     setSelectedDays(new Set())
+    setPanelAircraftReg(null)
+    setRotationTarget(null)
     if (e.shiftKey || e.ctrlKey || e.metaKey) {
       // Toggle: add or remove from selection
       setSelectedFlights(prev => {
@@ -2442,7 +2669,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           if (to < from) { from = periodTo; to = periodFrom; setPeriodFrom(from); setPeriodTo(to) }
           const totalDays = diffDays(parseDate(from), parseDate(to)) + 1
           setStartDate(parseDate(from))
-          setZoomLevel(findBestZoom(totalDays))
+          setZoomLevel(totalDays > 7 ? '7D' : findBestZoom(totalDays))
           setCommittedFrom(from)
           setCommittedTo(to)
           setPeriodCommitted(true)
@@ -2459,14 +2686,23 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         {periodDirty ? 'Go ↻' : 'Go'}
       </button>
       <button
-        onClick={() => setOptimizerOpen(true)}
-        className="transition-all duration-200 hover:bg-[rgba(153,27,27,0.06)]"
-        style={{
-          height: s(26), padding: `0 ${s(12)}px`, fontSize: s(10), fontWeight: 600, borderRadius: s(8),
-          border: '1.5px solid #991B1B', background: 'transparent', color: '#991B1B', marginLeft: s(4),
-        }}
+        onClick={() => setSettingsPanelOpen(v => !v)}
+        className={`rounded-md transition-all duration-200 ${settingsPanelOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
+        style={{ padding: s(6), width: s(26), height: s(26) }}
+        title="Gantt Settings"
       >
-        ✈ Optimizer
+        <Settings2 style={{ width: s(14), height: s(14) }} />
+      </button>
+      <button
+        onClick={toggleFullscreen}
+        className="flex items-center justify-center border border-border/60 text-muted-foreground hover:bg-muted transition-all duration-200"
+        style={{ width: s(26), height: s(26), borderRadius: s(7) }}
+        title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+      >
+        {isFullscreen
+          ? <Minimize2 style={{ width: s(14), height: s(14) }} />
+          : <Maximize2 style={{ width: s(14), height: s(14) }} />
+        }
       </button>
     </div>
   )
@@ -2493,6 +2729,28 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             <p className="text-muted-foreground mt-1" style={{ fontSize: 11 }}>Choose a date range above and click Go to load the Gantt chart</p>
           </div>
         </div>
+        <GanttSettingsPanel
+          open={settingsPanelOpen}
+          onClose={() => setSettingsPanelOpen(false)}
+          settings={ganttSettings}
+          aircraftTypes={aircraftTypes}
+          airports={airports}
+          serviceTypes={serviceTypes}
+          saveStatus={saveStatus}
+          fleetPreview={fleetPreview}
+          onUpdateDisplay={updateDisplay}
+          onUpdateColorAssignment={updateColorAssignment}
+          onUpdateColorAcType={updateColorAcType}
+          onUpdateColorServiceType={updateColorServiceType}
+          onUpdateTooltip={updateTooltip}
+          onUpdateSettings={updateGanttSettings}
+          onUpdateUtilTarget={updateUtilTarget}
+          onResetUtilTarget={resetUtilTarget}
+          onUpdateTatOverride={updateTatOverride}
+          onResetTatOverride={resetTatOverride}
+          onResetAll={resetAllSettings}
+          container={dialogContainer}
+        />
       </div>
     )
   }
@@ -2509,13 +2767,23 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         className="shrink-0 glass border-b z-20 space-y-2 transition-all duration-200 ease-out"
         style={{ padding: `${s(8)}px ${s(16)}px` }}
       >
-        {/* Row 1: Title + Navigation + Zoom */}
+        {/* Row 1: Period selector + Optimizer | Zoom pills (far right) */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             {periodSelector}
+            <button
+              onClick={() => setOptimizerOpen(true)}
+              className="transition-all duration-200 hover:bg-[rgba(153,27,27,0.06)]"
+              style={{
+                height: s(26), padding: `0 ${s(12)}px`, fontSize: s(10), fontWeight: 600, borderRadius: s(8),
+                border: '1.5px solid #991B1B', background: 'transparent', color: '#991B1B',
+              }}
+            >
+              ✈ Optimizer
+            </button>
           </div>
 
-          {/* Zoom pills + Row height zoom + Settings gear */}
+          {/* Zoom pills + Row height zoom (far right) */}
           <div className="flex items-center gap-2">
             <div className="flex items-center bg-muted/50 rounded-lg transition-all duration-200" style={{ gap: s(2), padding: s(2) }}>
               {ZOOM_GROUP_DAYS.map((z) => {
@@ -2580,25 +2848,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 <span className="font-bold leading-none" style={{ fontSize: s(12) }}>+</span>
               </button>
             </div>
-            <button
-              onClick={() => setSettingsPanelOpen(v => !v)}
-              className={`rounded-md transition-all duration-200 ${settingsPanelOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
-              style={{ padding: s(6), width: s(26), height: s(26) }}
-              title="Gantt Settings"
-            >
-              <Settings2 style={{ width: s(14), height: s(14) }} />
-            </button>
-            <button
-              onClick={toggleFullscreen}
-              className="flex items-center justify-center border border-border/60 text-muted-foreground hover:bg-muted transition-all duration-200"
-              style={{ width: s(26), height: s(26), borderRadius: s(7) }}
-              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-            >
-              {isFullscreen
-                ? <Minimize2 style={{ width: s(14), height: s(14) }} />
-                : <Maximize2 style={{ width: s(14), height: s(14) }} />
-              }
-            </button>
           </div>
         </div>
 
@@ -2668,7 +2917,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       </div>
 
       {/* ── BODY ───────────────────────────────────────────────────── */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 relative">
         {/* ── LEFT PANEL (Aircraft Registry) ─────────────────────── */}
         <div className="w-[140px] shrink-0 glass border-r flex flex-col overflow-hidden">
           {/* Aligned with timeline header */}
@@ -2791,8 +3040,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
                 const isSelectedAcRow = selectedAircraftRow === row.reg.registration
                 const isFlashRow = flashReg === row.reg.registration
+                const isLightText = regText === '#E5E7EB' || regText === '#FFFFFF'
                 const acRowSelectStyle: React.CSSProperties = isSelectedAcRow
-                  ? { borderLeft: '3px solid #991B1B', background: isDark ? 'rgba(153, 27, 27, 0.10)' : 'rgba(153, 27, 27, 0.06)' }
+                  ? { borderLeft: '3px solid #991B1B', background: isLightText ? '#2a1215' : '#fef2f2', color: isLightText ? '#fca5a5' : '#991B1B' }
                   : isFlashRow
                   ? { background: isDark ? 'rgba(153, 27, 27, 0.12)' : 'rgba(153, 27, 27, 0.10)', transition: 'background 0.1s ease' }
                   : {}
@@ -2805,7 +3055,19 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                     style={{ ...regStyle, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', ...acHighlightStyle, ...acRowSelectStyle }}
                     onClick={() => {
                       if (clipboard) { setClipboardTargetReg(row.reg.registration); return }
-                      setSelectedAircraftRow(prev => prev === row.reg.registration ? null : row.reg.registration)
+                      if (panelMode === 'aircraft' && panelAircraftReg === row.reg.registration) {
+                        setPanelAircraftReg(null)
+                        setPanelMode('flight')
+                        setSelectedAircraftRow(null)
+                      } else {
+                        setPanelAircraftReg(row.reg.registration)
+                        setPanelMode('aircraft')
+                        setPanelVisible(true)
+                        setSelectedAircraftRow(row.reg.registration)
+                        setSelectedFlights(new Set())
+                        setRotationTarget(null)
+                        setSelectedDays(new Set())
+                      }
                     }}
                   >
                     <span className="font-medium truncate leading-tight" style={{ fontSize: REG_FONT }}>
@@ -3176,13 +3438,27 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
               const rect = bodyRef.current!.getBoundingClientRect()
               const x = e.clientX - rect.left + bodyRef.current!.scrollLeft
               const y = e.clientY - rect.top + bodyRef.current!.scrollTop
+
+              // Detect which row and date for potential rotation panel
+              if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                const clickedRow = rowLayout.find(rl => rl.type === 'aircraft' && rl.registration && y >= rl.yTop && y < rl.yTop + rl.height)
+                if (clickedRow && clickedRow.registration) {
+                  const hoursFromStart = x / pixelsPerHour
+                  const daysFromStart = Math.floor(hoursFromStart / 24)
+                  const clickedDate = formatISO(addDays(startDate, daysFromStart))
+                  // Store for potential rotation open (confirmed in onMouseUp if no drag)
+                  ;(bodyRef.current as any).__pendingRotation = { reg: clickedRow.registration, date: clickedDate }
+                } else {
+                  ;(bodyRef.current as any).__pendingRotation = null
+                }
+              }
+
               setRubberBand({ startX: x, startY: y, currentX: x, currentY: y })
               if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
                 setSelectedFlights(new Set())
-                // Deselect days when clicking empty gantt area
                 if (selectedDays.size > 0) {
                   setSelectedDays(new Set())
-                  setPanelMode('rotation')
+                  setPanelMode('flight')
                 }
               }
               setContextMenu(null)
@@ -3206,7 +3482,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
               const dx = Math.abs(rubberBand.currentX - rubberBand.startX)
               const dy = Math.abs(rubberBand.currentY - rubberBand.startY)
               if (dx > 5 || dy > 5) {
-                // Find intersecting flights
+                // Rubber band drag — select intersecting flights
                 const rx1 = Math.min(rubberBand.startX, rubberBand.currentX)
                 const rx2 = Math.max(rubberBand.startX, rubberBand.currentX)
                 const ry1 = Math.min(rubberBand.startY, rubberBand.currentY)
@@ -3234,7 +3510,26 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   }
                   yOff += rh
                 }
+                if (newSelection.size > 0) {
+                  setPanelMode('flight')
+                  setPanelAircraftReg(null)
+                  setRotationTarget(null)
+                }
                 setSelectedFlights(newSelection)
+                ;(bodyRef.current as any).__pendingRotation = null
+              } else {
+                // Single click on empty row area → rotation panel
+                const pending = (bodyRef.current as any)?.__pendingRotation
+                if (pending) {
+                  setRotationTarget({ reg: pending.reg, date: pending.date })
+                  setPanelMode('rotation')
+                  setPanelVisible(true)
+                  setSelectedFlights(new Set())
+                  setPanelAircraftReg(null)
+                  setSelectedAircraftRow(pending.reg)
+                  setSelectedDays(new Set())
+                }
+                ;(bodyRef.current as any).__pendingRotation = null
               }
               setRubberBand(null)
             }}
@@ -3768,11 +4063,19 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           </div>
         </div>
 
-        {/* ── RIGHT PANEL (Rotation Panel — collapsible) ────────── */}
+        {/* ── RIGHT PANEL (Rotation Panel — overlay, collapsible) ── */}
         <div
-          className="shrink-0 glass border-l flex flex-col overflow-hidden transition-all duration-200 ease-out relative"
-          style={{ width: panelVisible ? 280 : 0, opacity: panelVisible ? 1 : 0, borderLeftWidth: panelVisible ? 1 : 0 }}
+          className="absolute top-0 right-0 bottom-0 bg-background border-l shadow-lg flex flex-col overflow-hidden z-30"
+          style={{
+            width: 280,
+            transform: panelVisible ? 'translateX(0)' : 'translateX(100%)',
+            opacity: panelVisible ? 1 : 0,
+            transition: 'transform 400ms cubic-bezier(0.16, 1, 0.3, 1), opacity 300ms ease',
+            willChange: 'transform, opacity',
+            pointerEvents: panelVisible ? 'auto' as const : 'none' as const,
+          }}
         >
+          {panelMounted && (<>
           {/* Flight Search Overlay */}
           {flightSearchOpen && (
             <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
@@ -4063,7 +4366,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                     <Pin className={`h-3.5 w-3.5 transition-all duration-150 ${panelPinned ? 'text-primary fill-primary -rotate-45' : 'text-muted-foreground'}`} />
                   </button>
                   <button
-                    onClick={() => { setSelectedDays(new Set()); setPanelMode('rotation') }}
+                    onClick={() => { setSelectedDays(new Set()); setPanelMode('flight') }}
                     className="p-1 rounded-md hover:bg-muted transition-colors"
                   >
                     <X className="h-3.5 w-3.5 text-muted-foreground" />
@@ -4266,17 +4569,19 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 })()}
               </div>
             </>
-          ) : selectedFlight && panelData ? (
+          ) : panelMode === 'flight' && flightLinksPanelData ? (
             <>
-              {/* Panel Header */}
+              {/* ── FLIGHT LINKS PANEL (multi-select same row) ──────── */}
               <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">
-                    {panelData.regCode} Rotation
+                  <div className="text-[13px] font-semibold truncate">Flight Links</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                    {flightLinksPanelData.legs} flights · {flightLinksPanelData.reg || flightLinksPanelData.icao} · {
+                      flightLinksPanelData.singleDate
+                        ? new Date(flightLinksPanelData.firstDate + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                        : `${new Date(flightLinksPanelData.firstDate + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${new Date(flightLinksPanelData.lastDate + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
+                    }
                   </div>
-                  <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground mt-0.5">
-                    {panelData.icao}
-                  </span>
                 </div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   <button
@@ -4295,190 +4600,562 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 </div>
               </div>
 
-              {/* Panel Body (scrollable) */}
               <div className="flex-1 overflow-y-auto custom-scrollbar">
-                <div className="p-3 space-y-3">
+                <div className="p-3 space-y-4">
 
-                  {/* ── Section 1: Selected Flight Card ── */}
-                  <div className="rounded-lg border border-border/50 p-2.5">
-                    <div className="flex items-center justify-between">
-                      <div className="text-center">
-                        <div className="text-sm font-bold">{selectedFlight.depStation}</div>
-                        <div className="text-[9px] text-muted-foreground">{selectedFlight.stdLocal}</div>
-                      </div>
-                      <div className="flex-1 flex items-center justify-center px-2">
-                        <div className="flex-1 h-px bg-border" />
-                        <span className="px-1.5 text-[9px] text-muted-foreground">→</span>
-                        <div className="flex-1 h-px bg-border" />
-                      </div>
-                      <div className="text-center">
-                        <div className="text-sm font-bold">{selectedFlight.arrStation}</div>
-                        <div className="text-[9px] text-muted-foreground">{selectedFlight.staLocal}</div>
-                      </div>
+                  {/* ── LINKS section ── */}
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.05em' }} className="text-muted-foreground mb-2">
+                      Links
                     </div>
-                    <div className="text-center text-[9px] text-muted-foreground mt-1">
-                      {formatBlockTime(selectedFlight.blockMinutes)}
-                    </div>
-                    <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-border/30 text-[9px] text-muted-foreground">
-                      <span>{panelData.icao} · {panelData.regCode}</span>
-                      <span>{panelData.cabin || ''}</span>
-                    </div>
+
+                    {flightLinksPanelData.flights.map((f, i) => {
+                      const isPrimary = f.id === selectedFlightId
+                      return (
+                        <Fragment key={f.id}>
+                          {/* Date divider for multi-date */}
+                          {!flightLinksPanelData.singleDate && (i === 0 || formatISO(f.date) !== formatISO(flightLinksPanelData.flights[i - 1].date)) && (
+                            <div className="flex items-center gap-2 my-2">
+                              <div className="h-px flex-1 bg-border" />
+                              <span style={{ fontSize: 9, fontWeight: 700 }} className="text-muted-foreground uppercase">
+                                {f.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                              </span>
+                              <div className="h-px flex-1 bg-border" />
+                            </div>
+                          )}
+
+                          {/* Flight card */}
+                          <div
+                            className="rounded-lg border p-2 cursor-pointer hover:bg-muted/30 transition-colors"
+                            style={{
+                              borderLeftWidth: isPrimary ? 2 : 1,
+                              borderLeftColor: isPrimary ? '#991B1B' : undefined,
+                            }}
+                            onClick={() => setSelectedFlights(new Set([f.id]))}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <span style={{ fontSize: 11, fontWeight: 700 }}>{stripFlightPrefix(f.flightNumber)}</span>
+                                <span style={{ fontSize: 11 }} className="text-foreground">{f.depStation} → {f.arrStation}</span>
+                              </div>
+                              <span style={{ fontSize: 10 }} className="text-muted-foreground shrink-0">{f.stdLocal} – {f.staLocal}</span>
+                            </div>
+                            <div className="text-right" style={{ fontSize: 10 }}>
+                              <span className="text-muted-foreground">{formatBlockTime(f.blockMinutes)}</span>
+                            </div>
+                          </div>
+
+                          {/* TAT connector */}
+                          {i < flightLinksPanelData.links.length && (() => {
+                            const link = flightLinksPanelData.links[i]
+                            const statusColor =
+                              link.status === 'ok' ? '#22C55E' :
+                              link.status === 'tight' ? '#F59E0B' :
+                              '#EF4444'
+                            const statusIcon =
+                              link.status === 'ok' ? '✓' :
+                              link.status === 'tight' ? '⚠' : '✗'
+
+                            return (
+                              <div className="flex items-center gap-2 py-1" style={{ paddingLeft: 14 }}>
+                                <div style={{
+                                  width: 0,
+                                  height: 16,
+                                  borderLeft: `1px dashed ${link.stationMismatch ? '#EF4444' : 'hsl(var(--border))'}`,
+                                }} />
+                                <span style={{ fontSize: 10, color: statusColor }}>
+                                  {link.stationMismatch
+                                    ? `⚠ ${link.from.arrStation} ≠ ${link.to.depStation}  Station mismatch`
+                                    : `${link.gapMinutes}m ground · min ${link.minTat}m  ${statusIcon}`
+                                  }
+                                </span>
+                              </div>
+                            )
+                          })()}
+                        </Fragment>
+                      )
+                    })}
                   </div>
 
-                  {/* ── Section 2: Daily Rotation ── */}
+                  {/* ── STATION SEQUENCE section ── */}
                   <div>
-                    <div className="text-[10px] font-medium text-muted-foreground mb-1.5">
-                      Daily Rotation · {panelData.dateStr}
+                    <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.05em' }} className="text-muted-foreground mb-2">
+                      Station Sequence
                     </div>
-                    {panelData.hasAutoAssigned && (
-                      <div className="text-[10px] italic text-muted-foreground/60 mb-1.5">
-                        Auto-assigned rotation preview
-                      </div>
-                    )}
-                    <div className="space-y-0">
-                      {panelData.rotation.map((rf, i) => {
-                        const isSel = rf.id === selectedFlight.id
-                        const num = stripFlightPrefix(rf.flightNumber)
-                        const isPub = rf.status === 'published'
-                        const rfFin = !isPub && rf.finalized
-                        const rfWip = !isPub && !rf.finalized
-                        const nextFlight = i < panelData.rotation.length - 1 ? panelData.rotation[i + 1] : null
-                        const sameRouteAsNext = nextFlight && rf.routeId && nextFlight.routeId && rf.routeId === nextFlight.routeId
+                    <div className="flex items-center flex-wrap gap-1" style={{ fontSize: 11 }}>
+                      {flightLinksPanelData.stations.map((station, i) => {
+                        const isBreakBefore = i > 0 && flightLinksPanelData.stationBreaks.has(i - 1)
                         return (
-                          <div key={rf.id}>
-                            {/* Route block separator */}
-                            {rf.routeBlockStart && i > 0 && (
-                              <div className="mx-2 my-1.5 border-t border-border/40" />
+                          <Fragment key={i}>
+                            {i > 0 && (
+                              <span style={{ fontSize: 10, color: isBreakBefore ? '#EF4444' : undefined }} className={isBreakBefore ? '' : 'text-muted-foreground'}>
+                                {isBreakBefore ? '✗' : '→'}
+                              </span>
                             )}
-                            {/* Flight row */}
-                            <div
-                              className={`flex items-center justify-between py-1.5 px-2 rounded-md cursor-pointer transition-colors ${
-                                isSel
-                                  ? 'bg-[#fef2f2] dark:bg-[#1e1015]'
-                                  : 'hover:bg-muted/30'
-                              }`}
-                              style={isSel ? { borderLeft: '3px solid #991b1b' } : { borderLeft: '3px solid transparent' }}
-                              onClick={() => setSelectedFlights(new Set([rf.id]))}
-                            >
-                              <div className="min-w-0">
-                                <span className="text-[11px] font-semibold">{num}</span>
-                                <span className="text-[10px] text-muted-foreground ml-1">
-                                  {rf.depStation}→{rf.arrStation}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <span className="text-[9px] text-muted-foreground">
-                                  {rf.stdLocal}-{rf.staLocal}
-                                </span>
-                                <span
-                                  className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold"
-                                  style={{
-                                    background: isPub ? 'rgba(59,130,246,0.15)' : rfFin ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
-                                    color: isPub ? '#3b82f6' : rfFin ? '#10B981' : '#F59E0B',
-                                  }}
-                                >
-                                  {isPub ? 'P' : rfFin ? 'F' : 'W'}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* TAT indicator between flights */}
-                            {rf.tatToNext && nextFlight && (() => {
-                              const bothDbAssigned = !!rf.aircraftReg && !!nextFlight.aircraftReg
-                              // Station mismatch — only warn between DB-assigned different routes
-                              if (bothDbAssigned && !sameRouteAsNext && rf.arrStation !== nextFlight.depStation) {
-                                return (
-                                  <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-amber-500/10 text-amber-700 dark:text-amber-400">
-                                    <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
-                                    Station mismatch: {rf.arrStation} ≠ {nextFlight.depStation}
-                                  </div>
-                                )
-                              }
-                              // Insufficient TAT — only warn between DB-assigned different routes
-                              if (bothDbAssigned && !sameRouteAsNext && !rf.tatToNext!.ok) {
-                                return (
-                                  <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-red-500/10 text-red-700 dark:text-red-400">
-                                    <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
-                                    TAT {rf.tatToNext!.gapMinutes}min &lt; min {rf.tatToNext!.minTat}min
-                                  </div>
-                                )
-                              }
-                              // Informational TAT duration (always shown, no warning styling)
-                              return (
-                                <div className="mx-2 my-0.5 text-[8px] text-muted-foreground/60 text-center">
-                                  TAT: {rf.tatToNext!.gapMinutes}min
-                                </div>
-                              )
-                            })()}
-
-                            {/* Station mismatch without TAT (when calcTat returns null but stations differ) */}
-                            {!rf.tatToNext && nextFlight && !sameRouteAsNext && (() => {
-                              const bothDbAssigned = !!rf.aircraftReg && !!nextFlight.aircraftReg
-                              if (bothDbAssigned && rf.arrStation !== nextFlight.depStation) {
-                                return (
-                                  <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-amber-500/10 text-amber-700 dark:text-amber-400">
-                                    <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
-                                    Station mismatch: {rf.arrStation} ≠ {nextFlight.depStation}
-                                  </div>
-                                )
-                              }
-                              // Gap info (informational)
-                              const gap = nextFlight.stdMinutes - rf.staMinutes
-                              if (gap > 0) {
-                                return (
-                                  <div className="mx-2 my-0.5 text-[8px] text-muted-foreground/60 text-center">
-                                    TAT: {gap}min
-                                  </div>
-                                )
-                              }
-                              return null
-                            })()}
-                          </div>
+                            <span style={{ fontWeight: 700, color: isBreakBefore ? '#EF4444' : undefined }}>
+                              {station}
+                            </span>
+                          </Fragment>
                         )
                       })}
+                      {flightLinksPanelData.isCircular && (
+                        <span style={{ fontSize: 10, color: '#22C55E', marginLeft: 2 }}>↻</span>
+                      )}
                     </div>
                   </div>
 
-                  {/* ── Section 3: Daily Utilization ── */}
+                  {/* ── SUMMARY section ── */}
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.05em' }} className="text-muted-foreground mb-2">
+                      Summary
+                    </div>
+                    <div className="rounded-lg border border-border/50 p-2.5 space-y-1.5">
+                      {([
+                        ['Block time', formatBlockTime(flightLinksPanelData.totalBlockMinutes)],
+                        ['Ground time', `${formatBlockTime(flightLinksPanelData.totalGroundMinutes)}${flightLinksPanelData.mismatchCount > 0 ? ` (excl. ${flightLinksPanelData.mismatchCount} mismatch)` : ''}`],
+                        ['Elapsed', `${formatBlockTime(flightLinksPanelData.elapsedMinutes)} (${flightLinksPanelData.firstStdLocal} – ${flightLinksPanelData.lastStaLocal})`],
+                        ['Legs', String(flightLinksPanelData.legs)],
+                        ['Domestic', String(flightLinksPanelData.domesticCount)],
+                        ['International', String(flightLinksPanelData.internationalCount)],
+                      ] as const).map(([label, value]) => (
+                        <div key={label} className="flex items-center justify-between">
+                          <span style={{ fontSize: 10 }} className="text-muted-foreground">{label}</span>
+                          <span style={{ fontSize: 11, fontWeight: 600 }}>{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            </>
+
+          ) : panelMode === 'flight' && flightPanelData ? (
+            <>
+              {/* ── FLIGHT PANEL ─────────────────────────────────────── */}
+              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold truncate">
+                    {flightPanelData.mode === 'single'
+                      ? stripFlightPrefix(flightPanelData.flight.flightNumber)
+                      : `${flightPanelData.count} Flights Selected`
+                    }
+                  </div>
+                  {flightPanelData.mode === 'single' && (
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground">
+                        {flightPanelData.icao}
+                      </span>
+                      {flightPanelData.hasDbAssignment && (
+                        <span className="text-[9px] text-muted-foreground">{flightPanelData.assignedReg}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    onClick={() => setPanelPinned(p => !p)}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                    title={panelPinned ? 'Unpin panel' : 'Pin panel'}
+                  >
+                    <Pin className={`h-3.5 w-3.5 transition-all duration-150 ${panelPinned ? 'text-primary fill-primary -rotate-45' : 'text-muted-foreground'}`} />
+                  </button>
+                  <button
+                    onClick={() => { setSelectedFlights(new Set()); setPanelPinned(false) }}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="p-3 space-y-3">
+                  {flightPanelData.mode === 'single' ? (
+                    <>
+                      {/* Flight Card */}
+                      <div className="rounded-lg border border-border/50 p-2.5">
+                        <div className="flex items-center justify-between">
+                          <div className="text-center">
+                            <div className="text-sm font-bold">{flightPanelData.flight.depStation}</div>
+                            <div className="text-[9px] text-muted-foreground">{flightPanelData.flight.stdLocal}</div>
+                          </div>
+                          <div className="flex-1 flex items-center justify-center px-2">
+                            <div className="flex-1 h-px bg-border" />
+                            <span className="px-1.5 text-[9px] text-muted-foreground">→</span>
+                            <div className="flex-1 h-px bg-border" />
+                          </div>
+                          <div className="text-center">
+                            <div className="text-sm font-bold">{flightPanelData.flight.arrStation}</div>
+                            <div className="text-[9px] text-muted-foreground">{flightPanelData.flight.staLocal}</div>
+                          </div>
+                        </div>
+                        <div className="text-center text-[9px] text-muted-foreground mt-1">
+                          {formatBlockTime(flightPanelData.flight.blockMinutes)}
+                        </div>
+                        <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-border/30 text-[9px] text-muted-foreground">
+                          <span>{flightPanelData.icao}{flightPanelData.hasDbAssignment ? ` · ${flightPanelData.assignedReg}` : ''}</span>
+                          <span>{flightPanelData.cabin || ''}</span>
+                        </div>
+                      </div>
+
+                      {/* Daily Utilization (only if tail assigned) */}
+                      {flightPanelData.hasDbAssignment && (
+                        <div>
+                          <div className="text-[10px] font-medium text-muted-foreground mb-1.5">
+                            Daily Utilization · {flightPanelData.assignedReg}
+                          </div>
+                          <div className="rounded-lg border border-border/50 p-2.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span>{flightPanelData.flightCount} flights</span>
+                              <span className="font-semibold">{formatBlockTime(flightPanelData.totalBlock)} block</span>
+                            </div>
+                            <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all"
+                                style={{
+                                  width: `${Math.min(100, flightPanelData.utilPct)}%`,
+                                  background:
+                                    flightPanelData.utilPct >= 85
+                                      ? '#22c55e'
+                                      : flightPanelData.utilPct >= 60
+                                        ? '#f59e0b'
+                                        : '#ef4444',
+                                }}
+                              />
+                            </div>
+                            <div className="text-[9px] text-muted-foreground mt-1">
+                              {flightPanelData.utilPct}% of {flightPanelData.targetHours}h target
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Crew Placeholder */}
+                      <div className="rounded-lg border border-dashed border-border/50 p-3 text-center">
+                        <div className="text-[10px] font-medium text-muted-foreground mb-0.5">Crew</div>
+                        <div className="text-[9px] text-muted-foreground/60 italic">Coming soon</div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Multi-flight summary */}
+                      <div className="rounded-lg border border-border/50 p-2.5 space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-semibold">{flightPanelData.count} flights</span>
+                          <span className="font-semibold">{formatBlockTime(flightPanelData.totalBlock)} block</span>
+                        </div>
+                        <div className="text-[9px] text-muted-foreground">
+                          {flightPanelData.dateCount} date{flightPanelData.dateCount !== 1 ? 's' : ''} · {flightPanelData.regCount} aircraft
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Panel Footer */}
+              <div className="shrink-0 p-2.5 border-t space-y-1.5">
+                <button className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[10px] font-medium rounded-md border border-border hover:bg-muted transition-colors">
+                  <ExternalLink className="h-3 w-3" />
+                  Open in Builder
+                </button>
+                <button className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[10px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+                  <PenLine className="h-3 w-3" />
+                  Edit Flight
+                </button>
+              </div>
+            </>
+
+          ) : panelMode === 'aircraft' && aircraftPanelData ? (
+            <>
+              {/* ── AIRCRAFT PANEL ───────────────────────────────────── */}
+              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold truncate">{aircraftPanelData.registration}</div>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground">
+                      {aircraftPanelData.icao}
+                    </span>
+                    {aircraftPanelData.cabin && (
+                      <span className="text-[9px] text-muted-foreground">{aircraftPanelData.cabin}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    onClick={() => setPanelPinned(p => !p)}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                    title={panelPinned ? 'Unpin panel' : 'Pin panel'}
+                  >
+                    <Pin className={`h-3.5 w-3.5 transition-all duration-150 ${panelPinned ? 'text-primary fill-primary -rotate-45' : 'text-muted-foreground'}`} />
+                  </button>
+                  <button
+                    onClick={() => { setPanelAircraftReg(null); setPanelMode('flight'); setSelectedAircraftRow(null) }}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="p-3 space-y-3">
+                  {/* Aircraft Info Card */}
+                  <div className="rounded-lg border border-border/50 p-2.5 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-muted-foreground">Type</span>
+                      <span className="font-semibold">{aircraftPanelData.icao}</span>
+                    </div>
+                    {aircraftPanelData.cabin && (
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">Config</span>
+                        <span className="font-semibold">{aircraftPanelData.cabin}</span>
+                      </div>
+                    )}
+                    {aircraftPanelData.homeBase && (
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">Home Base</span>
+                        <span className="font-semibold">{aircraftPanelData.homeBase}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Period Summary */}
+                  <div>
+                    <div className="text-[10px] font-medium text-muted-foreground mb-1.5">Period Summary</div>
+                    <div className="rounded-lg border border-border/50 p-2.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span>{aircraftPanelData.flightCount} flights</span>
+                        <span className="font-semibold">{formatBlockTime(aircraftPanelData.totalBlock)} block</span>
+                      </div>
+                      <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-primary transition-all"
+                          style={{ width: `${Math.min(100, Math.round(aircraftPanelData.activeDays / aircraftPanelData.periodDays * 100))}%` }}
+                        />
+                      </div>
+                      <div className="text-[9px] text-muted-foreground mt-1">
+                        {aircraftPanelData.activeDays}/{aircraftPanelData.periodDays} days active
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Overnight Stations */}
+                  {aircraftPanelData.overnightStations.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-medium text-muted-foreground mb-1.5">Overnight Stations</div>
+                      <div className="space-y-1">
+                        {aircraftPanelData.overnightStations.slice(0, 8).map(st => {
+                          const maxCount = aircraftPanelData.overnightStations[0].count
+                          const pct = Math.round(st.count / maxCount * 100)
+                          return (
+                            <div key={st.station} className="flex items-center gap-2">
+                              <span className="text-[10px] font-semibold w-8">{st.station}</span>
+                              <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                                <div className="h-full rounded-full bg-primary/60" style={{ width: `${pct}%` }} />
+                              </div>
+                              <span className="text-[9px] text-muted-foreground w-4 text-right">{st.count}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Maintenance Placeholder */}
+                  <div className="rounded-lg border border-dashed border-border/50 p-3 text-center">
+                    <div className="text-[10px] font-medium text-muted-foreground mb-0.5">Maintenance</div>
+                    <div className="text-[9px] text-muted-foreground/60 italic">Coming soon</div>
+                  </div>
+                </div>
+              </div>
+            </>
+
+          ) : panelMode === 'rotation' && rotationPanelData ? (
+            <>
+              {/* ── ROTATION PANEL ───────────────────────────────────── */}
+              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold truncate">{rotationPanelData.reg}</div>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground">
+                      {rotationPanelData.icao}
+                    </span>
+                    <span className="text-[9px] text-muted-foreground">{rotationPanelData.dateStr}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    onClick={() => setPanelPinned(p => !p)}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                    title={panelPinned ? 'Unpin panel' : 'Pin panel'}
+                  >
+                    <Pin className={`h-3.5 w-3.5 transition-all duration-150 ${panelPinned ? 'text-primary fill-primary -rotate-45' : 'text-muted-foreground'}`} />
+                  </button>
+                  <button
+                    onClick={() => { setRotationTarget(null); setPanelMode('flight'); setSelectedAircraftRow(null) }}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="p-3 space-y-3">
+                  {/* Daily Utilization */}
                   <div>
                     <div className="text-[10px] font-medium text-muted-foreground mb-1.5">
-                      Daily Utilization
+                      Daily Utilization · {rotationPanelData.reg}
                     </div>
                     <div className="rounded-lg border border-border/50 p-2.5">
                       <div className="flex items-center justify-between text-[11px]">
-                        <span>{panelData.flightCount} flights</span>
-                        <span className="font-semibold">{formatBlockTime(panelData.totalBlock)} block</span>
+                        <span>{rotationPanelData.flightCount} flights</span>
+                        <span className="font-semibold">{formatBlockTime(rotationPanelData.totalBlock)} block</span>
                       </div>
-                      {/* Progress bar */}
                       <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
                         <div
                           className="h-full rounded-full transition-all"
                           style={{
-                            width: `${Math.min(100, panelData.utilPct)}%`,
+                            width: `${Math.min(100, rotationPanelData.utilPct)}%`,
                             background:
-                              panelData.utilPct >= 85
+                              rotationPanelData.utilPct >= 85
                                 ? '#22c55e'
-                                : panelData.utilPct >= 60
+                                : rotationPanelData.utilPct >= 60
                                   ? '#f59e0b'
                                   : '#ef4444',
                           }}
                         />
                       </div>
                       <div className="text-[9px] text-muted-foreground mt-1">
-                        {panelData.utilPct}% of {panelData.targetHours}h target
+                        {rotationPanelData.utilPct}% of {rotationPanelData.targetHours}h target
                       </div>
                     </div>
                   </div>
 
-                  {/* ── Section 4: Conflict Cards ── */}
-                  {(ganttSettings.display?.conflictIndicators ?? true) && panelData.conflicts.length > 0 && (
+                  {/* Rotation List */}
+                  {rotationPanelData.rotation.length > 0 ? (
+                    <div>
+                      <div className="text-[10px] font-medium text-muted-foreground mb-1.5">
+                        Daily Rotation · {rotationPanelData.dateStr}
+                      </div>
+                      {rotationPanelData.hasAutoAssigned && (
+                        <div className="text-[10px] italic text-muted-foreground/60 mb-1.5">
+                          Auto-assigned rotation preview
+                        </div>
+                      )}
+                      <div className="space-y-0">
+                        {rotationPanelData.rotation.map((rf, i) => {
+                          const isSel = selectedFlights.has(rf.id)
+                          const num = stripFlightPrefix(rf.flightNumber)
+                          const isPub = rf.status === 'published'
+                          const rfFin = !isPub && rf.finalized
+                          const nextFlight = i < rotationPanelData.rotation.length - 1 ? rotationPanelData.rotation[i + 1] : null
+                          const sameRouteAsNext = nextFlight && rf.routeId && nextFlight.routeId && rf.routeId === nextFlight.routeId
+                          return (
+                            <div key={rf.id}>
+                              {rf.routeBlockStart && i > 0 && (
+                                <div className="mx-2 my-1.5 border-t border-border/40" />
+                              )}
+                              <div
+                                className={`flex items-center justify-between py-1.5 px-2 rounded-md cursor-pointer transition-colors ${
+                                  isSel
+                                    ? 'bg-[#fef2f2] dark:bg-[#1e1015]'
+                                    : 'hover:bg-muted/30'
+                                }`}
+                                style={isSel ? { borderLeft: '3px solid #991b1b' } : { borderLeft: '3px solid transparent' }}
+                                onClick={() => { setSelectedFlights(new Set([rf.id])); setPanelMode('flight') }}
+                              >
+                                <div className="min-w-0">
+                                  <span className="text-[11px] font-semibold">{num}</span>
+                                  <span className="text-[10px] text-muted-foreground ml-1">
+                                    {rf.depStation}→{rf.arrStation}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className="text-[9px] text-muted-foreground">
+                                    {rf.stdLocal}-{rf.staLocal}
+                                  </span>
+                                  <span
+                                    className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold"
+                                    style={{
+                                      background: isPub ? 'rgba(59,130,246,0.15)' : rfFin ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
+                                      color: isPub ? '#3b82f6' : rfFin ? '#10B981' : '#F59E0B',
+                                    }}
+                                  >
+                                    {isPub ? 'P' : rfFin ? 'F' : 'W'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* TAT indicator */}
+                              {rf.tatToNext && nextFlight && (() => {
+                                const bothDbAssigned = !!rf.aircraftReg && !!nextFlight.aircraftReg
+                                if (bothDbAssigned && !sameRouteAsNext && rf.arrStation !== nextFlight.depStation) {
+                                  return (
+                                    <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-amber-500/10 text-amber-700 dark:text-amber-400">
+                                      <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
+                                      Station mismatch: {rf.arrStation} ≠ {nextFlight.depStation}
+                                    </div>
+                                  )
+                                }
+                                if (bothDbAssigned && !sameRouteAsNext && !rf.tatToNext!.ok) {
+                                  return (
+                                    <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-red-500/10 text-red-700 dark:text-red-400">
+                                      <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
+                                      TAT {rf.tatToNext!.gapMinutes}min &lt; min {rf.tatToNext!.minTat}min
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <div className="mx-2 my-0.5 text-[8px] text-muted-foreground/60 text-center">
+                                    TAT: {rf.tatToNext!.gapMinutes}min
+                                  </div>
+                                )
+                              })()}
+
+                              {!rf.tatToNext && nextFlight && !sameRouteAsNext && (() => {
+                                const bothDbAssigned = !!rf.aircraftReg && !!nextFlight.aircraftReg
+                                if (bothDbAssigned && rf.arrStation !== nextFlight.depStation) {
+                                  return (
+                                    <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-amber-500/10 text-amber-700 dark:text-amber-400">
+                                      <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
+                                      Station mismatch: {rf.arrStation} ≠ {nextFlight.depStation}
+                                    </div>
+                                  )
+                                }
+                                const gap = nextFlight.stdMinutes - rf.staMinutes
+                                if (gap > 0) {
+                                  return (
+                                    <div className="mx-2 my-0.5 text-[8px] text-muted-foreground/60 text-center">
+                                      TAT: {gap}min
+                                    </div>
+                                  )
+                                }
+                                return null
+                              })()}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border/50 p-3 text-center">
+                      <Info className="h-4 w-4 text-muted-foreground mx-auto mb-1.5" />
+                      <div className="text-[10px] text-muted-foreground">No flights on this day</div>
+                    </div>
+                  )}
+
+                  {/* Conflict Cards */}
+                  {(ganttSettings.display?.conflictIndicators ?? true) && rotationPanelData.conflicts.length > 0 && (
                     <div>
                       <div className="text-[10px] font-medium text-red-600 dark:text-red-400 mb-1.5 flex items-center gap-1">
                         <AlertTriangle className="h-3 w-3" />
-                        {panelData.conflicts.length} Issue{panelData.conflicts.length > 1 ? 's' : ''} Detected
+                        {rotationPanelData.conflicts.length} Issue{rotationPanelData.conflicts.length > 1 ? 's' : ''} Detected
                       </div>
                       <div className="space-y-2">
-                        {panelData.conflicts.map((c, i) => (
+                        {rotationPanelData.conflicts.map((c, i) => (
                           <div key={i} className="rounded-lg border border-red-200 dark:border-red-900/50 p-2.5 space-y-2">
                             <div className="flex items-center gap-1.5">
                               {c.type === 'overlap' && (
@@ -4497,32 +5174,20 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                 </span>
                               )}
                             </div>
-                            <div className="text-[9px] text-muted-foreground leading-relaxed">
-                              {c.detail}
-                            </div>
+                            <div className="text-[9px] text-muted-foreground leading-relaxed">{c.detail}</div>
                             <div className="flex flex-wrap gap-1">
                               {c.type === 'station_mismatch' ? (
                                 <>
-                                  <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors">
-                                    Insert Ferry
-                                  </button>
-                                  <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors">
-                                    Move to Other AC
-                                  </button>
+                                  <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors">Insert Ferry</button>
+                                  <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors">Move to Other AC</button>
                                 </>
                               ) : (
                                 <>
-                                  <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors">
-                                    Adjust STD (min TAT)
-                                  </button>
-                                  <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors">
-                                    Move to Other AC
-                                  </button>
+                                  <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors">Adjust STD (min TAT)</button>
+                                  <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors">Move to Other AC</button>
                                 </>
                               )}
-                              <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors text-muted-foreground">
-                                Ignore
-                              </button>
+                              <button className="px-2 py-0.5 text-[8px] font-medium rounded border border-border hover:bg-muted transition-colors text-muted-foreground">Ignore</button>
                             </div>
                           </div>
                         ))}
@@ -4530,7 +5195,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                     </div>
                   )}
 
-                  {/* ── Section 5: AI Assist ── */}
+                  {/* AI Assist */}
                   <div
                     className="rounded-lg p-2.5 space-y-1"
                     style={{
@@ -4551,24 +5216,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       Optimise aircraft rotation, suggest swaps to minimise ground time, and auto-resolve conflicts.
                     </p>
                   </div>
-
                 </div>
-              </div>
-
-              {/* Panel Footer */}
-              <div className="shrink-0 p-2.5 border-t space-y-1.5">
-                <button className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[10px] font-medium rounded-md border border-border hover:bg-muted transition-colors">
-                  <ExternalLink className="h-3 w-3" />
-                  Open in Builder
-                </button>
-                <button className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[10px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
-                  <PenLine className="h-3 w-3" />
-                  Edit Flight
-                </button>
               </div>
             </>
           ) : (
-            /* Empty state (pinned, no flight selected) */
+            /* Empty state */
             <>
               <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
                 <div className="text-[13px] font-semibold text-muted-foreground">Flight Info</div>
@@ -4599,6 +5251,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
               </div>
             </>
           )}
+          </>)}
         </div>
       </div>
 
