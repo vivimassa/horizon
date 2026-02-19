@@ -3298,7 +3298,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           if (periodCommitted) setPeriodCommitted(false)
         }}
         className="text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
-        style={{ height: s(26), padding: `0 ${s(8)}px`, fontSize: s(9), borderRadius: s(6), border: '1px solid var(--border)' }}
+        style={{ height: s(26), padding: `0 ${s(8)}px`, fontSize: s(11), fontWeight: 500, borderRadius: s(6), border: '1px solid var(--border)' }}
         title="Set to current month"
       >
         This Month
@@ -3315,7 +3315,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           if (periodCommitted) setPeriodCommitted(false)
         }}
         className="text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
-        style={{ height: s(26), padding: `0 ${s(8)}px`, fontSize: s(9), borderRadius: s(6), border: '1px solid var(--border)' }}
+        style={{ height: s(26), padding: `0 ${s(8)}px`, fontSize: s(11), fontWeight: 500, borderRadius: s(6), border: '1px solid var(--border)' }}
         title="Set to next month"
       >
         Next Month
