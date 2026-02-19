@@ -2140,8 +2140,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     if (!reg) return null
 
     const icao = reg.aircraft_types?.icao_type || 'UNKN'
+    const typeName = reg.aircraft_types?.name || icao
     const cabin = getCabinString(reg)
-    const homeBase = reg.home_base?.iata_code || null
+    const msn = reg.serial_number || null
+    const selcal = reg.selcal || null
 
     const allFlights = assignedFlights.filter(f => {
       const fReg = f.aircraftReg || f.assignedReg
@@ -2149,6 +2151,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     })
     const totalBlock = allFlights.reduce((s, f) => s + f.blockMinutes, 0)
     const activeDates = new Set(allFlights.map(f => formatISO(f.date)))
+    const numDays = periodDays || 1
+    const activeDayCount = activeDates.size
+
+    // Average utilization per day (block hours / active days)
+    const avgUtilPerDay = activeDayCount > 0 ? Math.round(totalBlock / activeDayCount / 6) / 10 : 0
+    const categoryDefault = acTypeByIcao.get(icao)?.category === 'widebody' ? 14 : 12
+    const targetHours = (ganttSettings.utilizationTargets ?? {})[icao] ?? categoryDefault
 
     // Overnight stations
     const stationCounts = new Map<string, number>()
@@ -2162,19 +2171,25 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     const overnightStations = Array.from(stationCounts.entries())
       .map(([station, count]) => ({ station, count }))
       .sort((a, b) => b.count - a.count)
+    const overnightTotal = overnightStations.reduce((s, st) => s + st.count, 0)
 
     return {
       registration: panelAircraftReg,
       icao,
+      typeName,
       cabin,
-      homeBase,
+      msn,
+      selcal,
       totalBlock,
       flightCount: allFlights.length,
-      activeDays: activeDates.size,
-      periodDays: periodDays || 1,
+      activeDays: activeDayCount,
+      periodDays: numDays,
+      avgUtilPerDay,
+      targetHours,
       overnightStations,
+      overnightTotal,
     }
-  }, [panelMode, panelAircraftReg, assignedFlights, registrations, periodDays])
+  }, [panelMode, panelAircraftReg, assignedFlights, registrations, periodDays, acTypeByIcao, ganttSettings.utilizationTargets])
 
   // ─── Rotation panel data ──────────────────────────────────────────
   const rotationPanelData = useMemo(() => {
@@ -6077,14 +6092,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
               {/* ── AIRCRAFT PANEL ───────────────────────────────────── */}
               <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">{aircraftPanelData.registration}</div>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground">
-                      {aircraftPanelData.icao}
-                    </span>
-                    {aircraftPanelData.cabin && (
-                      <span className="text-[9px] text-muted-foreground">{aircraftPanelData.cabin}</span>
-                    )}
+                  <div className="text-[12px] font-bold tracking-tight">Aircraft Statistics</div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="text-[11px] font-semibold">{aircraftPanelData.registration}</span>
+                    <span className="text-[9px] text-muted-foreground">{aircraftPanelData.typeName}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-0.5 shrink-0">
@@ -6108,21 +6119,26 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 <div className="p-3 space-y-3">
                   {/* Aircraft Info Card */}
                   <div className="rounded-lg border border-border/50 p-2.5 space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="text-muted-foreground">Type</span>
-                      <span className="font-semibold">{aircraftPanelData.icao}</span>
-                    </div>
+                    {aircraftPanelData.msn && (
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">MSN</span>
+                        <span className="font-semibold">{aircraftPanelData.msn}</span>
+                      </div>
+                    )}
+                    {aircraftPanelData.selcal && (
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">SELCAL</span>
+                        <span className="font-semibold font-mono">{aircraftPanelData.selcal}</span>
+                      </div>
+                    )}
                     {aircraftPanelData.cabin && (
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-muted-foreground">Config</span>
                         <span className="font-semibold">{aircraftPanelData.cabin}</span>
                       </div>
                     )}
-                    {aircraftPanelData.homeBase && (
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-muted-foreground">Home Base</span>
-                        <span className="font-semibold">{aircraftPanelData.homeBase}</span>
-                      </div>
+                    {!aircraftPanelData.msn && !aircraftPanelData.selcal && !aircraftPanelData.cabin && (
+                      <div className="text-[10px] text-muted-foreground/60 text-center py-1">No aircraft details available</div>
                     )}
                   </div>
 
@@ -6143,30 +6159,96 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       <div className="text-[9px] text-muted-foreground mt-1">
                         {aircraftPanelData.activeDays}/{aircraftPanelData.periodDays} days active
                       </div>
+                      {/* Average Utilization per Day */}
+                      <div className="mt-2 pt-2 border-t border-border/30">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-muted-foreground">Avg utilization/day</span>
+                          <span className="font-semibold">{aircraftPanelData.avgUtilPerDay}h <span className="text-[9px] font-normal text-muted-foreground">/ {aircraftPanelData.targetHours}h target</span></span>
+                        </div>
+                        <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${aircraftPanelData.avgUtilPerDay >= aircraftPanelData.targetHours ? 'bg-green-500' : aircraftPanelData.avgUtilPerDay >= aircraftPanelData.targetHours * 0.8 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                            style={{ width: `${Math.min(100, Math.round(aircraftPanelData.avgUtilPerDay / aircraftPanelData.targetHours * 100))}%` }}
+                          />
+                        </div>
+                        <div className="text-[9px] text-muted-foreground mt-0.5">
+                          {Math.round(aircraftPanelData.avgUtilPerDay / aircraftPanelData.targetHours * 100)}% of target
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Overnight Stations */}
-                  {aircraftPanelData.overnightStations.length > 0 && (
-                    <div>
-                      <div className="text-[10px] font-medium text-muted-foreground mb-1.5">Overnight Stations</div>
-                      <div className="space-y-1">
-                        {aircraftPanelData.overnightStations.slice(0, 8).map(st => {
-                          const maxCount = aircraftPanelData.overnightStations[0].count
-                          const pct = Math.round(st.count / maxCount * 100)
-                          return (
-                            <div key={st.station} className="flex items-center gap-2">
-                              <span className="text-[10px] font-semibold w-8">{st.station}</span>
-                              <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                                <div className="h-full rounded-full bg-primary/60" style={{ width: `${pct}%` }} />
+                  {/* Overnight Stations with Donut Chart */}
+                  {aircraftPanelData.overnightStations.length > 0 && (() => {
+                    const DONUT_COLORS = ['hsl(var(--primary))', 'hsl(var(--primary) / 0.75)', 'hsl(var(--primary) / 0.5)', 'hsl(var(--primary) / 0.35)', 'hsl(var(--primary) / 0.2)']
+                    const allStations = aircraftPanelData.overnightStations
+                    const total = aircraftPanelData.overnightTotal
+
+                    // Donut: top 4 + Others
+                    const donutShowTop = allStations.length > 5 ? 4 : allStations.length
+                    const donutTop = allStations.slice(0, donutShowTop)
+                    const donutOthersCount = allStations.slice(donutShowTop).reduce((s, st) => s + st.count, 0)
+                    const donutSegments = donutOthersCount > 0
+                      ? [...donutTop, { station: 'Others', count: donutOthersCount }]
+                      : donutTop
+
+                    const size = 90
+                    const cx = size / 2, cy = size / 2
+                    const outerR = 43, innerR = 27
+
+                    const donutPaths: { d: string; fill: string }[] = []
+                    let angle = -Math.PI / 2
+                    const gap = 0.01
+                    donutSegments.forEach((st, i) => {
+                      const frac = st.count / total
+                      const sweep = frac * Math.PI * 2 - (donutSegments.length > 1 ? gap : 0)
+                      if (sweep <= 0) return
+                      const a1 = angle, a2 = angle + sweep
+                      const largeArc = sweep > Math.PI ? 1 : 0
+                      const ox1 = cx + outerR * Math.cos(a1), oy1 = cy + outerR * Math.sin(a1)
+                      const ox2 = cx + outerR * Math.cos(a2), oy2 = cy + outerR * Math.sin(a2)
+                      const ix2 = cx + innerR * Math.cos(a2), iy2 = cy + innerR * Math.sin(a2)
+                      const ix1 = cx + innerR * Math.cos(a1), iy1 = cy + innerR * Math.sin(a1)
+                      donutPaths.push({
+                        d: `M ${ox1} ${oy1} A ${outerR} ${outerR} 0 ${largeArc} 1 ${ox2} ${oy2} L ${ix2} ${iy2} A ${innerR} ${innerR} 0 ${largeArc} 0 ${ix1} ${iy1} Z`,
+                        fill: DONUT_COLORS[i % DONUT_COLORS.length],
+                      })
+                      angle = a2 + gap
+                    })
+
+                    const getColor = (idx: number) => idx < donutShowTop ? DONUT_COLORS[idx] : 'hsl(var(--primary) / 0.12)'
+
+                    return (
+                      <div>
+                        <div className="text-[10px] font-medium text-muted-foreground mb-1.5">Overnight Stations</div>
+                        <div className="flex items-start gap-3">
+                          <div className="shrink-0">
+                            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                              {donutPaths.map((p, i) => (
+                                <path key={i} d={p.d} fill={p.fill} stroke={isDark ? 'var(--background)' : '#fff'} strokeWidth={1.5} />
+                              ))}
+                              <text x={cx} y={cy - 2} textAnchor="middle" className="fill-foreground" style={{ fontSize: 14, fontWeight: 800 }}>{total}</text>
+                              <text x={cx} y={cy + 9} textAnchor="middle" className="fill-muted-foreground" style={{ fontSize: 7, fontWeight: 500 }}>nights</text>
+                            </svg>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            {allStations.map((st, i) => (
+                              <div key={st.station} className="flex items-center justify-between px-1 py-0.5 rounded hover:bg-primary/[0.04] dark:hover:bg-primary/[0.08] transition-colors">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-sm shrink-0" style={{ background: getColor(i) }} />
+                                  <span className="text-[10px] font-semibold">{st.station}</span>
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <span className="text-[11px] font-bold">{st.count}</span>
+                                  <span className="text-[8px] text-muted-foreground">({total > 0 ? Math.round(st.count / total * 100) : 0}%)</span>
+                                </span>
                               </div>
-                              <span className="text-[9px] text-muted-foreground w-4 text-right">{st.count}</span>
-                            </div>
-                          )
-                        })}
+                            ))}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )
+                  })()}
 
                   {/* Maintenance Placeholder */}
                   <div className="rounded-lg border border-dashed border-border/50 p-3 text-center">

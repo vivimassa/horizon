@@ -571,6 +571,7 @@ export interface Database {
           is_active: boolean
           created_at: string
           updated_at: string
+          selcal: string | null
           serial_number: string | null
           sub_operator: string | null
           date_of_manufacture: string | null
@@ -604,6 +605,7 @@ export interface Database {
           is_active?: boolean
           created_at?: string
           updated_at?: string
+          selcal?: string | null
           serial_number?: string | null
           sub_operator?: string | null
           date_of_manufacture?: string | null
@@ -637,6 +639,7 @@ export interface Database {
           is_active?: boolean
           created_at?: string
           updated_at?: string
+          selcal?: string | null
           serial_number?: string | null
           sub_operator?: string | null
           date_of_manufacture?: string | null
