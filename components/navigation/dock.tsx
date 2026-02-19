@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { OperatorWithRole } from '@/lib/operators'
 import { type DockPosition } from '@/hooks/use-user-preferences'
+import { getModuleColor } from '@/lib/modules/colors'
 interface DockProps {
   operator: OperatorWithRole | null
   accessibleModules: string[]
@@ -107,6 +108,7 @@ export function Dock({ accessibleModules, dockPosition = 'bottom' }: DockProps) 
               const active = isActive(module.path)
               const accessible = hasAccess(module.id)
               const adminLocked = isAdminModule(module.id) && !accessible
+              const color = getModuleColor(module.id)
 
               return (
                 <Tooltip key={module.id}>
@@ -119,7 +121,9 @@ export function Dock({ accessibleModules, dockPosition = 'bottom' }: DockProps) 
                           'w-14 py-2',
                           'hover:scale-105',
                           active
-                            ? 'bg-primary/15 text-primary shadow-[0_0_12px_hsl(var(--primary)/0.12)]'
+                            ? color
+                              ? `${color.bg} ${color.text} shadow-[0_0_12px_hsl(${color.hsl}/0.12)]`
+                              : 'bg-primary/15 text-primary shadow-[0_0_12px_hsl(var(--primary)/0.12)]'
                             : 'text-muted-foreground hover:bg-white/40 dark:hover:bg-white/10 hover:text-foreground'
                         )}
                       >

@@ -16,10 +16,13 @@ export default async function Home() {
     getShortcuts(),
   ])
 
-  const enabledModules = operator?.enabled_modules || []
+  const admin = checkAdmin(operator)
+  const enabledModules = [
+    ...(operator?.enabled_modules || []),
+    ...(admin ? ['admin'] : []),
+  ]
   const userName = user.email?.split('@')[0] || 'User'
   const userRole = operator?.user_role || 'operator'
-  const admin = checkAdmin(operator)
 
   return (
     <Launchpad

@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS schedule_rules (
   -- ENFORCEMENT
   enforcement TEXT NOT NULL DEFAULT 'hard' CHECK (enforcement IN ('hard', 'soft')),
 
+  -- PENALTY COST (for soft rules)
+  -- How many points deducted when this rule is violated.
+  -- Only meaningful for soft rules (hard rules block entirely).
+  -- Presets: 1000 = mild, 3000 = strong, 8000 = near-hard
+  -- Range: 0 to 50000
+  penalty_cost INTEGER NOT NULL DEFAULT 3000,
+
   -- VALIDITY PERIOD
   valid_from DATE,
   valid_to DATE,

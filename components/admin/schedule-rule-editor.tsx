@@ -120,6 +120,7 @@ export function ScheduleRuleEditor({
   const [validTo, setValidTo] = useState(rule?.valid_to || '')
   const [noEndDate, setNoEndDate] = useState(!rule?.valid_to)
   const [notes, setNotes] = useState(rule?.notes || '')
+  const [penaltyCost, setPenaltyCost] = useState(rule?.penalty_cost ?? 3000)
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
@@ -139,6 +140,7 @@ export function ScheduleRuleEditor({
       setValidTo(rule?.valid_to || '')
       setNoEndDate(!rule?.valid_to)
       setNotes(rule?.notes || '')
+      setPenaltyCost(rule?.penalty_cost ?? 3000)
       setErrors({})
       setSaving(false)
     }
@@ -213,6 +215,7 @@ export function ScheduleRuleEditor({
         criteria_type: criteriaType,
         criteria_values: criteriaValues,
         enforcement: enforcement as 'hard' | 'soft',
+        penalty_cost: enforcement === 'hard' ? 0 : penaltyCost,
         valid_from: validFrom || null,
         valid_to: noEndDate ? null : validTo || null,
         is_active: rule?.is_active ?? true,
@@ -363,6 +366,67 @@ export function ScheduleRuleEditor({
                 <div style={{ fontSize: 10 }} className="text-muted-foreground">Hard rule</div>
               </button>
             </div>
+
+            {enforcement === 'soft' && (
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-muted-foreground" style={{ fontSize: 10 }}>
+                    Violation cost
+                  </label>
+                  <span className="font-mono font-medium" style={{ fontSize: 11 }}>
+                    {penaltyCost.toLocaleString()} pts
+                  </span>
+                </div>
+
+                {/* Preset buttons */}
+                <div className="flex gap-1.5">
+                  {([
+                    { label: 'Mild', value: 1000, desc: 'Nice to have' },
+                    { label: 'Strong', value: 3000, desc: 'Try hard' },
+                    { label: 'Near-hard', value: 8000, desc: 'Rarely violate' },
+                  ] as const).map(preset => (
+                    <button
+                      key={preset.value}
+                      type="button"
+                      onClick={() => setPenaltyCost(preset.value)}
+                      className={cn(
+                        'flex-1 py-1.5 rounded-lg border text-center transition-colors',
+                        penaltyCost === preset.value
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:border-muted-foreground/30'
+                      )}
+                    >
+                      <div style={{ fontSize: 11 }} className="font-medium">
+                        {preset.label}
+                      </div>
+                      <div style={{ fontSize: 9 }} className="text-muted-foreground">
+                        {preset.desc}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom slider */}
+                <div className="flex items-center gap-3">
+                  <span className="text-muted-foreground" style={{ fontSize: 9 }}>0</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={20000}
+                    step={500}
+                    value={penaltyCost}
+                    onChange={e => setPenaltyCost(parseInt(e.target.value))}
+                    className="flex-1 accent-primary h-1"
+                  />
+                  <span className="text-muted-foreground" style={{ fontSize: 9 }}>20k</span>
+                </div>
+
+                <p className="text-muted-foreground" style={{ fontSize: 10 }}>
+                  Higher cost = optimizer tries harder to avoid violating this rule.
+                  The optimizer picks solutions with the lowest total violation cost.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* ── SECTION 3: FLIGHT CRITERIA ── */}
@@ -628,7 +692,9 @@ export function ScheduleRuleEditor({
                 <RuleSentence rule={previewRule} />
               </div>
               <p className="text-muted-foreground mt-1" style={{ fontSize: 10 }}>
-                {enforcement === 'hard' ? '\u26A1 Hard rule' : '\u25CB Soft rule'}
+                {enforcement === 'soft'
+                  ? `\u25CB Soft rule \u00B7 ${penaltyCost.toLocaleString()} pts per violation`
+                  : '\u26A1 Hard rule \u2014 blocks assignment'}
                 {validFrom || validTo
                   ? ` \u00B7 Valid ${validFrom || '...'} \u2013 ${noEndDate ? 'No end date' : validTo || '...'}`
                   : ' \u00B7 Valid indefinitely'}

@@ -37,6 +37,7 @@
     "date-fns-tz": "^3.2.0",
     "dotenv": "^17.3.1",
     "fuse.js": "^7.1.0",
+    "highs": "^1.8.0",
     "lucide-react": "^0.564.0",
     "mapbox-gl": "^3.18.1",
     "next": "14.2.35",

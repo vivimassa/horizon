@@ -37,6 +37,9 @@ export interface MovementSettingsData {
     tat: boolean
   }
 
+  // Optimizer
+  allowFamilySub: boolean
+
   // AC type display order (empty = alphabetical)
   acTypeOrder: string[]
 
@@ -83,6 +86,8 @@ export const DEFAULT_MOVEMENT_SETTINGS: MovementSettingsData = {
     cabin: true,
     tat: true,
   },
+
+  allowFamilySub: false,
 
   acTypeOrder: [],
 

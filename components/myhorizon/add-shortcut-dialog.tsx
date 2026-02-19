@@ -10,6 +10,7 @@ import { getModuleTree, isLeafModule, type ModuleTreeNode } from '@/lib/modules/
 import { getIcon } from '@/lib/modules/icons'
 import { cn } from '@/lib/utils'
 import { Check, Pin } from 'lucide-react'
+import { getModuleColorByCode } from '@/lib/modules/colors'
 
 interface AddShortcutDialogProps {
   open: boolean
@@ -39,6 +40,7 @@ export function AddShortcutDialog({
     const isPinned = pinnedCodes.includes(node.code)
     const accessible = hasAccess(node)
     const Icon = getIcon(node.icon)
+    const color = getModuleColorByCode(node.code)
 
     return (
       <button
@@ -55,7 +57,9 @@ export function AddShortcutDialog({
           'flex items-center gap-3 w-full px-3 py-2 rounded-lg text-left text-sm transition-colors',
           accessible
             ? isPinned
-              ? 'bg-primary/10 text-primary'
+              ? color
+                ? `${color.bg} ${color.text}`
+                : 'bg-primary/10 text-primary'
               : 'hover:bg-white/50 dark:hover:bg-white/10 text-foreground'
             : 'opacity-40 cursor-not-allowed'
         )}
@@ -67,7 +71,7 @@ export function AddShortcutDialog({
         </div>
         <span className="text-xs font-mono text-muted-foreground shrink-0">{node.code}</span>
         {isPinned ? (
-          <Check className="h-4 w-4 text-primary shrink-0" />
+          <Check className={cn('h-4 w-4 shrink-0', color ? color.text : 'text-primary')} />
         ) : accessible ? (
           <Pin className="h-4 w-4 text-muted-foreground/40 shrink-0" />
         ) : null}

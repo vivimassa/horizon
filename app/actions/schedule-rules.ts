@@ -18,6 +18,7 @@ export type ScheduleRule = {
   criteria_type: 'airports' | 'routes' | 'international' | 'domestic' | 'service_type' | 'departure_time' | 'block_time' | 'overnight' | 'day_of_week' | 'country'
   criteria_values: Record<string, any>
   enforcement: 'hard' | 'soft'
+  penalty_cost: number
   valid_from: string | null
   valid_to: string | null
   is_active: boolean
@@ -70,9 +71,9 @@ export async function createScheduleRule(
       `INSERT INTO schedule_rules (
         operator_id, name, scope_type, scope_values,
         action, criteria_type, criteria_values,
-        enforcement, valid_from, valid_to,
+        enforcement, penalty_cost, valid_from, valid_to,
         is_active, priority, notes
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       RETURNING *`,
       [
         operatorId,
@@ -83,6 +84,7 @@ export async function createScheduleRule(
         rule.criteria_type,
         JSON.stringify(rule.criteria_values),
         rule.enforcement,
+        rule.penalty_cost,
         rule.valid_from,
         rule.valid_to,
         rule.is_active,
@@ -172,13 +174,13 @@ export async function duplicateScheduleRule(id: string): Promise<{ data?: Schedu
       `INSERT INTO schedule_rules (
         operator_id, name, scope_type, scope_values,
         action, criteria_type, criteria_values,
-        enforcement, valid_from, valid_to,
+        enforcement, penalty_cost, valid_from, valid_to,
         is_active, priority, notes
       )
       SELECT
         operator_id, name || ' (copy)', scope_type, scope_values,
         action, criteria_type, criteria_values,
-        enforcement, valid_from, valid_to,
+        enforcement, penalty_cost, valid_from, valid_to,
         is_active, priority, notes
       FROM schedule_rules
       WHERE id = $1 AND operator_id = $2

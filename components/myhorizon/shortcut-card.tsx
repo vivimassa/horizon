@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { getModuleByCode } from '@/lib/modules/registry'
 import { getIcon } from '@/lib/modules/icons'
 import { X, GripVertical } from 'lucide-react'
+import { getModuleColorByCode } from '@/lib/modules/colors'
 
 interface ShortcutCardProps {
   code: string
@@ -34,6 +35,7 @@ export function ShortcutCard({ code, onRemove }: ShortcutCardProps) {
   if (!mod) return null
 
   const Icon = getIcon(mod.icon)
+  const color = getModuleColorByCode(code)
 
   return (
     <div
@@ -56,7 +58,7 @@ export function ShortcutCard({ code, onRemove }: ShortcutCardProps) {
           if (isDragging) e.preventDefault()
         }}
       >
-        <div className="p-3 rounded-xl bg-primary/10 text-primary">
+        <div className={cn('p-3 rounded-xl', color ? `${color.bg} ${color.text}` : 'bg-primary/10 text-primary')}>
           <Icon className="h-6 w-6" />
         </div>
         <div className="text-center">

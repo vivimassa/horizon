@@ -37,6 +37,8 @@ import { friendlyError } from '@/lib/utils/error-handler'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { MiniBuilderModal } from './movement-mini-builder'
 import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult } from '@/lib/utils/ops-tail-assignment'
+import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } from '@/lib/utils/ops-tail-assignment-sa'
+import { runMIPSolver, MIP_PRESETS, type MIPProgress, type MIPResult } from '@/lib/utils/ops-tail-assignment-mip'
 import { useMovementSettings } from '@/lib/hooks/use-movement-settings'
 import { type MovementSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/movement-settings'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
@@ -47,6 +49,7 @@ import { useMovementDrag, type RowLayoutItem, type PendingDrop } from '@/lib/hoo
 import { MovementClipboardPill } from './movement-clipboard-pill'
 import { MovementWorkspaceIndicator } from './movement-workspace-indicator'
 import { SwapFlightsDialog, type SwapExpandedFlight } from '@/components/shared/swap-flights-dialog'
+import type { ScheduleRule } from '@/app/actions/schedule-rules'
 
 // ─── Types & Constants ───────────────────────────────────────────────────
 
@@ -443,6 +446,24 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const [assignmentMethod, setAssignmentMethod] = useState<OptimizerMethod>('greedy')
   const [optimizerRunning, setOptimizerRunning] = useState(false)
   const [lastOptRun, setLastOptRun] = useState<{ method: string; time: Date } | null>(null)
+  const [scheduleRules, setScheduleRules] = useState<ScheduleRule[]>([])
+  const [aiProgress, setAiProgress] = useState<SAProgress | null>(null)
+  const [aiResult, setAiResult] = useState<SAResult | null>(null)
+  const aiAbortRef = useRef<AbortController | null>(null)
+  const [mipProgress, setMipProgress] = useState<MIPProgress | null>(null)
+  const [mipResult, setMipResult] = useState<MIPResult | null>(null)
+
+  // ─── AI Advisor state ─────────────────────────────────────────────
+  const [advisorLoading, setAdvisorLoading] = useState(false)
+  const [advisorResult, setAdvisorResult] = useState<import('@/app/actions/ai-advisor').AdvisorResult | null>(null)
+  const [advisorError, setAdvisorError] = useState<string | null>(null)
+
+  // Lazy-fetch active schedule rules for tail assignment
+  useEffect(() => {
+    import('@/app/actions/schedule-rules').then(mod => {
+      mod.getActiveScheduleRules().then(r => setScheduleRules(r))
+    })
+  }, [])
 
   // ─── State ──────────────────────────────────────────────────────────
   const [startDate, setStartDate] = useState(() => startOfDay(new Date()))
@@ -603,7 +624,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   }, [])
 
   // Panel mode: flight (click bar), aircraft (click reg), rotation (click row bg)
-  const [panelMode, setPanelMode] = useState<'flight' | 'aircraft' | 'rotation'>('flight')
+  const [panelMode, setPanelMode] = useState<'flight' | 'aircraft' | 'rotation' | 'advisor'>('flight')
   const [panelAircraftReg, setPanelAircraftReg] = useState<string | null>(null)
   const [rotationTarget, setRotationTarget] = useState<{ reg: string; date: string } | null>(null)
 
@@ -680,15 +701,6 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   // Portal container for dialogs — must render inside fullscreen element
   const dialogContainer = isFullscreen ? movementContainerRef.current : null
 
-  // ─── Optimizer handler ─────────────────────────────────────────────
-  const handleRunAssignment = useCallback(async (method: OptimizerMethod) => {
-    setOptimizerRunning(true)
-    setAssignmentMethod(method)
-    await new Promise(r => setTimeout(r, 300))
-    setOptimizerRunning(false)
-    setLastOptRun({ method: method === 'greedy' ? 'Greedy Solution' : 'Good Solution', time: new Date() })
-  }, [])
-
   // CSS fallback Escape handler
   useEffect(() => {
     if (!isFullscreen || document.fullscreenElement) return // only for CSS fallback
@@ -711,6 +723,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       setPanelVisible(!!panelAircraftReg)
     } else if (panelMode === 'rotation') {
       setPanelVisible(!!rotationTarget)
+    } else if (panelMode === 'advisor') {
+      setPanelVisible(true)
     }
   }, [panelPinned, selectedFlights.size, panelMode, panelAircraftReg, rotationTarget, flightSearchOpen, aircraftSearchOpen])
 
@@ -845,6 +859,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         if (flightSearchOpen) { closeFlightSearch(); return }
         if (contextMenu) { setContextMenu(null); return }
         if (swapMode) { exitSwapMode(); return }
+        if (panelMode === 'advisor') { setAdvisorResult(null); setAdvisorError(null); setPanelMode('flight'); return }
         if (panelMode === 'aircraft') { setPanelAircraftReg(null); setPanelMode('flight'); setSelectedAircraftRow(null); return }
         if (panelMode === 'rotation') { setRotationTarget(null); setPanelMode('flight'); setSelectedAircraftRow(null); return }
         if (selectedAircraftRow) { setSelectedAircraftRow(null); return }
@@ -1226,8 +1241,171 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     return routeCycleMap.get(`route_${ef.routeId}_${baseDate}`) || [expandedId]
   }, [expandedFlights, routeCycleMap])
 
+  // ─── Aircraft families map (for rule evaluation) ────────────────
+  const aircraftFamilies = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const reg of registrations) {
+      const icaoType = reg.aircraft_types?.icao_type
+      if (icaoType) {
+        const acType = aircraftTypes.find(t => t.icao_type === icaoType)
+        if (acType?.family) map.set(reg.registration, acType.family)
+      }
+    }
+    return map
+  }, [registrations, aircraftTypes])
+
+  // ─── Optimizer handler ─────────────────────────────────────────────
+  const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep', mipPreset?: 'quick' | 'normal' | 'deep') => {
+    if (method === 'optimal') {
+      // ── Optimal Solver flow ──
+      setOptimizerRunning(true)
+      setMipProgress(null)
+      setMipResult(null)
+      setAiResult(null)
+
+      const assignableAircraft: AssignableAircraft[] = registrations
+        .filter(r => r.status === 'active' || r.status === 'operational')
+        .map(r => ({
+          registration: r.registration,
+          icaoType: r.aircraft_types?.icao_type || 'UNKN',
+          homeBase: r.home_base?.iata_code || null,
+        }))
+
+      const defaultTat = new Map<string, number>()
+      for (const t of aircraftTypes) {
+        defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
+      }
+
+      const typeFamilyMap = new Map<string, string>()
+      for (const t of aircraftTypes) {
+        if (t.family) {
+          for (const r of registrations) {
+            if (r.aircraft_types?.icao_type === t.icao_type) {
+              typeFamilyMap.set(r.registration, t.family)
+            }
+          }
+        }
+      }
+
+      const config = MIP_PRESETS[mipPreset || 'normal']
+
+      try {
+        const result = await runMIPSolver(
+          expandedFlights,
+          assignableAircraft,
+          defaultTat,
+          config,
+          (progress) => setMipProgress(progress),
+          scheduleRules as any[],
+          typeFamilyMap,
+        )
+
+        setMipResult(result)
+        setAssignmentMethod('optimal')
+        setLastOptRun({
+          method: `Optimal Solver (${result.mip.status})`,
+          time: new Date(),
+        })
+      } catch (e) {
+        console.error('MIP solver failed:', e)
+      } finally {
+        setOptimizerRunning(false)
+        setMipProgress(null)
+      }
+    } else if (method === 'ai') {
+      // ── AI Optimizer flow ──
+      setOptimizerRunning(true)
+      setAiProgress(null)
+      setAiResult(null)
+
+      const assignableAircraft: AssignableAircraft[] = registrations
+        .filter(r => r.status === 'active' || r.status === 'operational')
+        .map(r => ({
+          registration: r.registration,
+          icaoType: r.aircraft_types?.icao_type || 'UNKN',
+          homeBase: r.home_base?.iata_code || null,
+        }))
+
+      const defaultTat = new Map<string, number>()
+      for (const t of aircraftTypes) {
+        defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
+      }
+
+      const greedyResult = autoAssignFlights(
+        expandedFlights, assignableAircraft, defaultTat, 'minimize',
+        scheduleRules, aircraftFamilies,
+        movementSettings.allowFamilySub ?? false,
+        new Map(aircraftTypes.filter(t => t.family).map(t => [t.icao_type, t.family!]))
+      )
+
+      const abort = new AbortController()
+      aiAbortRef.current = abort
+      const config = SA_PRESETS[aiPreset || 'normal']
+
+      try {
+        const result = await runSimulatedAnnealing(
+          greedyResult,
+          expandedFlights.map(ef => ({
+            id: ef.id,
+            flightId: ef.flightId,
+            depStation: ef.depStation,
+            arrStation: ef.arrStation,
+            stdMinutes: ef.stdMinutes,
+            staMinutes: ef.staMinutes,
+            aircraftTypeIcao: ef.aircraftTypeIcao,
+            date: ef.date,
+            routeId: ef.routeId,
+            aircraftReg: ef.aircraftReg,
+            dayOffset: ef.dayOffset,
+            serviceType: ef.serviceType,
+          })),
+          assignableAircraft,
+          defaultTat,
+          config,
+          (progress) => setAiProgress(progress),
+          abort.signal,
+        )
+
+        setAiResult(result)
+        setAssignmentMethod('ai')
+        setLastOptRun({
+          method: `AI Optimizer (${result.sa.improvement.toFixed(1)}% improvement)`,
+          time: new Date(),
+        })
+      } catch (e) {
+        console.error('SA failed:', e)
+      } finally {
+        setOptimizerRunning(false)
+        setAiProgress(null)
+        aiAbortRef.current = null
+      }
+    } else {
+      // ── Greedy / Good flow (existing) ──
+      setOptimizerRunning(true)
+      setAiResult(null)
+      setMipResult(null)
+      setAssignmentMethod(method)
+      await new Promise(r => setTimeout(r, 300))
+      setOptimizerRunning(false)
+      setLastOptRun({ method: method === 'greedy' ? 'Greedy Solution' : 'Good Solution', time: new Date() })
+    }
+  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, movementSettings.allowFamilySub])
+
+  const handleCancelAi = useCallback(() => {
+    aiAbortRef.current?.abort()
+  }, [])
+
   // ─── Virtual tail assignment engine ──────────────────────────────
   const assignmentResult = useMemo<TailAssignmentResult>(() => {
+    // If MIP solver produced a result, use it directly
+    if (assignmentMethod === 'optimal' && mipResult) {
+      return mipResult
+    }
+    // If AI optimizer produced a result, use it directly
+    if (assignmentMethod === 'ai' && aiResult) {
+      return aiResult
+    }
+
     // Build assignable aircraft list
     const assignableAircraft: AssignableAircraft[] = registrations
       .filter(r => r.status === 'active' || r.status === 'operational')
@@ -1243,8 +1421,19 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
     }
 
-    return autoAssignFlights(expandedFlights, assignableAircraft, defaultTat, assignmentMethod === 'good' ? 'balance' : 'minimize')
-  }, [expandedFlights, registrations, aircraftTypes, assignmentMethod])
+    // Build icaoType → family map for family substitution
+    const typeFamilyMap = new Map<string, string>()
+    for (const t of aircraftTypes) {
+      if (t.family) typeFamilyMap.set(t.icao_type, t.family)
+    }
+
+    return autoAssignFlights(
+      expandedFlights, assignableAircraft, defaultTat,
+      assignmentMethod === 'good' ? 'balance' : 'minimize',
+      scheduleRules, aircraftFamilies,
+      movementSettings.allowFamilySub ?? false, typeFamilyMap
+    )
+  }, [expandedFlights, registrations, aircraftTypes, assignmentMethod, scheduleRules, aircraftFamilies, movementSettings.allowFamilySub, aiResult, mipResult])
 
   // Annotate expanded flights with their assigned registration
   const assignedFlights = useMemo(() => {
@@ -1253,6 +1442,52 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       assignedReg: assignmentResult.assignments.get(ef.id) || null,
     }))
   }, [expandedFlights, assignmentResult])
+
+  // ─── AI Advisor handler ─────────────────────────────────────────────
+  const handleAskAdvisor = useCallback(async () => {
+    setAdvisorLoading(true)
+    setAdvisorError(null)
+    setAdvisorResult(null)
+    setPanelMode('advisor')
+    setPanelVisible(true)
+
+    try {
+      const { buildAdvisorSummary } = await import('@/lib/utils/advisor-summary-builder')
+      const { getAdvisorAnalysis } = await import('@/app/actions/ai-advisor')
+
+      const summary = buildAdvisorSummary({
+        assignedFlights,
+        overflow: assignmentResult.overflow.map(f => ({
+          id: f.id,
+          flightNumber: (f as any).flightNumber || '?',
+          depStation: f.depStation,
+          arrStation: f.arrStation,
+          date: f.date,
+          aircraftTypeIcao: f.aircraftTypeIcao,
+        })),
+        chainBreaks: assignmentResult.chainBreaks,
+        registrations: registrations as any[],
+        aircraftTypes,
+        method: assignmentMethod === 'greedy' ? 'Greedy'
+          : assignmentMethod === 'good' ? 'Balanced'
+          : 'AI Optimizer',
+        rules: scheduleRules as any[],
+      })
+
+      const { data, error } = await getAdvisorAnalysis(summary)
+
+      if (error) {
+        setAdvisorError(error)
+      } else if (data) {
+        setAdvisorResult(data)
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to get analysis'
+      setAdvisorError(msg)
+    } finally {
+      setAdvisorLoading(false)
+    }
+  }, [assignedFlights, assignmentResult, registrations, aircraftTypes, assignmentMethod, scheduleRules])
 
   // ─── Flight search results (live-filtered) ─────────────────────────
   const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
@@ -1471,6 +1706,25 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     for (const t of aircraftTypes) m.set(t.icao_type, t.category)
     return m
   }, [aircraftTypes])
+
+  // Detect family-substituted flights (assigned to different type in same family)
+  const familySubFlights = useMemo(() => {
+    const subs = new Set<string>()
+    if (!(movementSettings.allowFamilySub ?? false)) return subs
+    for (const ef of assignedFlights) {
+      if (!ef.assignedReg || !ef.aircraftTypeIcao) continue
+      const assignedAc = registrations.find(r => r.registration === ef.assignedReg)
+      const assignedType = assignedAc?.aircraft_types?.icao_type
+      if (assignedType && assignedType !== ef.aircraftTypeIcao) {
+        const flightFamily = icaoToFamily.get(ef.aircraftTypeIcao)
+        const acFamily = icaoToFamily.get(assignedType)
+        if (flightFamily && flightFamily === acFamily) {
+          subs.add(ef.id)
+        }
+      }
+    }
+    return subs
+  }, [assignedFlights, registrations, icaoToFamily, movementSettings.allowFamilySub])
 
   const getFlightIcao = useCallback((expandedId: string) => {
     const ef = assignedFlights.find(f => f.id === expandedId)
@@ -2871,6 +3125,41 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
             >
               ✈ Optimizer
             </button>
+            {scheduleRules.length > 0 && assignmentResult.summary && (
+              <div
+                className="flex items-center gap-2 px-3 py-1 rounded-full"
+                style={{ fontSize: 10 }}
+              >
+                {assignmentResult.summary.hardRulesEnforced > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span style={{ color: 'hsl(var(--primary))' }}>⚡</span>
+                    {assignmentResult.summary.hardRulesEnforced} blocked
+                  </span>
+                )}
+                {assignmentResult.summary.softRulesBent > 0 && (
+                  <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                    ○ {assignmentResult.summary.softRulesBent} bent
+                  </span>
+                )}
+                {assignmentResult.summary.totalPenaltyCost > 0 && (
+                  <span className="text-muted-foreground">
+                    Cost: {assignmentResult.summary.totalPenaltyCost.toLocaleString()}
+                  </span>
+                )}
+              </div>
+            )}
+            {lastOptRun && (
+              <button
+                onClick={handleAskAdvisor}
+                disabled={advisorLoading}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                style={{ fontSize: 10 }}
+                title="Analyze assignment with AI"
+              >
+                <Sparkles style={{ width: 12, height: 12 }} />
+                {advisorLoading ? 'Analyzing...' : 'Advisor'}
+              </button>
+            )}
           </div>
 
           {/* Zoom pills + Row height zoom (far right) */}
@@ -3818,6 +4107,31 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                       }
                     }
 
+                    // Rule violation dot (bottom-right corner)
+                    const barViolations = assignmentResult.ruleViolations.get(ef.id) || []
+                    const hasHardViolation = barViolations.some(v => v.enforcement === 'hard')
+                    let violationDot: React.ReactNode = null
+                    if (barViolations.length > 0 && w > 25) {
+                      violationDot = (
+                        <div
+                          className="absolute flex items-center justify-center pointer-events-none"
+                          style={{
+                            top: 1,
+                            right: 2,
+                            width: 11,
+                            height: 11,
+                            borderRadius: '50%',
+                            background: hasHardViolation ? 'hsl(var(--destructive))' : '#F59E0B',
+                            fontSize: 7,
+                            color: 'white',
+                            fontWeight: 700,
+                          }}
+                        >
+                          !
+                        </div>
+                      )
+                    }
+
                     return (
                       <div key={ef.id}>
                         {/* Ghost placeholder (dotted outline at original position) */}
@@ -3903,7 +4217,23 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                           >
                             {content}
                             {barStatusIcon}
+                            {violationDot}
                             {originBadge}
+                            {familySubFlights.has(ef.id) && w > 30 && (
+                              <div
+                                className="absolute flex items-center justify-center pointer-events-none"
+                                style={{
+                                  bottom: 1,
+                                  left: 3,
+                                  fontSize: 8,
+                                  color: '#F59E0B',
+                                  fontWeight: 700,
+                                }}
+                                title={`Family substitution: scheduled ${ef.aircraftTypeIcao}, assigned to ${registrations.find(r => r.registration === ef.assignedReg)?.aircraft_types?.icao_type || '?'}`}
+                              >
+                                ↔
+                              </div>
+                            )}
                             {isSelected && <GlassSelectionOverlay isDark={isDark} />}
                             {isSearchHighlight && <GlassSearchOverlay isDark={isDark} />}
                           </div>
@@ -4374,7 +4704,170 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
             </div>
           )}
 
-          {panelMode === 'flight' && flightLinksPanelData ? (
+          {panelMode === 'advisor' ? (
+            <div className="flex flex-col h-full">
+              {/* Header */}
+              <div className="shrink-0 px-3 pt-3 pb-2 border-b">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles style={{ width: 14, height: 14 }} className="text-primary" />
+                    <span className="font-bold" style={{ fontSize: 13 }}>AI Advisor</span>
+                  </div>
+                  <button
+                    onClick={() => { setAdvisorResult(null); setAdvisorError(null); setPanelMode('flight') }}
+                    className="p-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+                <p className="text-muted-foreground mt-0.5" style={{ fontSize: 10 }}>
+                  Assignment analysis &amp; recommendations
+                </p>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto px-3 py-2 space-y-3">
+
+                {/* Loading state */}
+                {advisorLoading && (
+                  <div className="flex flex-col items-center justify-center py-12">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary mb-3" />
+                    <p style={{ fontSize: 12 }} className="font-medium">
+                      Analyzing assignment...
+                    </p>
+                    <p style={{ fontSize: 10 }} className="text-muted-foreground mt-1">
+                      Reviewing {assignedFlights.length} flights across {registrations.length} aircraft
+                    </p>
+                  </div>
+                )}
+
+                {/* Error state */}
+                {advisorError && (
+                  <div className="rounded-lg border p-3" style={{ background: 'hsl(var(--destructive) / 0.1)', borderColor: 'hsl(var(--destructive) / 0.2)' }}>
+                    <p style={{ fontSize: 11, color: 'hsl(var(--destructive))' }} className="font-medium">
+                      {advisorError}
+                    </p>
+                    {advisorError.includes('ANTHROPIC_API_KEY') && (
+                      <p style={{ fontSize: 10 }} className="text-muted-foreground mt-1">
+                        Add your Anthropic API key to the environment to enable AI Advisor.
+                      </p>
+                    )}
+                    <button
+                      onClick={handleAskAdvisor}
+                      className="mt-2 px-3 py-1 rounded-md border text-xs hover:bg-muted transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {/* Results */}
+                {advisorResult && (
+                  <>
+                    {/* Score badge */}
+                    <div className="flex items-center gap-3 py-2">
+                      <div
+                        className="flex items-center justify-center rounded-full font-bold text-white shrink-0"
+                        style={{
+                          width: 44,
+                          height: 44,
+                          fontSize: 16,
+                          background: advisorResult.score >= 90 ? '#22C55E'
+                            : advisorResult.score >= 70 ? 'hsl(var(--primary))'
+                            : advisorResult.score >= 50 ? '#F59E0B'
+                            : 'hsl(var(--destructive))',
+                        }}
+                      >
+                        {advisorResult.score}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium" style={{ fontSize: 12 }}>
+                          {advisorResult.score >= 90 ? 'Excellent'
+                            : advisorResult.score >= 70 ? 'Good'
+                            : advisorResult.score >= 50 ? 'Needs Attention'
+                            : 'Significant Issues'}
+                        </div>
+                        <p className="text-muted-foreground" style={{ fontSize: 10 }}>
+                          {advisorResult.overallAssessment}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Recommendations */}
+                    <div className="space-y-2">
+                      {advisorResult.recommendations.map((rec, i) => (
+                        <div
+                          key={i}
+                          className="rounded-lg border p-3"
+                        >
+                          {/* Type + Priority badge */}
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span
+                              className="px-1.5 py-0.5 rounded text-white font-semibold"
+                              style={{
+                                fontSize: 8,
+                                background:
+                                  rec.type === 'warning' ? 'hsl(var(--destructive))'
+                                  : rec.type === 'rule_change' ? '#F59E0B'
+                                  : rec.type === 'data_issue' ? '#EF4444'
+                                  : rec.type === 'improvement' ? 'hsl(var(--primary))'
+                                  : '#6B7280',
+                              }}
+                            >
+                              {rec.type === 'improvement' ? 'IMPROVE'
+                                : rec.type === 'warning' ? 'WARNING'
+                                : rec.type === 'rule_change' ? 'RULE'
+                                : rec.type === 'data_issue' ? 'DATA'
+                                : 'INSIGHT'}
+                            </span>
+                            <span
+                              className="text-muted-foreground"
+                              style={{ fontSize: 8, fontWeight: 600 }}
+                            >
+                              {rec.priority.toUpperCase()}
+                            </span>
+                          </div>
+
+                          {/* Title */}
+                          <div className="font-medium" style={{ fontSize: 12 }}>
+                            {rec.title}
+                          </div>
+
+                          {/* Detail */}
+                          <p className="text-muted-foreground mt-1" style={{ fontSize: 11 }}>
+                            {rec.detail}
+                          </p>
+
+                          {/* Action */}
+                          {rec.action && (
+                            <div
+                              className="mt-2 px-2.5 py-1.5 rounded-md border"
+                              style={{ fontSize: 10, background: 'hsl(var(--primary) / 0.05)', borderColor: 'hsl(var(--primary) / 0.1)' }}
+                            >
+                              <span className="font-medium" style={{ color: 'hsl(var(--primary))' }}>
+                                Action:
+                              </span>{' '}
+                              {rec.action}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Re-analyze button */}
+                    <button
+                      onClick={handleAskAdvisor}
+                      className="w-full mt-2 px-3 py-1.5 rounded-md border flex items-center justify-center gap-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                      style={{ fontSize: 10 }}
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Re-analyze
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : panelMode === 'flight' && flightLinksPanelData ? (
             <>
               {/* ── FLIGHT LINKS PANEL (multi-select same row) ──────── */}
               <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
@@ -4635,6 +5128,77 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                           </div>
                         </div>
                       )}
+
+                      {/* Rule violations & rejections */}
+                      {(() => {
+                        const flightId = flightPanelData.flight.id
+                        const vList = assignmentResult.ruleViolations.get(flightId) || []
+                        const rejectionList = assignmentResult.rejections.get(flightId) || []
+                        if (vList.length === 0 && rejectionList.length === 0) return null
+
+                        return (
+                          <div className="mt-3 pt-3 border-t space-y-3">
+                            {vList.length > 0 && (
+                              <div>
+                                <span className="text-muted-foreground font-bold uppercase block mb-1.5"
+                                  style={{ fontSize: 9, letterSpacing: '0.05em' }}>
+                                  Rule Violations
+                                </span>
+                                <div className="space-y-1.5">
+                                  {vList.map((v, i) => (
+                                    <div key={i} className="flex items-start gap-2">
+                                      <span style={{
+                                        fontSize: 8,
+                                        background: v.enforcement === 'hard'
+                                          ? 'hsl(var(--destructive))' : '#F59E0B',
+                                        color: 'white',
+                                        padding: '1px 5px',
+                                        borderRadius: 4,
+                                        fontWeight: 700,
+                                        whiteSpace: 'nowrap',
+                                      }}>
+                                        {v.enforcement === 'hard' ? '⚡ HARD' : `○ ${v.penaltyCost.toLocaleString()}`}
+                                      </span>
+                                      <span style={{ fontSize: 11 }}>{v.message}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {rejectionList.length > 0 && (
+                              <div>
+                                <span className="text-muted-foreground font-bold uppercase block mb-1.5"
+                                  style={{ fontSize: 9, letterSpacing: '0.05em' }}>
+                                  Why Not Other Aircraft
+                                </span>
+                                <div className="space-y-1">
+                                  {rejectionList
+                                    .filter(r => r.reason === 'hard_rule')
+                                    .slice(0, 5)
+                                    .map((r, i) => (
+                                    <div key={i} style={{ fontSize: 10 }} className="text-muted-foreground">
+                                      <span className="font-medium text-foreground">{r.registration}</span>
+                                      {' — '}
+                                      {r.ruleViolations?.[0]?.message || 'Hard rule blocked'}
+                                    </div>
+                                  ))}
+                                  {rejectionList.filter(r => r.reason === 'overlap').length > 0 && (
+                                    <div style={{ fontSize: 10 }} className="text-muted-foreground">
+                                      {rejectionList.filter(r => r.reason === 'overlap').length} aircraft had time overlaps
+                                    </div>
+                                  )}
+                                  {rejectionList.filter(r => r.reason === 'chain').length > 0 && (
+                                    <div style={{ fontSize: 10 }} className="text-muted-foreground">
+                                      {rejectionList.filter(r => r.reason === 'chain').length} aircraft had station chain conflicts
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
 
                       {/* Crew Placeholder */}
                       <div className="rounded-lg border border-dashed border-border/50 p-3 text-center">
@@ -5352,6 +5916,15 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         lastRun={lastOptRun}
         running={optimizerRunning}
         container={dialogContainer}
+        ruleCount={scheduleRules.length}
+        allowFamilySub={movementSettings.allowFamilySub ?? false}
+        onAllowFamilySubChange={(val) => updateMovementSettings({ allowFamilySub: val })}
+        aiProgress={aiProgress}
+        aiResult={aiResult}
+        onCancelAi={handleCancelAi}
+        onAskAdvisor={handleAskAdvisor}
+        mipProgress={mipProgress}
+        mipResult={mipResult}
       />
 
       {/* ── Fixed-position tooltip (rendered outside scroll containers) ── */}
@@ -5363,6 +5936,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           regCode={hoveredTooltipInfo.regCode}
           cursorRef={tooltipPosRef}
           tooltipSettings={movementSettings.tooltip}
+          violations={assignmentResult.ruleViolations.get(hoveredFlight.id) || []}
         />
       )}
 
@@ -5492,6 +6066,7 @@ function FlightTooltip({
   regCode,
   cursorRef,
   tooltipSettings,
+  violations,
 }: {
   flight: ExpandedFlight
   tat: TatInfo | null
@@ -5499,6 +6074,7 @@ function FlightTooltip({
   regCode: string | null
   cursorRef: React.MutableRefObject<{ x: number; y: number }>
   tooltipSettings: MovementSettingsData['tooltip']
+  violations: import('@/lib/utils/schedule-rule-evaluator').RuleViolation[]
 }) {
   const isPublished = flight.status === 'published'
   const isFin = !isPublished && flight.finalized
@@ -5678,6 +6254,25 @@ function FlightTooltip({
             <span style={{ color: tat.ok ? '#16a34a' : '#ef4444', fontSize: '10px' }}>
               TAT to next: {fmtTat(tat.gapMinutes)} (min:{fmtTat(tat.minTat)})
             </span>
+          </div>
+        )}
+
+        {/* Rule violations */}
+        {violations.length > 0 && (
+          <div className="pt-1 border-t border-border/30 space-y-0.5">
+            {violations.map((v, i) => (
+              <div key={i} className="flex items-start gap-1.5 text-[10px]">
+                <span style={{
+                  color: v.enforcement === 'hard' ? 'hsl(var(--destructive))' : '#F59E0B',
+                  fontWeight: 700,
+                  fontSize: 9,
+                  flexShrink: 0,
+                }}>
+                  {v.enforcement === 'hard' ? '⚡' : '○'}
+                </span>
+                <span style={{ color: 'var(--gantt-tooltip-body)' }}>{v.message}</span>
+              </div>
+            ))}
           </div>
         )}
       </div>

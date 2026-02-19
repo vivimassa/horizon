@@ -309,7 +309,7 @@ export function SchedulePreferences({
             <div className="flex items-center gap-2 mb-2">
               <GripVertical className="h-4 w-4 text-muted-foreground/50 cursor-grab shrink-0" />
               <span
-                className="w-[52px] text-center py-0.5 rounded-full text-white font-semibold"
+                className="px-2 text-center py-0.5 rounded-full text-white font-semibold whitespace-nowrap shrink-0"
                 style={{
                   fontSize: 9,
                   background: rule.enforcement === 'hard'
@@ -317,7 +317,9 @@ export function SchedulePreferences({
                     : '#F59E0B',
                 }}
               >
-                {rule.enforcement === 'hard' ? 'Hard' : 'Soft'}
+                {rule.enforcement === 'soft'
+                  ? `\u25CB Soft \u00B7 ${(rule.penalty_cost || 3000).toLocaleString()} pts`
+                  : '\u26A1 Hard'}
               </span>
               <span className="font-semibold" style={{ fontSize: 12 }}>
                 <span className="text-muted-foreground font-medium">Rule {ruleNumber}:</span>{' '}
@@ -457,7 +459,7 @@ export function SchedulePreferences({
           No rules match the current filter.
         </p>
       ) : (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-10">
           {/* Hard rules — left column */}
           <div className="space-y-2">
             <p className="text-[15px] font-bold tracking-tight">

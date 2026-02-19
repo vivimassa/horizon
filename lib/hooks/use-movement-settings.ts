@@ -57,6 +57,8 @@ function mergeWithDefaults(partial: Record<string, unknown>): MovementSettingsDa
 
     acTypeOrder: Array.isArray(partial.acTypeOrder) ? partial.acTypeOrder as string[] : [],
 
+    allowFamilySub: typeof partial.allowFamilySub === 'boolean' ? partial.allowFamilySub : d.allowFamilySub,
+
     tatOverrides: (partial.tatOverrides as MovementSettingsData['tatOverrides'] | undefined) ?? { ...d.tatOverrides },
     utilizationTargets: (partial.utilizationTargets as Record<string, number> | undefined) ?? { ...d.utilizationTargets },
   }

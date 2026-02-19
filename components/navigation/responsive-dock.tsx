@@ -24,6 +24,7 @@ import {
   MoreHorizontal,
   X,
 } from 'lucide-react'
+import { getModuleColor } from '@/lib/modules/colors'
 interface ResponsiveDockProps {
   operator: OperatorWithRole | null
   accessibleModules: string[]
@@ -74,6 +75,7 @@ export function ResponsiveDock({ operator, accessibleModules }: ResponsiveDockPr
                 const Icon = module.icon
                 const active = isActive(module.path)
                 const accessible = hasAccess(module.id)
+                const color = getModuleColor(module.id)
 
                 return (
                   <Tooltip key={module.id}>
@@ -86,7 +88,9 @@ export function ResponsiveDock({ operator, accessibleModules }: ResponsiveDockPr
                             'w-11 h-11',
                             'hover:scale-105',
                             active
-                              ? 'bg-primary/15 text-primary shadow-[0_0_12px_hsl(var(--primary)/0.12)]'
+                              ? color
+                                ? `${color.bg} ${color.text} shadow-[0_0_12px_hsl(${color.hsl}/0.12)]`
+                                : 'bg-primary/15 text-primary shadow-[0_0_12px_hsl(var(--primary)/0.12)]'
                               : 'text-muted-foreground hover:bg-white/40 dark:hover:bg-white/10 hover:text-foreground'
                           )}
                         >
@@ -128,6 +132,7 @@ export function ResponsiveDock({ operator, accessibleModules }: ResponsiveDockPr
             {displayItems.map((module) => {
               const Icon = module.icon
               const active = isActive(module.path)
+              const color = getModuleColor(module.id)
               return (
                 <Link
                   key={module.id}
@@ -135,7 +140,9 @@ export function ResponsiveDock({ operator, accessibleModules }: ResponsiveDockPr
                   className={cn(
                     'flex flex-col items-center justify-center gap-0.5 py-2 min-h-[44px] min-w-[44px] rounded-xl transition-all duration-200 flex-1',
                     active
-                      ? 'text-primary'
+                      ? color
+                        ? color.text
+                        : 'text-primary'
                       : 'text-muted-foreground hover:text-foreground'
                   )}
                 >
@@ -175,6 +182,7 @@ export function ResponsiveDock({ operator, accessibleModules }: ResponsiveDockPr
               {overflowItems.map((module) => {
                 const Icon = module.icon
                 const active = isActive(module.path)
+                const color = getModuleColor(module.id)
                 return (
                   <Link
                     key={module.id}
@@ -183,7 +191,9 @@ export function ResponsiveDock({ operator, accessibleModules }: ResponsiveDockPr
                     className={cn(
                       'flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 min-h-[44px]',
                       active
-                        ? 'bg-primary/15 text-primary'
+                        ? color
+                          ? `${color.bg} ${color.text}`
+                          : 'bg-primary/15 text-primary'
                         : 'text-foreground hover:bg-white/50 dark:hover:bg-white/10'
                     )}
                   >
