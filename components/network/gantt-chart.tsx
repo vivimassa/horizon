@@ -643,6 +643,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const [panelMode, setPanelMode] = useState<'flight' | 'aircraft' | 'rotation' | 'day-stats' | 'advisor'>('flight')
   const [panelAircraftReg, setPanelAircraftReg] = useState<string | null>(null)
   const [rotationTarget, setRotationTarget] = useState<{ reg: string; date: string } | null>(null)
+  const [overnightExpanded, setOvernightExpanded] = useState(false)
   const [selectedDays, setSelectedDays] = useState<Set<string>>(new Set())
 
   // Flight search state
@@ -5561,14 +5562,18 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 {/* ── Section 4: Overnight Stations ── */}
                 {dayPanelData.overnightStations.length > 0 && (() => {
                   const DONUT_COLORS = ['hsl(var(--primary))', 'hsl(var(--primary) / 0.75)', 'hsl(var(--primary) / 0.5)', 'hsl(var(--primary) / 0.35)', 'hsl(var(--primary) / 0.2)']
-                  const sorted = dayPanelData.overnightStations
-                  const showTop = sorted.length > 5 ? 4 : sorted.length
-                  const topStations = sorted.slice(0, showTop)
-                  const othersCount = sorted.slice(showTop).reduce((s, st) => s + st.count, 0)
-                  const othersPct = dayPanelData.overnightTotal > 0 ? Math.round(othersCount / dayPanelData.overnightTotal * 100) : 0
-                  const displayStations = othersCount > 0
-                    ? [...topStations, { station: 'Others', count: othersCount, pct: othersPct }]
-                    : topStations
+                  const allStations = dayPanelData.overnightStations
+                  const VISIBLE_COUNT = 5
+                  const hasMore = allStations.length > VISIBLE_COUNT
+
+                  // Donut: top 4 + Others (keep chart clean)
+                  const donutShowTop = allStations.length > 5 ? 4 : allStations.length
+                  const donutTop = allStations.slice(0, donutShowTop)
+                  const donutOthersCount = allStations.slice(donutShowTop).reduce((s, st) => s + st.count, 0)
+                  const donutOthersPct = dayPanelData.overnightTotal > 0 ? Math.round(donutOthersCount / dayPanelData.overnightTotal * 100) : 0
+                  const donutSegments = donutOthersCount > 0
+                    ? [...donutTop, { station: 'Others', count: donutOthersCount, pct: donutOthersPct }]
+                    : donutTop
 
                   // SVG donut
                   const size = 110
@@ -5579,9 +5584,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
                   const donutPaths: { d: string; fill: string }[] = []
                   let angle = -Math.PI / 2
-                  displayStations.forEach((st, i) => {
+                  donutSegments.forEach((st, i) => {
                     const frac = st.count / total
-                    const sweep = frac * Math.PI * 2 - (displayStations.length > 1 ? gap : 0)
+                    const sweep = frac * Math.PI * 2 - (donutSegments.length > 1 ? gap : 0)
                     if (sweep <= 0) return
                     const a1 = angle
                     const a2 = angle + sweep
@@ -5600,6 +5605,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   // Total unique aircraft for donut center
                   const donutCenter = dayPanelData.aircraftInService
 
+                  // Visible list: top 5 by default, all when expanded
+                  const visibleStations = overnightExpanded ? allStations : allStations.slice(0, VISIBLE_COUNT)
+
+                  // Color for list items: top donut stations get donut color, rest get muted
+                  const getStationColor = (idx: number) =>
+                    idx < donutShowTop ? DONUT_COLORS[idx] : 'hsl(var(--primary) / 0.12)'
+
                   return (
                     <div className="px-4 pt-3.5 pb-4 border-t border-[#F3F4F6] dark:border-[#1F2937]">
                       <div className="text-[12px] font-bold mb-2.5">Overnight Stations</div>
@@ -5616,7 +5628,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                         </div>
                         {/* Station list */}
                         <div className="flex-1 min-w-0">
-                          {displayStations.map((st, i) => (
+                          {visibleStations.map((st, i) => (
                             <div
                               key={st.station}
                               className="flex items-center justify-between px-1.5 py-1 rounded-md hover:bg-primary/[0.04] dark:hover:bg-primary/[0.08] transition-colors"
@@ -5624,7 +5636,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                               <span className="flex items-center gap-1.5">
                                 <span
                                   className="w-2 h-2 rounded-sm shrink-0"
-                                  style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }}
+                                  style={{ background: getStationColor(i) }}
                                 />
                                 <span className="text-[11px] font-semibold">{st.station}</span>
                               </span>
@@ -5634,6 +5646,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                               </span>
                             </div>
                           ))}
+                          {hasMore && (
+                            <button
+                              onClick={() => setOvernightExpanded(prev => !prev)}
+                              className="w-full text-[10px] font-medium text-primary hover:text-primary/80 mt-1 py-0.5 transition-colors cursor-pointer"
+                              style={{ background: 'none', border: 'none' }}
+                            >
+                              {overnightExpanded ? 'Show less' : `See ${allStations.length - VISIBLE_COUNT} more`}
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
