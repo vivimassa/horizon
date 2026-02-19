@@ -19,7 +19,6 @@ export interface GanttOptimizerDialogProps {
   currentMethod: OptimizerMethod
   lastRun: { method: string; time: Date } | null
   running: boolean
-  container?: HTMLElement | null
   ruleCount?: number
   allowFamilySub?: boolean
   onAllowFamilySubChange?: (val: boolean) => void
@@ -140,7 +139,6 @@ export function GanttOptimizerDialog({
   currentMethod,
   lastRun,
   running,
-  container,
   ruleCount,
   allowFamilySub,
   onAllowFamilySubChange,
@@ -189,9 +187,8 @@ export function GanttOptimizerDialog({
           maxWidth: '95vw',
           borderRadius: 16,
           overflow: 'hidden',
-          position: 'relative',
         }}
-        {...(container ? { container } : {})}
+
       >
         {/* ── AI Progress Overlay ─────────────────────────── */}
         {aiProgress && (
@@ -586,10 +583,25 @@ export function GanttOptimizerDialog({
         {/* ── MIP Result Banner ──────────────────────────── */}
         {mipResult && !mipProgress && (
           <div className="px-5 pb-4">
-            <div className="rounded-lg border p-3" style={{ background: 'hsl(var(--primary) / 0.05)', borderColor: 'hsl(var(--primary) / 0.2)' }}>
+            <div className="rounded-lg border p-3" style={{
+              background: mipResult.mip.status === 'Error' ? 'hsl(0 84% 60% / 0.06)'
+                : mipResult.mip.status === 'Infeasible' ? 'hsl(30 90% 50% / 0.06)'
+                : mipResult.mip.status === 'Optimal' ? 'hsl(142 71% 45% / 0.06)'
+                : 'hsl(var(--primary) / 0.05)',
+              borderColor: mipResult.mip.status === 'Error' ? 'hsl(0 84% 60% / 0.25)'
+                : mipResult.mip.status === 'Infeasible' ? 'hsl(30 90% 50% / 0.25)'
+                : mipResult.mip.status === 'Optimal' ? 'hsl(142 71% 45% / 0.25)'
+                : 'hsl(var(--primary) / 0.2)',
+            }}>
               <div className="flex items-center justify-between">
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'hsl(var(--primary))' }}>
+                  <div style={{
+                    fontSize: 11, fontWeight: 600,
+                    color: mipResult.mip.status === 'Error' ? 'hsl(0 84% 60%)'
+                      : mipResult.mip.status === 'Infeasible' ? 'hsl(30 90% 50%)'
+                      : mipResult.mip.status === 'Optimal' ? '#22C55E'
+                      : 'hsl(var(--primary))',
+                  }}>
                     {mipResult.mip.status === 'Optimal' ? '\u2713 Optimal Solution Found'
                       : mipResult.mip.status === 'Feasible' ? '\u25C9 Good Solution Found'
                       : mipResult.mip.status === 'Infeasible' ? '\u2717 No Feasible Solution'
@@ -603,7 +615,10 @@ export function GanttOptimizerDialog({
                 <div className="text-right">
                   <div className="font-mono font-bold" style={{
                     fontSize: 14,
-                    color: mipResult.mip.status === 'Optimal' ? '#22C55E' : 'hsl(var(--primary))',
+                    color: mipResult.mip.status === 'Optimal' ? '#22C55E'
+                      : mipResult.mip.status === 'Error' ? 'hsl(0 84% 60%)'
+                      : mipResult.mip.status === 'Infeasible' ? 'hsl(30 90% 50%)'
+                      : 'hsl(var(--primary))',
                   }}>
                     {mipResult.mip.status === 'Optimal' ? 'OPTIMAL' : mipResult.mip.status.toUpperCase()}
                   </div>
@@ -612,13 +627,20 @@ export function GanttOptimizerDialog({
                   </div>
                 </div>
               </div>
-              <div className="flex gap-4 mt-2 text-muted-foreground" style={{ fontSize: 9 }}>
-                <span>Cost: {mipResult.mip.objectiveValue.toLocaleString()}</span>
-                <span>&middot;</span>
-                <span>{mipResult.overflow.length} overflow</span>
-                <span>&middot;</span>
-                <span>{mipResult.chainBreaks.length} chain breaks</span>
-              </div>
+              {mipResult.mip.message && (
+                <p className="text-muted-foreground mt-2" style={{ fontSize: 10, lineHeight: 1.4 }}>
+                  {mipResult.mip.message}
+                </p>
+              )}
+              {(mipResult.mip.status === 'Optimal' || mipResult.mip.status === 'Feasible') && (
+                <div className="flex gap-4 mt-2 text-muted-foreground" style={{ fontSize: 9 }}>
+                  <span>Cost: {mipResult.mip.objectiveValue.toLocaleString()}</span>
+                  <span>&middot;</span>
+                  <span>{mipResult.overflow.length} overflow</span>
+                  <span>&middot;</span>
+                  <span>{mipResult.chainBreaks.length} chain breaks</span>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -674,7 +696,7 @@ export function GanttOptimizerDialog({
                   Running...
                 </>
               ) : (
-                <>&blacktriangleright; Run Assignment</>
+                <>&#9654; Run Assignment</>
               )}
             </button>
           </div>

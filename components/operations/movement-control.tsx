@@ -1276,15 +1276,20 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
       }
 
-      const typeFamilyMap = new Map<string, string>()
+      const regFamilyMap = new Map<string, string>()
       for (const t of aircraftTypes) {
         if (t.family) {
           for (const r of registrations) {
             if (r.aircraft_types?.icao_type === t.icao_type) {
-              typeFamilyMap.set(r.registration, t.family)
+              regFamilyMap.set(r.registration, t.family)
             }
           }
         }
+      }
+
+      const icaoFamilyMap = new Map<string, string>()
+      for (const t of aircraftTypes) {
+        if (t.family) icaoFamilyMap.set(t.icao_type, t.family)
       }
 
       const config = MIP_PRESETS[mipPreset || 'normal']
@@ -1297,7 +1302,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           config,
           (progress) => setMipProgress(progress),
           scheduleRules as any[],
-          typeFamilyMap,
+          regFamilyMap,
+          movementSettings.allowFamilySub ?? false,
+          icaoFamilyMap,
         )
 
         setMipResult(result)
@@ -1342,6 +1349,11 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       aiAbortRef.current = abort
       const config = SA_PRESETS[aiPreset || 'normal']
 
+      const saTypeFamilyMap = new Map<string, string>()
+      for (const t of aircraftTypes) {
+        if (t.family) saTypeFamilyMap.set(t.icao_type, t.family)
+      }
+
       try {
         const result = await runSimulatedAnnealing(
           greedyResult,
@@ -1364,6 +1376,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           config,
           (progress) => setAiProgress(progress),
           abort.signal,
+          movementSettings.allowFamilySub ?? false,
+          saTypeFamilyMap,
         )
 
         setAiResult(result)
@@ -5915,7 +5929,6 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         currentMethod={assignmentMethod}
         lastRun={lastOptRun}
         running={optimizerRunning}
-        container={dialogContainer}
         ruleCount={scheduleRules.length}
         allowFamilySub={movementSettings.allowFamilySub ?? false}
         onAllowFamilySubChange={(val) => updateMovementSettings({ allowFamilySub: val })}

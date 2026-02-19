@@ -29,6 +29,7 @@ export interface MIPResult extends TailAssignmentResult {
     elapsedMs: number
     timeLimitSec: number
     gap?: number
+    message?: string
   }
 }
 
@@ -42,6 +43,12 @@ export const MIP_PRESETS = {
 
 const OVERFLOW_COST = 50000
 const CHAIN_BREAK_COST = 5000
+const FAMILY_SUB_COST = 500
+
+// ─── Size limits (browser WASM memory is limited) ─────────────
+// With clique-based overlaps these are much more generous
+const MAX_VARIABLES = 200000
+const MAX_CONSTRAINTS = 500000
 
 // ─── Block type ──────────────────────────────────────────────
 
@@ -55,6 +62,31 @@ interface MIPBlock {
   pinned: boolean
   pinnedReg: string | null
   blockMinutes: number
+}
+
+// ─── Overlap clique finder (sweep line) ──────────────────────
+
+function findOverlapCliques(typeBlocks: MIPBlock[], tatMs: number): MIPBlock[][] {
+  const sorted = [...typeBlocks].sort((a, b) => a.startMs - b.startMs)
+  const cliques: MIPBlock[][] = []
+
+  for (let i = 0; i < sorted.length; i++) {
+    const current = sorted[i]
+    const clique: MIPBlock[] = [current]
+
+    // Find all blocks that overlap with current (including TAT buffer)
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (sorted[j].startMs >= current.endMs + tatMs) break
+      clique.push(sorted[j])
+    }
+
+    // Only add if clique has 2+ blocks
+    if (clique.length >= 2) {
+      cliques.push(clique)
+    }
+  }
+
+  return cliques
 }
 
 // ─── Rule evaluation helper ──────────────────────────────────
@@ -71,7 +103,6 @@ function checkRuleViolation(
   if (rule.enforcement !== 'hard' && rule.enforcement !== 'soft')
     return { violated: false, isHard: false, cost: 0 }
 
-  // Scope check
   let scopeMatch = false
   if (rule.scope_type === 'all') scopeMatch = true
   else if (rule.scope_type === 'type') scopeMatch = rule.scope_values.includes(ac.icaoType)
@@ -82,7 +113,6 @@ function checkRuleViolation(
   else if (rule.scope_type === 'registration') scopeMatch = rule.scope_values.includes(ac.registration)
   if (!scopeMatch) return { violated: false, isHard: false, cost: 0 }
 
-  // Criteria check (against first flight in block)
   const f = block.flights[0]
   let criteriaMatch = false
   const cv = rule.criteria_values || {}
@@ -159,6 +189,39 @@ function checkRuleViolation(
   }
 }
 
+// ─── Base result fields helper ───────────────────────────────
+
+function makeBaseFields(totalFlights: number) {
+  return {
+    ruleViolations: new Map<string, RuleViolation[]>(),
+    rejections: new Map<string, RejectionReason[]>(),
+    summary: { totalFlights, assigned: 0, overflowed: totalFlights, hardRulesEnforced: 0, softRulesBent: 0, totalPenaltyCost: 0 },
+  }
+}
+
+function makeErrorResult(
+  flights: AssignableFlight[],
+  vars: number, constraints: number,
+  elapsedMs: number, timeLimitSec: number,
+  message?: string,
+): MIPResult {
+  return {
+    ...makeBaseFields(flights.length),
+    assignments: new Map(),
+    overflow: [...flights],
+    chainBreaks: [],
+    mip: {
+      status: 'Error' as const,
+      objectiveValue: 0,
+      totalVariables: vars,
+      totalConstraints: constraints,
+      elapsedMs,
+      timeLimitSec,
+      message,
+    },
+  }
+}
+
 // ─── Main function ───────────────────────────────────────────
 
 export async function runMIPSolver(
@@ -171,6 +234,8 @@ export async function runMIPSolver(
     criteria_type: string; criteria_values: any; enforcement: string;
     penalty_cost: number; is_active: boolean }[],
   aircraftFamilies?: Map<string, string>,
+  allowFamilySub: boolean = false,
+  typeFamilyMap: Map<string, string> = new Map(),
 ): Promise<MIPResult> {
 
   const startTime = performance.now()
@@ -234,67 +299,82 @@ export async function runMIPSolver(
     acByType.set(ac.icaoType, list)
   })
 
-  // ── Identify overlapping block pairs per aircraft type ──
-  report('building', 'Computing overlap constraints...')
-
-  interface OverlapPair {
-    block1: number
-    block2: number
-  }
-
-  const overlapsByType = new Map<string, OverlapPair[]>()
-
-  // Group blocks by type
-  const blocksByType = new Map<string, MIPBlock[]>()
-  for (const block of allBlocks) {
-    const list = blocksByType.get(block.icaoType) || []
-    list.push(block)
-    blocksByType.set(block.icaoType, list)
-  }
-
-  for (const [icaoType, typeBlocks] of Array.from(blocksByType.entries())) {
-    const tatMs = (tatMinutes.get(icaoType) ?? 30) * 60000
-    const overlaps: OverlapPair[] = []
-
-    typeBlocks.sort((a, b) => a.startMs - b.startMs)
-
-    for (let i = 0; i < typeBlocks.length; i++) {
-      for (let j = i + 1; j < typeBlocks.length; j++) {
-        const a = typeBlocks[i]
-        const b = typeBlocks[j]
-        if (b.startMs >= a.endMs + tatMs) break
-        if (a.startMs < b.endMs + tatMs && b.startMs < a.endMs + tatMs) {
-          overlaps.push({ block1: a.index, block2: b.index })
-        }
+  // ── Build family-based aircraft groups (for allowFamilySub) ──
+  const acByFamily = new Map<string, number[]>()
+  if (allowFamilySub) {
+    aircraft.forEach((ac, i) => {
+      const family = typeFamilyMap.get(ac.icaoType)
+      if (family) {
+        const list = acByFamily.get(family) || []
+        list.push(i)
+        acByFamily.set(family, list)
       }
-    }
+    })
+  }
 
-    overlapsByType.set(icaoType, overlaps)
+  // Helper: get eligible aircraft indices for a block
+  function getEligibleAc(block: MIPBlock): number[] {
+    if (!allowFamilySub) return acByType.get(block.icaoType) || []
+    const family = typeFamilyMap.get(block.icaoType)
+    if (family) return acByFamily.get(family) || acByType.get(block.icaoType) || []
+    return acByType.get(block.icaoType) || []
+  }
+
+  // ── Group blocks by type (or family when allowFamilySub) ──
+  const blockGroups = new Map<string, MIPBlock[]>()
+  for (const block of allBlocks) {
+    const groupKey = allowFamilySub
+      ? (typeFamilyMap.get(block.icaoType) || block.icaoType)
+      : block.icaoType
+    const list = blockGroups.get(groupKey) || []
+    list.push(block)
+    blockGroups.set(groupKey, list)
+  }
+
+  // ── Build overlap cliques per group (sweep line) ──
+  report('building', 'Computing overlap cliques...')
+
+  const cliquesByGroup = new Map<string, MIPBlock[][]>()
+
+  for (const [groupKey, groupBlocks] of Array.from(blockGroups.entries())) {
+    // Use min TAT across all types in this group
+    let minTatMs = Infinity
+    for (const b of groupBlocks) {
+      const t = (tatMinutes.get(b.icaoType) ?? 30) * 60000
+      if (t < minTatMs) minTatMs = t
+    }
+    if (!isFinite(minTatMs)) minTatMs = 30 * 60000
+    cliquesByGroup.set(groupKey, findOverlapCliques(groupBlocks, minTatMs))
   }
 
   // ── Identify consecutive block pairs for chain break cost ──
-  report('building', 'Building LP model...')
-
   interface SeqPair {
     block1: MIPBlock
     block2: MIPBlock
+    groupKey: string
     chainBreak: boolean
   }
 
   const seqPairs: SeqPair[] = []
 
-  for (const [, typeBlocks] of Array.from(blocksByType.entries())) {
-    const sorted = [...typeBlocks].sort((a, b) => a.startMs - b.startMs)
-    const tatMs = (tatMinutes.get(sorted[0]?.icaoType ?? '') ?? 30) * 60000
+  for (const [groupKey, groupBlocks] of Array.from(blockGroups.entries())) {
+    const sorted = [...groupBlocks].sort((a, b) => a.startMs - b.startMs)
+    let minTatMs = Infinity
+    for (const b of sorted) {
+      const t = (tatMinutes.get(b.icaoType) ?? 30) * 60000
+      if (t < minTatMs) minTatMs = t
+    }
+    if (!isFinite(minTatMs)) minTatMs = 30 * 60000
 
     for (let i = 0; i < sorted.length; i++) {
       for (let j = i + 1; j < sorted.length; j++) {
-        if (sorted[j].startMs >= sorted[i].endMs + tatMs) {
+        if (sorted[j].startMs >= sorted[i].endMs + minTatMs) {
           const arr = sorted[i].flights[sorted[i].flights.length - 1].arrStation
           const dep = sorted[j].flights[0].depStation
           seqPairs.push({
             block1: sorted[i],
             block2: sorted[j],
+            groupKey,
             chainBreak: arr !== dep,
           })
           break // Only nearest successor
@@ -303,7 +383,63 @@ export async function runMIPSolver(
     }
   }
 
+  const chainBreakPairs = seqPairs.filter(p => p.chainBreak)
+
+  // ── EARLY SIZE ESTIMATION (before building the LP string) ──
+  report('building', 'Estimating model size...')
+
+  let estVars = 0
+  let estConstraints = 0
+
+  for (const block of allBlocks) {
+    if (block.pinned) continue
+    const acCount = getEligibleAc(block).length
+    estVars += acCount   // x vars
+    estVars += 1         // s var (slack)
+    estConstraints += 1  // assignment constraint
+  }
+
+  for (const [groupKey, cliques] of Array.from(cliquesByGroup.entries())) {
+    const acCount = allowFamilySub
+      ? (acByFamily.get(groupKey) || []).length
+      : (acByType.get(groupKey) || []).length
+    estConstraints += cliques.length * acCount
+  }
+
+  // Chain break y-variables & constraints
+  let estChainVars = 0
+  let estChainConstraints = 0
+  for (const pair of chainBreakPairs) {
+    const acCount = allowFamilySub
+      ? (acByFamily.get(pair.groupKey) || []).length
+      : (acByType.get(pair.block1.icaoType) || []).length
+    estChainVars += acCount
+    estChainConstraints += acCount
+  }
+
+  // Include chain breaks if they fit
+  const includeChainBreaks = (estVars + estChainVars) <= MAX_VARIABLES
+    && (estConstraints + estChainConstraints) <= MAX_CONSTRAINTS
+
+  if (includeChainBreaks) {
+    estVars += estChainVars
+    estConstraints += estChainConstraints
+  }
+
+  report('building', `Estimated: ~${estVars.toLocaleString()} vars, ~${estConstraints.toLocaleString()} constraints${!includeChainBreaks && chainBreakPairs.length > 0 ? ' (chain breaks skipped)' : ''}`)
+
+  if (estVars > MAX_VARIABLES || estConstraints > MAX_CONSTRAINTS) {
+    const msg = `Model too large (${estVars.toLocaleString()} variables, ${estConstraints.toLocaleString()} constraints). Try reducing the date range or use AI Optimizer instead.`
+    report('building', msg)
+    return makeErrorResult(flights, estVars, estConstraints, performance.now() - startTime, config.timeLimitSec, msg)
+  }
+
+  // Yield to UI before heavy LP string generation
+  await new Promise(r => setTimeout(r, 0))
+
   // ── Generate LP format string ──
+  report('building', 'Building LP model...')
+
   const lines: string[] = []
   const varSet = new Set<string>()
   const binaryVars: string[] = []
@@ -327,31 +463,43 @@ export async function runMIPSolver(
     addVar(varName)
   }
 
-  // Chain break costs
-  for (const pair of seqPairs) {
-    if (!pair.chainBreak) continue
-    const eligibleAc = acByType.get(pair.block1.icaoType) || []
-    for (const acIdx of eligibleAc) {
-      const yVar = `y_B${pair.block1.index}_B${pair.block2.index}_A${acIdx}`
-      objTerms.push(`${CHAIN_BREAK_COST} ${yVar}`)
-      addVar(yVar)
+  // Chain break costs (only if model is small enough)
+  if (includeChainBreaks) {
+    for (const pair of chainBreakPairs) {
+      const eligibleAc = allowFamilySub
+        ? (acByFamily.get(pair.groupKey) || [])
+        : (acByType.get(pair.block1.icaoType) || [])
+      for (const acIdx of eligibleAc) {
+        const yVar = `y_B${pair.block1.index}_B${pair.block2.index}_A${acIdx}`
+        objTerms.push(`${CHAIN_BREAK_COST} ${yVar}`)
+        addVar(yVar)
+      }
     }
   }
 
-  // Soft rule penalties
-  // Pre-compute hard blocks for constraint generation
-  const hardBlocked = new Set<string>() // "blockIdx_acIdx"
+  // Family substitution penalty + soft rule penalties + hard block tracking
+  const hardBlocked = new Set<string>()
 
-  if (rules && rules.length > 0) {
-    for (const block of allBlocks) {
-      if (block.pinned) continue
-      const eligibleAc = acByType.get(block.icaoType) || []
+  for (const block of allBlocks) {
+    if (block.pinned) continue
+    const eligibleAc = getEligibleAc(block)
 
-      for (const acIdx of eligibleAc) {
-        const ac = aircraft[acIdx]
-        let softCost = 0
-        let isHardBlocked = false
+    for (const acIdx of eligibleAc) {
+      const ac = aircraft[acIdx]
+      let softCost = 0
+      let isHardBlocked = false
 
+      // Family substitution penalty (prefer exact type match)
+      if (allowFamilySub && ac.icaoType !== block.icaoType) {
+        const blockFamily = typeFamilyMap.get(block.icaoType)
+        const acFamily = typeFamilyMap.get(ac.icaoType)
+        if (blockFamily && blockFamily === acFamily) {
+          softCost += FAMILY_SUB_COST
+        }
+      }
+
+      // Rule penalties
+      if (rules && rules.length > 0) {
         for (const rule of rules) {
           const result = checkRuleViolation(rule, ac, block, aircraftFamilies)
           if (result.violated) {
@@ -363,13 +511,13 @@ export async function runMIPSolver(
             }
           }
         }
+      }
 
-        const xVar = `x_B${block.index}_A${acIdx}`
-        if (isHardBlocked) {
-          hardBlocked.add(`${block.index}_${acIdx}`)
-        } else if (softCost > 0) {
-          objTerms.push(`${softCost} ${xVar}`)
-        }
+      const xVar = `x_B${block.index}_A${acIdx}`
+      if (isHardBlocked) {
+        hardBlocked.add(`${block.index}_${acIdx}`)
+      } else if (softCost > 0) {
+        objTerms.push(`${softCost} ${xVar}`)
       }
     }
   }
@@ -383,7 +531,7 @@ export async function runMIPSolver(
   // CONSTRAINT 1: Each non-pinned block → exactly one aircraft OR overflows
   for (const block of allBlocks) {
     if (block.pinned) continue
-    const eligibleAc = acByType.get(block.icaoType) || []
+    const eligibleAc = getEligibleAc(block)
     if (eligibleAc.length === 0) continue
 
     const terms = eligibleAc.map(acIdx => `x_B${block.index}_A${acIdx}`)
@@ -407,12 +555,18 @@ export async function runMIPSolver(
     addVar(xVar)
   }
 
-  // CONSTRAINT 3: No overlapping blocks on same aircraft
-  for (const [icaoType, overlaps] of Array.from(overlapsByType.entries())) {
-    const eligibleAc = acByType.get(icaoType) || []
-    for (const pair of overlaps) {
+  // CONSTRAINT 3: No overlapping blocks on same aircraft (CLIQUE-BASED)
+  // Each clique = a maximal set of mutually overlapping blocks.
+  // One constraint per clique per aircraft: sum(x_{b,a}) <= 1
+  // This replaces O(pairs × aircraft) with O(cliques × aircraft).
+  for (const [groupKey, cliques] of Array.from(cliquesByGroup.entries())) {
+    const eligibleAc = allowFamilySub
+      ? (acByFamily.get(groupKey) || [])
+      : (acByType.get(groupKey) || [])
+    for (const clique of cliques) {
       for (const acIdx of eligibleAc) {
-        lines.push(`  ovlp_B${pair.block1}_B${pair.block2}_A${acIdx}: x_B${pair.block1}_A${acIdx} + x_B${pair.block2}_A${acIdx} <= 1`)
+        const terms = clique.map(b => `x_B${b.index}_A${acIdx}`).join(' + ')
+        lines.push(`  clq_${constraintCount}: ${terms} <= 1`)
         constraintCount++
       }
     }
@@ -425,15 +579,17 @@ export async function runMIPSolver(
     constraintCount++
   }
 
-  // CONSTRAINT 5: Sequencing (chain break linearization)
-  // y_{i,j,a} >= x_{i,a} + x_{j,a} - 1
-  for (const pair of seqPairs) {
-    if (!pair.chainBreak) continue
-    const eligibleAc = acByType.get(pair.block1.icaoType) || []
-    for (const acIdx of eligibleAc) {
-      const yVar = `y_B${pair.block1.index}_B${pair.block2.index}_A${acIdx}`
-      lines.push(`  seq_B${pair.block1.index}_B${pair.block2.index}_A${acIdx}: ${yVar} - x_B${pair.block1.index}_A${acIdx} - x_B${pair.block2.index}_A${acIdx} >= -1`)
-      constraintCount++
+  // CONSTRAINT 5: Sequencing (chain break linearization) — only for small models
+  if (includeChainBreaks) {
+    for (const pair of chainBreakPairs) {
+      const eligibleAc = allowFamilySub
+        ? (acByFamily.get(pair.groupKey) || [])
+        : (acByType.get(pair.block1.icaoType) || [])
+      for (const acIdx of eligibleAc) {
+        const yVar = `y_B${pair.block1.index}_B${pair.block2.index}_A${acIdx}`
+        lines.push(`  seq_B${pair.block1.index}_B${pair.block2.index}_A${acIdx}: ${yVar} - x_B${pair.block1.index}_A${acIdx} - x_B${pair.block2.index}_A${acIdx} >= -1`)
+        constraintCount++
+      }
     }
   }
 
@@ -453,33 +609,10 @@ export async function runMIPSolver(
 
   const lpString = lines.join('\n')
 
-  report('building', `Model: ${binaryVars.length} variables, ${constraintCount} constraints`)
+  report('building', `Model: ${binaryVars.length} vars, ${constraintCount} constraints (${(lpString.length / 1024).toFixed(0)} KB)`)
 
-  // Helper to build base result fields
-  const baseFields = () => ({
-    ruleViolations: new Map<string, RuleViolation[]>(),
-    rejections: new Map<string, RejectionReason[]>(),
-    summary: { totalFlights: flights.length, assigned: 0, overflowed: flights.length, hardRulesEnforced: 0, softRulesBent: 0, totalPenaltyCost: 0 },
-  })
-
-  // ── Size guard ──
-  if (binaryVars.length > 50000) {
-    report('building', 'Model too large for browser solver. Try AI Optimizer instead.')
-    return {
-      ...baseFields(),
-      assignments: new Map(),
-      overflow: [...flights],
-      chainBreaks: [],
-      mip: {
-        status: 'Error' as const,
-        objectiveValue: 0,
-        totalVariables: binaryVars.length,
-        totalConstraints: constraintCount,
-        elapsedMs: performance.now() - startTime,
-        timeLimitSec: config.timeLimitSec,
-      },
-    }
-  }
+  // Yield before solver load
+  await new Promise(r => setTimeout(r, 0))
 
   // ── Solve with HiGHS ──
   report('solving', 'Loading HiGHS solver...')
@@ -491,7 +624,7 @@ export async function runMIPSolver(
         `https://lovasoa.github.io/highs-js/${file}`,
     })
 
-    report('solving', 'Solving MIP...')
+    report('solving', `Solving MIP (time limit: ${config.timeLimitSec}s)...`)
 
     const solution = highs.solve(lpString, {
       time_limit: config.timeLimitSec,
@@ -523,7 +656,7 @@ export async function runMIPSolver(
         }
 
         let assigned = false
-        const eligibleAc = acByType.get(block.icaoType) || []
+        const eligibleAc = getEligibleAc(block)
 
         for (const acIdx of eligibleAc) {
           const xVar = `x_B${block.index}_A${acIdx}`
@@ -543,19 +676,55 @@ export async function runMIPSolver(
         }
       }
 
-      // Extract chain breaks from y variables
-      for (const pair of seqPairs) {
-        if (!pair.chainBreak) continue
-        const eligibleAc = acByType.get(pair.block1.icaoType) || []
-        for (const acIdx of eligibleAc) {
-          const yVar = `y_B${pair.block1.index}_B${pair.block2.index}_A${acIdx}`
-          const col = columns[yVar]
-          if (col && col.Primal > 0.5) {
-            chainBreaks.push({
-              flightId: pair.block2.flights[0].id,
-              prevArr: pair.block1.flights[pair.block1.flights.length - 1].arrStation,
-              nextDep: pair.block2.flights[0].depStation,
-            })
+      // Extract chain breaks from y variables (if modeled)
+      if (includeChainBreaks) {
+        for (const pair of chainBreakPairs) {
+          const eligibleAc = allowFamilySub
+            ? (acByFamily.get(pair.groupKey) || [])
+            : (acByType.get(pair.block1.icaoType) || [])
+          for (const acIdx of eligibleAc) {
+            const yVar = `y_B${pair.block1.index}_B${pair.block2.index}_A${acIdx}`
+            const col = columns[yVar]
+            if (col && col.Primal > 0.5) {
+              chainBreaks.push({
+                flightId: pair.block2.flights[0].id,
+                prevArr: pair.block1.flights[pair.block1.flights.length - 1].arrStation,
+                nextDep: pair.block2.flights[0].depStation,
+              })
+            }
+          }
+        }
+      } else {
+        // Compute chain breaks post-hoc from assignments
+        const acBlocks = new Map<string, MIPBlock[]>()
+        for (const block of allBlocks) {
+          const reg = block.pinnedReg || (() => {
+            for (const acIdx of getEligibleAc(block)) {
+              const xVar = `x_B${block.index}_A${acIdx}`
+              const col = columns[xVar]
+              if (col && col.Primal > 0.5) return aircraft[acIdx].registration
+            }
+            return null
+          })()
+          if (!reg) continue
+          const list = acBlocks.get(reg) || []
+          list.push(block)
+          acBlocks.set(reg, list)
+        }
+        for (const [, blocks] of Array.from(acBlocks.entries())) {
+          blocks.sort((a, b) => a.startMs - b.startMs)
+          for (let i = 0; i < blocks.length - 1; i++) {
+            const prev = blocks[i]
+            const next = blocks[i + 1]
+            const prevArr = prev.flights[prev.flights.length - 1].arrStation
+            const nextDep = next.flights[0].depStation
+            if (prevArr !== nextDep) {
+              chainBreaks.push({
+                flightId: next.flights[0].id,
+                prevArr,
+                nextDep,
+              })
+            }
           }
         }
       }
@@ -566,7 +735,7 @@ export async function runMIPSolver(
     const elapsedMs = performance.now() - startTime
 
     return {
-      ...baseFields(),
+      ...makeBaseFields(flights.length),
       summary: {
         totalFlights: flights.length,
         assigned: assignments.size,
@@ -593,20 +762,6 @@ export async function runMIPSolver(
 
   } catch (e: any) {
     console.error('MIP solver error:', e)
-    const elapsedMs = performance.now() - startTime
-    return {
-      ...baseFields(),
-      assignments: new Map(),
-      overflow: [...flights],
-      chainBreaks: [],
-      mip: {
-        status: 'Error' as const,
-        objectiveValue: 0,
-        totalVariables: binaryVars.length,
-        totalConstraints: constraintCount,
-        elapsedMs,
-        timeLimitSec: config.timeLimitSec,
-      },
-    }
+    return makeErrorResult(flights, binaryVars.length, constraintCount, performance.now() - startTime, config.timeLimitSec, e?.message)
   }
 }

@@ -305,14 +305,18 @@ export async function importFlightBatch(
   })
 
   const resolveAircraftTypeId = (iataCode: string) => {
-    const directId = acByIata.get(iataCode)
-    if (directId) return { id: directId, icao: iataCode }
-    const icao = IATA_TO_ICAO_AIRCRAFT[iataCode]
-    if (icao) {
-      const icaoId = acByIcao.get(icao)
-      return { id: icaoId || null, icao }
-    }
-    return { id: null, icao: iataCode }
+    // Always resolve to ICAO code first
+    const icao = IATA_TO_ICAO_AIRCRAFT[iataCode] || iataCode
+
+    // Try ICAO lookup
+    const icaoId = acByIcao.get(icao)
+    if (icaoId) return { id: icaoId, icao }
+
+    // Fallback: try IATA direct lookup but still use ICAO
+    const iataId = acByIata.get(iataCode)
+    if (iataId) return { id: iataId, icao }
+
+    return { id: null, icao }
   }
 
   // Build INSERT values

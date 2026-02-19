@@ -189,6 +189,8 @@ export async function runSimulatedAnnealing(
   config: SAConfig = SA_PRESETS.normal,
   onProgress?: (progress: SAProgress) => void,
   abortSignal?: AbortSignal,
+  allowFamilySub: boolean = false,
+  typeFamilyMap: Map<string, string> = new Map(),
 ): Promise<SAResult> {
 
   const tatMs = new Map<string, number>()
@@ -281,8 +283,24 @@ export async function runSimulatedAnnealing(
     const block = moveableBlocks[blockIdx]
     if (!block) continue
 
-    // Find eligible aircraft (same type)
-    const eligibleAircraft = aircraftByType.get(block.icaoType) || []
+    // Find eligible aircraft (same type, or same family if allowFamilySub)
+    let eligibleAircraft = aircraftByType.get(block.icaoType) || []
+
+    if (allowFamilySub) {
+      const blockFamily = typeFamilyMap.get(block.icaoType)
+      if (blockFamily) {
+        const familyAircraft: AssignableAircraft[] = []
+        for (const [type, acs] of Array.from(aircraftByType.entries())) {
+          if (typeFamilyMap.get(type) === blockFamily) {
+            familyAircraft.push(...acs)
+          }
+        }
+        if (familyAircraft.length >= 2) {
+          eligibleAircraft = familyAircraft
+        }
+      }
+    }
+
     if (eligibleAircraft.length < 2) continue
 
     // Current assignment for this block
