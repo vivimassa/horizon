@@ -644,6 +644,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const [panelAircraftReg, setPanelAircraftReg] = useState<string | null>(null)
   const [rotationTarget, setRotationTarget] = useState<{ reg: string; date: string } | null>(null)
   const [overnightExpanded, setOvernightExpanded] = useState(false)
+  const [acOvernightExpanded, setAcOvernightExpanded] = useState(false)
   const [selectedDays, setSelectedDays] = useState<Set<string>>(new Set())
 
   // Flight search state
@@ -839,6 +840,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   }, [])
 
   const enterSwapModeRef = useRef(() => {})
+  const handleGoRef = useRef(() => {})
 
   // ─── Keyboard handlers (Escape + Delete + Ctrl+F + Ctrl+G) ───────
   useEffect(() => {
@@ -904,6 +906,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       }
       if (e.key === 'Delete' && selectedFlights.size > 0 && !deleteModalOpen && !miniBuilderOpen && !assignModalOpen) {
         setDeleteModalOpen(true)
+      }
+      // Ctrl+G — trigger Go button
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
+        e.preventDefault()
+        handleGoRef.current()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -2564,8 +2571,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     setContextMenu(null)
   }, [selectedFlightObjects])
 
-  // Keep ref in sync for keyboard handler
+  // Keep refs in sync for keyboard handler
   enterSwapModeRef.current = enterSwapMode
+  handleGoRef.current = handleGo
 
   // Swap mode: when selection changes, check if selected flights are on a different reg
   useEffect(() => {
@@ -5884,20 +5892,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
               {/* ── FLIGHT PANEL ─────────────────────────────────────── */}
               <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">
-                    {flightPanelData.mode === 'single'
-                      ? stripFlightPrefix(flightPanelData.flight.flightNumber)
-                      : `${flightPanelData.count} Flights Selected`
-                    }
+                  <div className="text-[12px] font-bold tracking-tight">
+                    {flightPanelData.mode === 'single' ? 'Flight Statistics' : `${flightPanelData.count} Flights Selected`}
                   </div>
                   {flightPanelData.mode === 'single' && (
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground">
-                        {flightPanelData.icao}
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[11px] font-semibold">{flightPanelData.flight.flightNumber}</span>
+                      <span className="text-[9px] text-muted-foreground flex items-center gap-0.5">
+                        {flightPanelData.flight.depStation}
+                        <ArrowRight className="h-2.5 w-2.5" />
+                        {flightPanelData.flight.arrStation}
                       </span>
-                      {flightPanelData.hasDbAssignment && (
-                        <span className="text-[9px] text-muted-foreground">{flightPanelData.assignedReg}</span>
-                      )}
                     </div>
                   )}
                 </div>
@@ -5931,7 +5936,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           </div>
                           <div className="flex-1 flex items-center justify-center px-2">
                             <div className="flex-1 h-px bg-border" />
-                            <span className="px-1.5 text-[9px] text-muted-foreground">→</span>
+                            <Plane className="h-3 w-3 text-muted-foreground mx-1.5" />
                             <div className="flex-1 h-px bg-border" />
                           </div>
                           <div className="text-center">
@@ -6216,6 +6221,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       angle = a2 + gap
                     })
 
+                    const VISIBLE_COUNT = 5
+                    const hasMore = allStations.length > VISIBLE_COUNT
+                    const visibleStations = acOvernightExpanded ? allStations : allStations.slice(0, VISIBLE_COUNT)
                     const getColor = (idx: number) => idx < donutShowTop ? DONUT_COLORS[idx] : 'hsl(var(--primary) / 0.12)'
 
                     return (
@@ -6232,7 +6240,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             </svg>
                           </div>
                           <div className="flex-1 min-w-0">
-                            {allStations.map((st, i) => (
+                            {visibleStations.map((st, i) => (
                               <div key={st.station} className="flex items-center justify-between px-1 py-0.5 rounded hover:bg-primary/[0.04] dark:hover:bg-primary/[0.08] transition-colors">
                                 <span className="flex items-center gap-1.5">
                                   <span className="w-1.5 h-1.5 rounded-sm shrink-0" style={{ background: getColor(i) }} />
@@ -6244,6 +6252,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                 </span>
                               </div>
                             ))}
+                            {hasMore && (
+                              <button
+                                onClick={() => setAcOvernightExpanded(prev => !prev)}
+                                className="w-full text-[10px] font-medium text-primary hover:text-primary/80 mt-1 py-0.5 transition-colors cursor-pointer"
+                                style={{ background: 'none', border: 'none' }}
+                              >
+                                {acOvernightExpanded ? 'Show less' : `See ${allStations.length - VISIBLE_COUNT} more`}
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
