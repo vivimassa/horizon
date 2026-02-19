@@ -74,7 +74,7 @@
     --gantt-tooltip-heading: #1f2937;
     --gantt-tooltip-body: #6b7280;
     --gantt-tooltip-muted: #9ca3af;
-    --gantt-histogram-bar: rgba(153, 27, 27, 0.2);
+    --gantt-histogram-bar: hsl(var(--primary) / 0.2);
     --gantt-histogram-label: #9ca3af;
     --gantt-eod-bg: #f0f0f2;
     --gantt-eod-text: #9ca3af;
@@ -156,7 +156,7 @@
     --gantt-tooltip-heading: #e5e7eb;
     --gantt-tooltip-body: #9ca3af;
     --gantt-tooltip-muted: #6b7280;
-    --gantt-histogram-bar: rgba(153, 27, 27, 0.6);
+    --gantt-histogram-bar: hsl(var(--primary) / 0.6);
     --gantt-histogram-label: #6b7280;
     --gantt-eod-bg: #1a1a1a;
     --gantt-eod-text: #6b7280;
@@ -270,6 +270,29 @@
 @keyframes pulse-subtle {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
+}
+
+@keyframes glass-appear {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes watermark-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.02); }
+}
+
+@keyframes gantt-toast-enter {
+  from { opacity: 0; transform: translateX(16px) scale(0.96); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes gantt-toast-exit {
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to { opacity: 0; transform: translateX(16px) scale(0.96); }
+}
+@keyframes progress-shine {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(200%); }
 }
 
 /* ===== Glass Utility Classes ===== */

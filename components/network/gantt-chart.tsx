@@ -27,6 +27,7 @@ import {
   Pin,
   Info,
   ArrowLeftRight,
+  Loader2,
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
 import { AircraftType, AircraftSeatingConfig, CabinEntry, Airport, FlightServiceType } from '@/types/database'
@@ -247,15 +248,10 @@ function getHistogramBarColor(count: number, maxCount: number, dark: boolean): s
   const adj = minI + intensity * (1 - minI)
   return dark
     ? `rgba(239, 68, 68, ${Math.round(adj * 70) / 100})`
-    : `rgba(153, 27, 27, ${Math.round(adj * 60) / 100})`
+    : `hsl(var(--primary) / ${Math.round(adj * 60) / 100})`
 }
 
 /** Histogram label color: adapts for contrast on heat-scaled bars */
-function getHistogramLabelColor(count: number, maxCount: number, dark: boolean): string {
-  const intensity = count / maxCount
-  if (dark) return intensity > 0.6 ? '#FFFFFF' : '#9CA3AF'
-  return intensity > 0.5 ? '#FFFFFF' : '#374151'
-}
 
 function parseCabinConfig(config: unknown): CabinEntry[] {
   if (Array.isArray(config)) {
@@ -286,6 +282,80 @@ function stripFlightPrefix(fn: string): string {
 
 function fmtTat(minutes: number): string {
   return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`
+}
+
+function GlassSelectionOverlay({ isDark }: { isDark: boolean }) {
+  return (
+    <div
+      className="absolute inset-0 pointer-events-none"
+      style={{
+        borderRadius: 'inherit',
+        zIndex: 2,
+        border: isDark
+          ? '1.5px solid rgba(255, 255, 255, 0.15)'
+          : '1.5px solid rgba(255, 255, 255, 0.4)',
+        boxShadow: isDark
+          ? '0 0 8px rgba(255,255,255,0.08), 0 0 20px hsl(var(--primary) / 0.12), inset 0 1px 2px rgba(255,255,255,0.08)'
+          : '0 0 8px rgba(255,255,255,0.2), 0 0 20px hsl(var(--primary) / 0.15), inset 0 1px 2px rgba(255,255,255,0.25)',
+        animation: 'glass-appear 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
+    >
+      <span
+        className="absolute inset-0 pointer-events-none overflow-hidden"
+        style={{
+          borderRadius: 'inherit',
+          background: isDark
+            ? 'linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 40%, transparent 70%)'
+            : 'linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.05) 40%, transparent 70%)',
+        }}
+      />
+      <span
+        className="absolute top-0 left-0 right-0 pointer-events-none"
+        style={{
+          height: 1,
+          borderRadius: 'inherit',
+          background: isDark
+            ? 'linear-gradient(90deg, transparent 5%, rgba(255,255,255,0.15) 30%, rgba(255,255,255,0.25) 50%, rgba(255,255,255,0.15) 70%, transparent 95%)'
+            : 'linear-gradient(90deg, transparent 5%, rgba(255,255,255,0.6) 30%, rgba(255,255,255,0.8) 50%, rgba(255,255,255,0.6) 70%, transparent 95%)',
+        }}
+      />
+    </div>
+  )
+}
+
+function GlassSearchOverlay({ isDark }: { isDark: boolean }) {
+  return (
+    <div
+      className="absolute inset-0 pointer-events-none"
+      style={{
+        borderRadius: 'inherit',
+        zIndex: 3,
+        border: '2px solid #FF0000',
+        boxShadow: '0 0 12px rgba(255, 0, 0, 0.2), inset 0 1px 2px rgba(255, 0, 0, 0.1)',
+        animation: 'glass-appear 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
+    >
+      <span
+        className="absolute inset-0 pointer-events-none overflow-hidden"
+        style={{
+          borderRadius: 'inherit',
+          background: isDark
+            ? 'linear-gradient(180deg, rgba(255,0,0,0.08) 0%, transparent 50%)'
+            : 'linear-gradient(180deg, rgba(255,0,0,0.1) 0%, transparent 50%)',
+        }}
+      />
+      <span
+        className="absolute top-0 left-0 right-0 pointer-events-none"
+        style={{
+          height: 1,
+          borderRadius: 'inherit',
+          background: isDark
+            ? 'linear-gradient(90deg, transparent 10%, rgba(251,191,36,0.3) 50%, transparent 90%)'
+            : 'linear-gradient(90deg, transparent 10%, rgba(245,158,11,0.5) 50%, transparent 90%)',
+        }}
+      />
+    </div>
+  )
 }
 
 function isRouteDomestic(routeType: string | null): boolean {
@@ -403,6 +473,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   // Dark mode tracking
   const [isDark, setIsDark] = useState(false)
 
+  // Loading & reveal state
+  const [loadingPhase, setLoadingPhase] = useState<'idle' | 'fetching' | 'building' | 'rendering' | 'done'>('idle')
+  const [loadProgress, setLoadProgress] = useState(0)
+  const [revealStage, setRevealStage] = useState(0)
+  // 0=nothing, 1=header, 2=left panel, 3=histogram, 4=flight bars, 5=complete
+  const isFirstLoadRef = useRef(true)
+  const manualFetchRef = useRef(false)
+  const animateProgressRef = useRef<number | null>(null)
+
   // Aircraft row reorder state
   const [selectedAircraftRow, setSelectedAircraftRow] = useState<string | null>(null)
   const [customAircraftOrder, setCustomAircraftOrder] = useState<Record<string, string[]>>({})
@@ -515,6 +594,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const GROUP_HEADER_HEIGHT = Math.max(24, Math.round(ROW_HEIGHT * 0.68))
   const zoomRowIn = useCallback(() => setRowHeightLevel(prev => Math.min(prev + 1, ROW_HEIGHT_LEVELS.length - 1)), [])
   const zoomRowOut = useCallback(() => setRowHeightLevel(prev => Math.max(prev - 1, 0)), [])
+  const panelScale = [1.15, 1.15, 1.15, 1.3][rowHeightLevel] ?? 1.15
 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -677,6 +757,21 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
   const periodDirty = periodCommitted && (periodFrom !== committedFrom || periodTo !== committedTo)
 
+  function delay(ms: number) { return new Promise(r => setTimeout(r, ms)) }
+
+  const animateProgress = useCallback((from: number, to: number, duration: number) => {
+    if (animateProgressRef.current) cancelAnimationFrame(animateProgressRef.current)
+    const start = performance.now()
+    const step = (now: number) => {
+      const elapsed = now - start
+      const pct = Math.min(1, elapsed / duration)
+      const eased = 1 - Math.pow(1 - pct, 3) // ease-out cubic
+      setLoadProgress(from + (to - from) * eased)
+      if (pct < 1) animateProgressRef.current = requestAnimationFrame(step)
+    }
+    animateProgressRef.current = requestAnimationFrame(step)
+  }, [])
+
   // Clamp zoom if period shrinks below current zoom
   useEffect(() => {
     if (periodCommitted && periodDays > 0) {
@@ -740,6 +835,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         if (!isInput || flightSearchOpen) {
           e.preventDefault()
           closeAircraftSearch()
+          setFlightSearchQuery('')
+          setFlightSearchDate('')
+          setFlightSearchIndex(-1)
           setFlightSearchOpen(true)
           setPanelVisible(true)
           setTimeout(() => flightSearchInputRef.current?.focus(), 50)
@@ -916,10 +1014,76 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   }, [committedFrom, committedTo])
 
   useEffect(() => {
+    if (manualFetchRef.current) return
     if (periodCommitted && committedFrom && committedTo) {
       refreshFlights()
     }
   }, [periodCommitted, committedFrom, committedTo, refreshFlights])
+
+  const handleGo = useCallback(async () => {
+    // Validation (same as current)
+    if (!periodFrom && !periodTo) { toast.warning('Please select a date range first'); return }
+    if (!periodFrom) { toast.warning('Please select a From date'); return }
+    if (!periodTo) { toast.warning('Please select a To date'); return }
+    let from = periodFrom, to = periodTo
+    if (to < from) { from = periodTo; to = periodFrom; setPeriodFrom(from); setPeriodTo(to) }
+    const totalDays = diffDays(parseDate(from), parseDate(to)) + 1
+
+    const first = isFirstLoadRef.current
+    setRevealStage(0)
+
+    // Phase 1: Fetching
+    setLoadingPhase('fetching')
+    setLoadProgress(0)
+    animateProgress(0, 40, 600)
+
+    // Prevent useEffect auto-fetch
+    manualFetchRef.current = true
+    setStartDate(parseDate(from))
+    setZoomLevel(totalDays > 7 ? '7D' : findBestZoom(totalDays))
+    setCommittedFrom(from)
+    setCommittedTo(to)
+
+    // Fetch data
+    const rangeEnd = formatISO(addDays(parseDate(to), 1))
+    const [f, ta] = await Promise.all([
+      getGanttFlights(from, rangeEnd),
+      getFlightTailAssignments(from, rangeEnd),
+    ])
+
+    // Phase 2: Building
+    setLoadProgress(70)
+    setLoadingPhase('building')
+    setFlights(f)
+    const taMap = new Map<string, string>()
+    for (const row of ta) taMap.set(`${row.scheduledFlightId}__${row.flightDate}`, row.aircraftReg)
+    setTailAssignments(taMap)
+    setLoading(false)
+
+    // Phase 3: Rendering
+    setLoadingPhase('rendering')
+    setLoadProgress(85)
+    setPeriodCommitted(true)
+    manualFetchRef.current = false
+    isFirstLoadRef.current = false
+
+    // Staged reveal
+    setRevealStage(1)                    // timeline header
+    await delay(150)
+    setRevealStage(2)                    // left panel
+    await delay(150)
+    setRevealStage(3)                    // histogram
+    await delay(200)
+    setRevealStage(4)                    // flight bars cascade
+    await delay(first ? 500 : 300)
+    setRevealStage(5)                    // all done
+
+    // Phase 4: Done
+    setLoadProgress(100)
+    setLoadingPhase('done')
+    await delay(1500)
+    setLoadingPhase('idle')
+  }, [periodFrom, periodTo, animateProgress])
 
   /** Optimistic assign: update per-date tail assignment map + track pending */
   const applyOptimisticAssign = useCallback((items: FlightDateItem[], reg: string) => {
@@ -1085,7 +1249,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
     let results = expandedFlights.filter(f => {
       const num = f.flightNumber.replace(/^VJ/i, '').toLowerCase()
-      return num.includes(normalizedQuery)
+      return num === normalizedQuery
     })
 
     if (flightSearchDate.trim()) {
@@ -2338,15 +2502,16 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     const body = bodyRef.current
     if (!body) return
 
-    // Horizontal: center the bar in the viewport
+    // Horizontal: center the bar in the visible viewport (account for right panel overlay)
     const barX = getFlightX(ef)
     const barW = getFlightWidth(ef)
     const barCenterX = barX + barW / 2
-    const viewW = body.clientWidth
-    const targetLeft = Math.max(0, barCenterX - viewW / 2)
+    const rightPanelW = panelVisible ? 280 * panelScale : 0
+    const visibleW = body.clientWidth - rightPanelW
+    const targetLeft = Math.max(0, barCenterX - visibleW / 2)
 
-    // Vertical: find which row this flight is in
-    const effectiveReg = ef.aircraftReg || ef.assignedReg
+    // Vertical: find which row this flight is in (include workspace overrides)
+    const effectiveReg = workspaceOverrides.get(ef.id) || ef.aircraftReg || ef.assignedReg
     let targetY = 0
     let found = false
 
@@ -2396,15 +2561,26 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       }
     }
 
-    // Scroll both axes
+    // Instant scroll to center the flight
     body.scrollLeft = targetLeft
     if (found) {
       const viewH = body.clientHeight
       body.scrollTop = Math.max(0, targetY - viewH / 2)
     }
+    // Sync headers + left panel
     handleBodyScroll()
+    // Force immediate virtualization bounds update (bypass RAF throttle)
+    const VB_BUFFER = 500
+    const nb = {
+      left: body.scrollLeft - VB_BUFFER,
+      right: body.scrollLeft + body.clientWidth + VB_BUFFER,
+      top: body.scrollTop - VB_BUFFER,
+      bottom: body.scrollTop + body.clientHeight + VB_BUFFER,
+    }
+    lastVBRef.current = nb
+    setVisibleBounds(nb)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowLayout, pixelsPerHour, startDate])
+  }, [rowLayout, pixelsPerHour, startDate, panelVisible, panelScale, workspaceOverrides])
 
   const scrollToFlight = useCallback((ef: ExpandedFlight) => {
     const effectiveReg = ef.aircraftReg || ef.assignedReg
@@ -2730,7 +2906,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           onChange={(e) => setFromText(e.target.value)}
           onBlur={handleFromBlur}
           onKeyDown={(e) => { if (e.key === 'Enter') { handleFromBlur(); (e.target as HTMLInputElement).blur() } }}
-          className="bg-background border border-border rounded-md text-foreground tabular-nums outline-none focus:ring-1 focus:ring-primary/40 transition-all duration-200 placeholder:text-muted-foreground/40 placeholder:font-normal"
+          className="bg-background border border-border rounded-md text-foreground tabular-nums outline-none focus:ring-1 focus:ring-foreground/20 transition-all duration-200 placeholder:text-muted-foreground/40 placeholder:font-normal"
           style={{ width: s(110), height: s(26), fontSize: s(11), fontWeight: 500, textAlign: 'center', padding: `0 ${s(6)}px`, borderRadius: s(6) }}
         />
       </div>
@@ -2743,7 +2919,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           onChange={(e) => setToText(e.target.value)}
           onBlur={handleToBlur}
           onKeyDown={(e) => { if (e.key === 'Enter') { handleToBlur(); (e.target as HTMLInputElement).blur() } }}
-          className="bg-background border border-border rounded-md text-foreground tabular-nums outline-none focus:ring-1 focus:ring-primary/40 transition-all duration-200 placeholder:text-muted-foreground/40 placeholder:font-normal"
+          className="bg-background border border-border rounded-md text-foreground tabular-nums outline-none focus:ring-1 focus:ring-foreground/20 transition-all duration-200 placeholder:text-muted-foreground/40 placeholder:font-normal"
           style={{ width: s(110), height: s(26), fontSize: s(11), fontWeight: 500, textAlign: 'center', padding: `0 ${s(6)}px`, borderRadius: s(6) }}
         />
       </div>
@@ -2756,28 +2932,20 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         <Calendar style={{ width: s(14), height: s(14) }} />
       </button>
       <button
-        onClick={() => {
-          if (!periodFrom && !periodTo) { toast.warning('Please select a date range first'); return }
-          if (!periodFrom) { toast.warning('Please select a From date'); return }
-          if (!periodTo) { toast.warning('Please select a To date'); return }
-          let from = periodFrom, to = periodTo
-          if (to < from) { from = periodTo; to = periodFrom; setPeriodFrom(from); setPeriodTo(to) }
-          const totalDays = diffDays(parseDate(from), parseDate(to)) + 1
-          setStartDate(parseDate(from))
-          setZoomLevel(totalDays > 7 ? '7D' : findBestZoom(totalDays))
-          setCommittedFrom(from)
-          setCommittedTo(to)
-          setPeriodCommitted(true)
-        }}
+        onClick={handleGo}
+        disabled={loadingPhase !== 'idle' && loadingPhase !== 'done'}
         className="font-semibold text-white transition-all duration-200"
         style={{
           height: s(26), padding: `0 ${s(14)}px`, fontSize: s(10), borderRadius: s(6),
-          background: '#991B1B',
+          background: 'hsl(var(--primary))',
           cursor: 'pointer',
           animation: periodDirty ? 'pulse 2s infinite' : 'none',
+          opacity: (loadingPhase !== 'idle' && loadingPhase !== 'done') ? 0.7 : 1,
         }}
       >
-        {periodDirty ? 'Go ↻' : 'Go'}
+        {(loadingPhase !== 'idle' && loadingPhase !== 'done')
+          ? <Loader2 className="animate-spin" style={{ width: s(12), height: s(12) }} />
+          : (periodDirty ? 'Go ↻' : 'Go')}
       </button>
       <button
         onClick={() => setSettingsPanelOpen(v => !v)}
@@ -2816,13 +2984,100 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         </div>
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <div className="mx-auto mb-4 rounded-full bg-muted/30 flex items-center justify-center" style={{ width: 64, height: 64 }}>
-              <CalendarRange className="text-muted-foreground" style={{ width: 28, height: 28 }} />
+            <div
+              className="mx-auto mb-6 w-[clamp(300px,35vw,550px)]"
+              style={loadingPhase !== 'idle' && loadingPhase !== 'done' ? {
+                animation: 'watermark-breathe 4s ease-in-out infinite',
+              } : undefined}
+            >
+              {/* Light mode: debossed ceramic effect */}
+              <img
+                src="/horizon-watermark.png"
+                alt=""
+                aria-hidden="true"
+                className="dark:hidden w-full h-auto select-none"
+                style={{
+                  filter: 'grayscale(1) brightness(0) drop-shadow(0 1px 0 rgba(255,255,255,0.8))',
+                  opacity: 0.045,
+                  mixBlendMode: 'multiply',
+                }}
+                draggable={false}
+              />
+              {/* Dark mode: primary-tinted mask */}
+              <div
+                className="hidden dark:block w-full opacity-[0.08]"
+                style={{
+                  aspectRatio: '3 / 1.2',
+                  background: 'hsl(var(--primary))',
+                  maskImage: "url('/horizon-watermark.png')",
+                  maskSize: 'contain',
+                  maskRepeat: 'no-repeat',
+                  maskPosition: 'center',
+                  WebkitMaskImage: "url('/horizon-watermark.png')",
+                  WebkitMaskSize: 'contain',
+                  WebkitMaskRepeat: 'no-repeat',
+                  WebkitMaskPosition: 'center',
+                }}
+              />
             </div>
-            <p className="font-medium" style={{ fontSize: 13 }}>Select a period to view</p>
-            <p className="text-muted-foreground mt-1" style={{ fontSize: 11 }}>Choose a date range above and click Go to load the Gantt chart</p>
+            <p className="font-medium text-muted-foreground/60" style={{ fontSize: 13 }}>
+              Select a period to begin
+            </p>
           </div>
         </div>
+        {loadingPhase !== 'idle' && (
+          <div style={{
+            position: 'fixed', top: 20, right: 20, zIndex: 99998,
+            animation: 'gantt-toast-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+          }}>
+            <div className="rounded-xl px-4 py-3 flex items-center gap-3 min-w-[260px]" style={{
+              backdropFilter: 'blur(20px) saturate(1.5)',
+              WebkitBackdropFilter: 'blur(20px) saturate(1.5)',
+              background: isDark ? 'rgba(30,30,30,0.85)' : 'rgba(255,255,255,0.85)',
+              border: isDark ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(255,255,255,0.5)',
+              boxShadow: isDark ? '0 8px 32px rgba(0,0,0,0.3)' : '0 8px 32px rgba(0,0,0,0.08)',
+            }}>
+              <div className="shrink-0">
+                {loadingPhase === 'done' ? (
+                  <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(34,197,94,0.15)' }}>
+                    <Check className="w-3 h-3 text-green-500" />
+                  </div>
+                ) : (
+                  <svg className="animate-spin w-5 h-5" viewBox="0 0 20 20">
+                    <circle cx="10" cy="10" r="8" fill="none"
+                      stroke={isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'} strokeWidth="2" />
+                    <circle cx="10" cy="10" r="8" fill="none"
+                      stroke="hsl(var(--primary))" strokeWidth="2"
+                      strokeDasharray="50.27" strokeDashoffset={50.27 * (1 - loadProgress / 100)}
+                      strokeLinecap="round" style={{ transition: 'stroke-dashoffset 0.3s ease' }} />
+                  </svg>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div style={{ fontSize: 12, fontWeight: 500 }}>
+                  {loadingPhase === 'fetching' ? 'Loading schedule...'
+                   : loadingPhase === 'building' ? 'Building chart...'
+                   : loadingPhase === 'rendering' ? 'Rendering...'
+                   : 'Schedule loaded'}
+                </div>
+                {loadingPhase !== 'done' && (
+                  <div className="mt-1.5 h-[3px] rounded-full overflow-hidden relative"
+                    style={{ background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }}>
+                    <div className="h-full rounded-full" style={{
+                      width: `${loadProgress}%`,
+                      background: 'hsl(var(--primary))',
+                      transition: 'width 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                    }} />
+                  </div>
+                )}
+              </div>
+              <span className="shrink-0 tabular-nums"
+                style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted-foreground)' }}>
+                {Math.round(loadProgress)}%
+              </span>
+            </div>
+          </div>
+        )}
         <GanttSettingsPanel
           open={settingsPanelOpen}
           onClose={() => setSettingsPanelOpen(false)}
@@ -2856,6 +3111,60 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       className={`gantt-fullscreen-target h-full flex flex-col overflow-hidden relative bg-background ${isFullscreen && typeof document !== 'undefined' && !document.fullscreenElement ? 'fixed inset-0 z-[9999]' : ''}`}
       style={{ '--ctrl-scale': ctrlScale } as React.CSSProperties}
     >
+      {/* ── LOADING TOAST ──────────────────────────────────────────── */}
+      {loadingPhase !== 'idle' && (
+        <div style={{
+          position: 'fixed', top: 20, right: 20, zIndex: 99998,
+          animation: 'gantt-toast-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div className="rounded-xl px-4 py-3 flex items-center gap-3 min-w-[260px]" style={{
+            backdropFilter: 'blur(20px) saturate(1.5)',
+            WebkitBackdropFilter: 'blur(20px) saturate(1.5)',
+            background: isDark ? 'rgba(30,30,30,0.85)' : 'rgba(255,255,255,0.85)',
+            border: isDark ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(255,255,255,0.5)',
+            boxShadow: isDark ? '0 8px 32px rgba(0,0,0,0.3)' : '0 8px 32px rgba(0,0,0,0.08)',
+          }}>
+            <div className="shrink-0">
+              {loadingPhase === 'done' ? (
+                <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: 'rgba(34,197,94,0.15)' }}>
+                  <Check className="w-3 h-3 text-green-500" />
+                </div>
+              ) : (
+                <svg className="animate-spin w-5 h-5" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="8" fill="none"
+                    stroke={isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'} strokeWidth="2" />
+                  <circle cx="10" cy="10" r="8" fill="none"
+                    stroke="hsl(var(--primary))" strokeWidth="2"
+                    strokeDasharray="50.27" strokeDashoffset={50.27 * (1 - loadProgress / 100)}
+                    strokeLinecap="round" style={{ transition: 'stroke-dashoffset 0.3s ease' }} />
+                </svg>
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div style={{ fontSize: 12, fontWeight: 500 }}>
+                {loadingPhase === 'fetching' ? 'Loading schedule...'
+                 : loadingPhase === 'building' ? 'Building chart...'
+                 : loadingPhase === 'rendering' ? 'Rendering...'
+                 : 'Schedule loaded'}
+              </div>
+              {loadingPhase !== 'done' && (
+                <div className="mt-1.5 h-[3px] rounded-full overflow-hidden relative"
+                  style={{ background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }}>
+                  <div className="h-full rounded-full" style={{
+                    width: `${loadProgress}%`,
+                    background: 'hsl(var(--primary))',
+                    transition: 'width 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                  }} />
+                </div>
+              )}
+            </div>
+            <span className="shrink-0 tabular-nums"
+              style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted-foreground)' }}>
+              {Math.round(loadProgress)}%
+            </span>
+          </div>
+        </div>
+      )}
       {/* ── HEADER BAR ─────────────────────────────────────────────── */}
       <div
         className="shrink-0 glass border-b z-20 space-y-2 transition-all duration-200 ease-out"
@@ -2867,10 +3176,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             {periodSelector}
             <button
               onClick={() => setOptimizerOpen(true)}
-              className="transition-all duration-200 hover:bg-[rgba(153,27,27,0.06)]"
+              className="transition-all duration-200 hover:bg-primary/[0.06]"
               style={{
                 height: s(26), padding: `0 ${s(12)}px`, fontSize: s(10), fontWeight: 600, borderRadius: s(8),
-                border: '1.5px solid #991B1B', background: 'transparent', color: '#991B1B',
+                border: '1.5px solid hsl(var(--primary))', background: 'transparent', color: 'hsl(var(--primary))',
               }}
             >
               ✈ Optimizer
@@ -3011,9 +3320,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       </div>
 
       {/* ── BODY ───────────────────────────────────────────────────── */}
-      <div className="flex-1 flex min-h-0 relative">
+      <div className="flex-1 flex min-h-0 relative" style={{ pointerEvents: (loadingPhase !== 'idle' && loadingPhase !== 'done') ? 'none' : 'auto' }}>
         {/* ── LEFT PANEL (Aircraft Registry) ─────────────────────── */}
-        <div className="w-[140px] shrink-0 glass border-r flex flex-col overflow-hidden">
+        <div className="w-[140px] shrink-0 glass border-r flex flex-col overflow-hidden" style={{ opacity: revealStage >= 2 ? 1 : 0, transform: revealStage >= 2 ? 'translateX(0)' : 'translateX(-12px)', transition: 'opacity 0.3s cubic-bezier(0.16,1,0.3,1), transform 0.3s cubic-bezier(0.16,1,0.3,1)' }}>
           {/* Aligned with timeline header */}
           <div className="shrink-0 border-b" style={{ height: headerH }} />
           {/* Summary + Histogram labels */}
@@ -3137,18 +3446,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
                 const isSelectedAcRow = selectedAircraftRow === row.reg.registration
                 const isFlashRow = flashReg === row.reg.registration
-                const isLightText = regText === '#E5E7EB' || regText === '#FFFFFF'
                 const acRowSelectStyle: React.CSSProperties = isSelectedAcRow
-                  ? { borderLeft: '3px solid #991B1B', background: isLightText ? '#2a1215' : '#fef2f2', color: isLightText ? '#fca5a5' : '#991B1B' }
+                  ? { borderLeft: '3px solid hsl(var(--primary))', background: isDark ? 'hsl(var(--primary) / 0.6)' : 'hsl(var(--primary))', color: '#fff' }
                   : isFlashRow
-                  ? { background: isDark ? 'rgba(153, 27, 27, 0.12)' : 'rgba(153, 27, 27, 0.10)', transition: 'background 0.1s ease' }
+                  ? { background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)', transition: 'background 0.1s ease' }
                   : {}
 
                 return (
                   <div
                     key={`a-${row.reg.id}`}
                     data-reg={row.reg.registration}
-                    className="flex flex-col justify-center px-3 border-b transition-colors cursor-pointer"
+                    className="flex flex-col justify-center px-3 border-b transition-colors cursor-pointer relative"
                     style={{ ...regStyle, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', ...acHighlightStyle, ...acRowSelectStyle }}
                     onClick={() => {
                       if (clipboard) { setClipboardTargetReg(row.reg.registration); return }
@@ -3167,14 +3475,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       }
                     }}
                   >
-                    <span className="font-medium truncate leading-tight" style={{ fontSize: REG_FONT }}>
+                    <span className="font-medium truncate leading-tight" style={{ fontSize: REG_FONT, position: 'relative', zIndex: 1 }}>
                       {row.reg.registration}
                     </span>
                     {row.cabin && REG_SUB_FONT > 7 && (
-                      <span className="leading-tight truncate" style={{ fontSize: REG_SUB_FONT, opacity: 0.7 }}>
+                      <span className="leading-tight truncate" style={{ fontSize: REG_SUB_FONT, opacity: 0.7, position: 'relative', zIndex: 1 }}>
                         {row.cabin}
                       </span>
                     )}
+                    {isSelectedAcRow && <GlassSelectionOverlay isDark={isDark} />}
                   </div>
                 )
               })}
@@ -3188,7 +3497,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           <div
             ref={headerRef}
             className="shrink-0 border-b overflow-hidden"
-            style={{ height: headerH }}
+            style={{ height: headerH, opacity: revealStage >= 1 ? 1 : 0, transform: revealStage >= 1 ? 'translateY(0)' : 'translateY(-8px)', transition: 'opacity 0.3s cubic-bezier(0.16,1,0.3,1), transform 0.3s cubic-bezier(0.16,1,0.3,1)' }}
           >
                 <div ref={headerInnerRef} className="relative" style={{ width: totalWidth, height: headerH }}>
                   {Array.from({ length: totalDaysToRender }, (_, d) => {
@@ -3213,14 +3522,22 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             style={{
                               left: x, width: dayWidth, height: headerH,
                               background: isDaySelected
-                                ? (isDark ? '#1E3A5F' : '#1E40AF')
+                                ? (isDark ? 'hsl(var(--primary) / 0.6)' : 'hsl(var(--primary))')
                                 : isDayPending
-                                  ? (isDark ? 'rgba(30, 64, 175, 0.4)' : 'rgba(30, 64, 175, 0.3)')
+                                  ? (isDark ? 'hsl(var(--primary) / 0.3)' : 'hsl(var(--primary) / 0.25)')
                                   : isWkActive
-                                    ? (isDark ? '#7F1D1D' : '#991B1B')
+                                    ? (isDark ? 'hsl(var(--primary) / 0.8)' : 'hsl(var(--primary))')
                                     : undefined,
                             }}
                           />
+                        )}
+                        {isDaySelected && (
+                          <div
+                            className="absolute top-0 pointer-events-none"
+                            style={{ left: x, width: dayWidth, height: headerH, zIndex: 3, borderRadius: 0 }}
+                          >
+                            <GlassSelectionOverlay isDark={isDark} />
+                          </div>
                         )}
                         {/* Day label (centered in column — clickable) */}
                         <div
@@ -3386,7 +3703,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
           {/* Summary row (28px) + Histogram (20px) or collapsed spacer */}
           {(ganttSettings.display?.histogram ?? true) ? (
-            <>
+            <div style={{ opacity: revealStage >= 3 ? 1 : 0, transition: 'opacity 0.4s ease' }}>
               {/* Summary row */}
               <div className="h-[40px] shrink-0 border-b overflow-hidden">
                 <div ref={summaryInnerRef} className="relative" style={{ width: totalWidth, height: 40 }}>
@@ -3402,25 +3719,26 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           width: bucket.widthPx,
                           height: 40,
                           borderRight: '1px solid var(--border-subtle, rgba(0,0,0,0.04))',
-                          borderBottom: isSelected ? '2px solid #1E40AF' : undefined,
+                          borderBottom: isSelected ? '2px solid hsl(var(--primary))' : undefined,
                           background: isSelected
-                            ? (isDark ? 'rgba(30, 64, 175, 0.15)' : 'rgba(30, 64, 175, 0.1)')
+                            ? (isDark ? 'hsl(var(--primary) / 0.15)' : 'hsl(var(--primary) / 0.1)')
                             : isPending
-                              ? (isDark ? 'rgba(30, 64, 175, 0.08)' : 'rgba(30, 64, 175, 0.06)')
+                              ? (isDark ? 'hsl(var(--primary) / 0.08)' : 'hsl(var(--primary) / 0.06)')
                               : bucket.isWeekend
-                                ? 'rgba(127, 29, 29, 0.06)'
+                                ? 'hsl(var(--primary) / 0.06)'
                                 : undefined,
+                          position: 'relative' as const,
                         }}
                         onMouseDown={(e) => handleDayMouseDown(bucket.dateStr, e)}
                         onMouseEnter={() => handleDayMouseEnter(bucket.dateStr)}
                       >
-                        <div className="text-center px-1 overflow-hidden">
+                        <div className="text-center px-1 overflow-hidden" style={{ zIndex: 1, position: 'relative' }}>
                           {bucket.widthPx > 140 ? (
                             <span
                               className="text-[9px] font-medium whitespace-nowrap"
                               style={{
-                                color: isSelected ? '#ffffff' : (bucket.isWeekend ? 'var(--gantt-histogram-label)' : undefined),
-                                opacity: bucket.isWeekend && !isSelected ? 0.8 : 1,
+                                color: bucket.isWeekend ? 'var(--gantt-histogram-label)' : undefined,
+                                opacity: bucket.isWeekend ? 0.8 : 1,
                               }}
                             >
                               Flights: {bucket.flights}, BH: {bucket.blockHours}
@@ -3429,8 +3747,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             <span
                               className="text-[9px] font-medium whitespace-nowrap"
                               style={{
-                                color: isSelected ? '#ffffff' : (bucket.isWeekend ? 'var(--gantt-histogram-label)' : undefined),
-                                opacity: bucket.isWeekend && !isSelected ? 0.8 : 1,
+                                color: bucket.isWeekend ? 'var(--gantt-histogram-label)' : undefined,
+                                opacity: bucket.isWeekend ? 0.8 : 1,
                               }}
                             >
                               F: {bucket.flights}, BH: {bucket.blockHours}
@@ -3439,8 +3757,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             <span
                               className="text-[9px] whitespace-nowrap"
                               style={{
-                                color: isSelected ? '#ffffff' : undefined,
-                                opacity: bucket.isWeekend && !isSelected ? 0.8 : 0.7,
+                                opacity: bucket.isWeekend ? 0.8 : 0.7,
                               }}
                             >
                               {bucket.flights}F · {bucket.blockHours}h
@@ -3448,12 +3765,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           ) : bucket.widthPx > 24 ? (
                             <span
                               className="text-[9px] font-semibold whitespace-nowrap"
-                              style={{ color: isSelected ? '#ffffff' : 'var(--muted-foreground)', opacity: 0.7 }}
+                              style={{ color: 'var(--muted-foreground)', opacity: 0.7 }}
                             >
                               {bucket.flights}
                             </span>
                           ) : null}
                         </div>
+                        {isSelected && <GlassSelectionOverlay isDark={isDark} />}
                       </div>
                     )
                   })}
@@ -3472,7 +3790,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                     if (bucket.count === 0 && isWeeklyMode) return null
                     const barHeight = bucket.count > 0 ? Math.max(2, Math.round((bucket.count / histogram.max) * 28)) : 0
                     const heatColor = getHistogramBarColor(bucket.count, histogram.max, isDark)
-                    const heatLabelColor = getHistogramLabelColor(bucket.count, histogram.max, isDark)
+                    const heatLabelColor = isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.7)'
 
                     // ≤7D hourly: ALWAYS show count label (including 0)
                     const showLabel = isWeeklyMode ? (bucket.count > 0 && bucket.widthPx > 20) : true
@@ -3517,7 +3835,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   })}
                 </div>
               </div>
-            </>
+            </div>
           ) : (
             <div className="h-[6px] shrink-0 border-b" />
           )}
@@ -3699,8 +4017,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             width: 24 * pixelsPerHour,
                             height: bodyHeight,
                             background: isDaySelected
-                              ? (isDark ? 'rgba(30, 64, 175, 0.08)' : 'rgba(30, 64, 175, 0.05)')
-                              : (isDark ? 'rgba(30, 64, 175, 0.04)' : 'rgba(30, 64, 175, 0.025)'),
+                              ? (isDark
+                                  ? 'linear-gradient(180deg, hsl(var(--primary) / 0.02) 0%, hsl(var(--primary) / 0.04) 30%, hsl(var(--primary) / 0.02) 100%)'
+                                  : 'linear-gradient(180deg, hsl(var(--primary) / 0.03) 0%, hsl(var(--primary) / 0.06) 30%, hsl(var(--primary) / 0.04) 100%)')
+                              : (isDark ? 'hsl(var(--primary) / 0.02)' : 'hsl(var(--primary) / 0.015)'),
                             zIndex: 0,
                           }}
                         />
@@ -4006,27 +4326,23 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             style={{
                               borderRadius: 5,
                               background: barBg,
-                              border: isSearchHighlight
-                                ? '2px solid #EF4444'
-                                : isWip
-                                  ? `${isDbAssigned ? '2px' : '1.5px'} dashed #F59E0B`
-                                  : isFin
-                                    ? `${isDbAssigned ? '2px' : '1.5px'} dashed #10B981`
-                                    : isDbAssigned
-                                      ? '2px solid var(--gantt-bar-border-pub-assigned)'
-                                      : '1.5px solid var(--gantt-bar-border-pub)',
+                              border: isWip
+                                ? `${isDbAssigned ? '2px' : '1.5px'} dashed #F59E0B`
+                                : isFin
+                                  ? `${isDbAssigned ? '2px' : '1.5px'} dashed #10B981`
+                                  : isDbAssigned
+                                    ? '2px solid var(--gantt-bar-border-pub-assigned)'
+                                    : '1.5px solid var(--gantt-bar-border-pub)',
                               fontStyle: isWip ? 'italic' : 'normal',
                               color: barText,
                               fontSize: BAR_FONT + 'px',
-                              boxShadow: isSearchHighlight
-                                ? '0 0 0 3px rgba(239, 68, 68, 0.3)'
-                                : barIsDragged
-                                  ? '0 8px 24px rgba(0,0,0,0.15)'
+                              boxShadow: barIsDragged
+                                ? '0 8px 24px rgba(0,0,0,0.15)'
+                                : justPastedIds.has(ef.id)
+                                  ? '0 0 0 2px rgba(34, 197, 94, 0.4), 0 0 12px rgba(34, 197, 94, 0.15)'
                                   : isSelected
-                                    ? '0 0 0 3px rgba(59, 130, 246, 0.35), 0 0 14px rgba(59, 130, 246, 0.15)'
-                                    : justPastedIds.has(ef.id)
-                                      ? '0 0 0 2px rgba(34, 197, 94, 0.4), 0 0 12px rgba(34, 197, 94, 0.15)'
-                                      : 'none',
+                                    ? '0 0 0 2px #FF0000'
+                                    : 'none',
                               opacity: isFlightGhosted(ef.id) ? 0.25 : 1,
                               backgroundImage: isFlightGhosted(ef.id)
                                 ? 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.03) 3px, rgba(0,0,0,0.03) 6px)'
@@ -4036,6 +4352,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             {content}
                             {barStatusIcon}
                             {originBadge}
+                            {isSelected && <GlassSelectionOverlay isDark={isDark} />}
+                            {isSearchHighlight && <GlassSearchOverlay isDark={isDark} />}
                           </div>
 
                         </div>
@@ -4047,10 +4365,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   })
                 }
 
-                return rows.map((row) => {
+                return rows.map((row, rowIdx) => {
                   const currentY = yOffset
                   const rowH = row.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT
                   yOffset += rowH
+                  const rowRevealDelay = Math.min(rowIdx * (revealStage >= 5 ? 0 : 40), 800)
 
                   // Vertical virtualization: render lightweight placeholder for off-screen rows
                   if (currentY + rowH < visibleBounds.top || currentY > visibleBounds.bottom) {
@@ -4077,6 +4396,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                         style={{
                           top: currentY, height: ROW_HEIGHT, width: totalWidth,
                           background: 'rgba(239, 68, 68, 0.03)',
+                          opacity: revealStage >= 4 ? 1 : 0,
+                          transform: revealStage >= 4 ? 'translateY(0)' : 'translateY(6px)',
+                          transition: `opacity 0.3s cubic-bezier(0.16,1,0.3,1) ${rowRevealDelay}ms, transform 0.3s cubic-bezier(0.16,1,0.3,1) ${rowRevealDelay}ms`,
                         }}
                       >
                         {renderFlightBars(rowFlights, true, 'Unassigned')}
@@ -4115,6 +4437,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                         top: currentY, height: ROW_HEIGHT, width: totalWidth,
                         background: isRowPasteTarget ? 'rgba(59, 130, 246, 0.04)' : undefined,
                         ...dragRowStyle,
+                        opacity: revealStage >= 4 ? 1 : 0,
+                        transform: revealStage >= 4 ? 'translateY(0)' : 'translateY(6px)',
+                        transition: `opacity 0.3s cubic-bezier(0.16,1,0.3,1) ${rowRevealDelay}ms, transform 0.3s cubic-bezier(0.16,1,0.3,1) ${rowRevealDelay}ms`,
                       }}
                       onClick={() => {
                         if (clipboard) setClipboardTargetReg(reg.registration)
@@ -4213,9 +4538,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
         {/* ── RIGHT PANEL (Rotation Panel — overlay, collapsible) ── */}
         <div
-          className="absolute top-0 right-0 bottom-0 bg-background border-l shadow-lg flex flex-col overflow-hidden z-30"
+          className="absolute top-0 right-0 bottom-0 bg-background border-l flex flex-col overflow-hidden z-30"
           style={{
-            width: 280,
+            width: 280 * panelScale,
+            zoom: panelScale,
             transform: panelVisible ? 'translateX(0)' : 'translateX(100%)',
             opacity: panelVisible ? 1 : 0,
             transition: 'transform 400ms cubic-bezier(0.16, 1, 0.3, 1), opacity 300ms ease',
@@ -4352,11 +4678,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             style={{
                               padding: '6px 8px',
                               borderRadius: 6,
-                              background: isCurrent ? 'rgba(153, 27, 27, 0.08)' : undefined,
-                              borderLeft: isCurrent ? '2px solid #991B1B' : '2px solid transparent',
+                              background: isCurrent ? 'hsl(var(--primary) / 0.08)' : undefined,
+                              borderLeft: isCurrent ? '2px solid hsl(var(--primary))' : '2px solid transparent',
                             }}
                           >
-                            <span className="text-[10px] w-3 shrink-0" style={{ color: isCurrent ? '#991B1B' : 'transparent' }}>▸</span>
+                            <span className="text-[10px] w-3 shrink-0" style={{ color: isCurrent ? 'hsl(var(--primary))' : 'transparent' }}>▸</span>
                             <span className="text-[11px] font-semibold">{ef.flightNumber}</span>
                             <span className="text-[10px] text-muted-foreground">{ef.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
                             <span className="text-[10px] text-muted-foreground ml-auto">{ef.depStation}→{ef.arrStation}</span>
@@ -4636,7 +4962,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
                 {/* ── Section 4: Overnight Stations ── */}
                 {dayPanelData.overnightStations.length > 0 && (() => {
-                  const DONUT_COLORS = ['#991B1B', '#DC2626', '#F87171', '#FCA5A5', '#FECACA']
+                  const DONUT_COLORS = ['hsl(var(--primary))', 'hsl(var(--primary) / 0.75)', 'hsl(var(--primary) / 0.5)', 'hsl(var(--primary) / 0.35)', 'hsl(var(--primary) / 0.2)']
                   const sorted = dayPanelData.overnightStations
                   const showTop = sorted.length > 5 ? 4 : sorted.length
                   const topStations = sorted.slice(0, showTop)
@@ -4695,7 +5021,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           {displayStations.map((st, i) => (
                             <div
                               key={st.station}
-                              className="flex items-center justify-between px-1.5 py-1 rounded-md hover:bg-[rgba(153,27,27,0.04)] dark:hover:bg-[rgba(153,27,27,0.08)] transition-colors"
+                              className="flex items-center justify-between px-1.5 py-1 rounded-md hover:bg-primary/[0.04] dark:hover:bg-primary/[0.08] transition-colors"
                             >
                               <span className="flex items-center gap-1.5">
                                 <span
@@ -4777,7 +5103,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                             className="rounded-lg border p-2 cursor-pointer hover:bg-muted/30 transition-colors"
                             style={{
                               borderLeftWidth: isPrimary ? 2 : 1,
-                              borderLeftColor: isPrimary ? '#991B1B' : undefined,
+                              borderLeftColor: isPrimary ? 'hsl(var(--primary))' : undefined,
                             }}
                             onClick={() => setSelectedFlights(new Set([f.id]))}
                           >
@@ -5209,10 +5535,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                               <div
                                 className={`flex items-center justify-between py-1.5 px-2 rounded-md cursor-pointer transition-colors ${
                                   isSel
-                                    ? 'bg-[#fef2f2] dark:bg-[#1e1015]'
+                                    ? 'bg-primary/[0.05] dark:bg-primary/[0.08]'
                                     : 'hover:bg-muted/30'
                                 }`}
-                                style={isSel ? { borderLeft: '3px solid #991b1b' } : { borderLeft: '3px solid transparent' }}
+                                style={isSel ? { borderLeft: '3px solid hsl(var(--primary))' } : { borderLeft: '3px solid transparent' }}
                                 onClick={() => { setSelectedFlights(new Set([rf.id])); setPanelMode('flight') }}
                               >
                                 <div className="min-w-0">
@@ -6290,7 +6616,7 @@ function AssignToAircraftModal({
       <select
         value={currentInGroup ? selectedReg! : ''}
         onChange={e => { setSelectedReg(e.target.value || null); setWarningState('none') }}
-        className="w-full px-3 py-2 rounded-lg text-[11px] glass outline-none focus:ring-2 focus:ring-primary/30 bg-background border border-border"
+        className="w-full px-3 py-2 rounded-lg text-[11px] outline-none focus:ring-2 focus:ring-primary/30 bg-background border border-border text-foreground"
       >
         <option value="">Select registration...</option>
         {regs.map(reg => (
