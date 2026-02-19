@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { X, Settings2, Loader2, ChevronRight } from 'lucide-react'
+import { X, Settings2, SlidersHorizontal, Loader2, ChevronRight } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -17,6 +17,7 @@ export interface GanttOptimizerDialogProps {
   lastRun: { method: string; time: Date } | null
   running: boolean
   container?: HTMLElement | null
+  ruleCount?: number
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -129,6 +130,7 @@ export function GanttOptimizerDialog({
   lastRun,
   running,
   container,
+  ruleCount,
 }: GanttOptimizerDialogProps) {
   const router = useRouter()
   const [selectedMethod, setSelectedMethod] = useState<OptimizerMethod>(currentMethod)
@@ -267,13 +269,15 @@ export function GanttOptimizerDialog({
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Settings2 style={{ width: 14, height: 14 }} className="text-muted-foreground" />
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>Configuration</span>
+                  <SlidersHorizontal style={{ width: 14, height: 14 }} className="text-muted-foreground" />
+                  <span style={{ fontSize: 13, fontWeight: 500 }}>Preferences & Restrictions</span>
                 </div>
                 <ChevronRight style={{ width: 14, height: 14 }} className="text-muted-foreground" />
               </div>
               <p style={{ fontSize: 11, marginTop: 4, marginLeft: 22 }} className="text-muted-foreground">
-                No rules configured — click to set up
+                {ruleCount && ruleCount > 0
+                  ? `${ruleCount} rule${ruleCount !== 1 ? 's' : ''} configured`
+                  : 'No rules configured — click to set up'}
               </p>
             </button>
           </div>

@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { getCurrentOperator, getAccessibleModules } from '@/lib/operators'
-import { getOperatorProfile } from '@/app/actions/operator-profile'
 import { ResponsiveDock } from '@/components/navigation/responsive-dock'
 import { MainContent } from '@/components/main-content'
 import { ThemeProvider } from '@/components/theme-provider'
@@ -11,6 +10,7 @@ import { CommandPalette } from '@/components/search/command-palette'
 import { StatusBar } from '@/components/status-bar'
 import { ToastProvider } from '@/components/ui/visionos-toast'
 import { LogoWatermark } from '@/components/logo-watermark'
+import { RoutePrefetcher } from '@/components/route-prefetcher'
 
 const inter = Inter({
   subsets: ["latin"],
@@ -33,11 +33,10 @@ export default async function RootLayout({
 }>) {
   const operator = await getCurrentOperator()
   const accessibleModules = operator ? getAccessibleModules(operator) : ['home']
-  const profile = await getOperatorProfile()
 
   const userName = operator ? (operator.name || 'User') : 'User'
   const userRole = operator?.user_role || 'operator'
-  const operatorName = profile?.name || 'Horizon'
+  const operatorName = operator?.name || 'Horizon'
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -58,6 +57,7 @@ export default async function RootLayout({
             <StatusBar operatorName={operatorName} userName={userName} userRole={userRole} />
             <CommandPalette />
             <ToastProvider />
+            <RoutePrefetcher accessibleModules={accessibleModules} />
           </SchemeProvider>
         </ThemeProvider>
       </body>

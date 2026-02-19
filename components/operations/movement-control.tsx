@@ -1203,38 +1203,6 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     return result
   }, [flights, startDate, totalDaysToRender, scheduleFilters.published, scheduleFilters.finalized, scheduleFilters.wip, tailAssignments])
 
-  // ─── Flight search results (live-filtered) ─────────────────────────
-  const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
-    const q = flightSearchQuery.trim()
-    if (!q) return []
-    const normalizedQuery = q.replace(/^VJ/i, '').toLowerCase()
-
-    let results = expandedFlights.filter(f => {
-      const num = f.flightNumber.replace(/^VJ/i, '').toLowerCase()
-      return num === normalizedQuery
-    })
-
-    if (flightSearchDate.trim()) {
-      const parts = flightSearchDate.trim().split('/')
-      if (parts.length === 2) {
-        const day = parseInt(parts[0], 10)
-        const month = parseInt(parts[1], 10)
-        if (!isNaN(day) && !isNaN(month)) {
-          results = results.filter(f => f.date.getDate() === day && (f.date.getMonth() + 1) === month)
-        }
-      }
-    }
-
-    results.sort((a, b) => {
-      const da = a.date.getTime()
-      const db = b.date.getTime()
-      if (da !== db) return da - db
-      return a.stdMinutes - b.stdMinutes
-    })
-
-    return results
-  }, [expandedFlights, flightSearchQuery, flightSearchDate])
-
   // ─── Route cycle mate lookup ──────────────────────────────────────
   const routeCycleMap = useMemo(() => {
     const map = new Map<string, string[]>()
@@ -1285,6 +1253,38 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       assignedReg: assignmentResult.assignments.get(ef.id) || null,
     }))
   }, [expandedFlights, assignmentResult])
+
+  // ─── Flight search results (live-filtered) ─────────────────────────
+  const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
+    const q = flightSearchQuery.trim()
+    if (!q) return []
+    const normalizedQuery = q.replace(/^VJ/i, '').toLowerCase()
+
+    let results = assignedFlights.filter(f => {
+      const num = f.flightNumber.replace(/^VJ/i, '').toLowerCase()
+      return num === normalizedQuery
+    })
+
+    if (flightSearchDate.trim()) {
+      const parts = flightSearchDate.trim().split('/')
+      if (parts.length === 2) {
+        const day = parseInt(parts[0], 10)
+        const month = parseInt(parts[1], 10)
+        if (!isNaN(day) && !isNaN(month)) {
+          results = results.filter(f => f.date.getDate() === day && (f.date.getMonth() + 1) === month)
+        }
+      }
+    }
+
+    results.sort((a, b) => {
+      const da = a.date.getTime()
+      const db = b.date.getTime()
+      if (da !== db) return da - db
+      return a.stdMinutes - b.stdMinutes
+    })
+
+    return results
+  }, [assignedFlights, flightSearchQuery, flightSearchDate])
 
   // ─── Flights indexed by registration for row rendering ──────────
   const flightsByReg = useMemo(() => {

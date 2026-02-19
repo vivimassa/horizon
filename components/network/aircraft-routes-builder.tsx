@@ -15,7 +15,7 @@ import { getScenarios, createScenario, deleteScenario, getNextScenarioNumber } f
 import { cn, minutesToHHMM } from '@/lib/utils'
 import {
   Plus, Search, RefreshCw, Plane, ChevronDown, ChevronRight,
-  Trash2, Save, RotateCcw, AlertTriangle, Check,
+  Trash2, Save, RotateCcw, AlertTriangle, Check, Info,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StatusGreen, StatusYellow, StatusRed, StatusGray } from '@/components/ui/validation-icons'
@@ -516,6 +516,8 @@ export function AircraftRoutesBuilder({
   const [scenarios, setScenarios] = useState(initialScenarios || [])
   const [selectedScenario, setSelectedScenario] = useState<(ScheduleScenario & { route_count: number }) | null>(null)
   const [showCreateScenario, setShowCreateScenario] = useState(false)
+  const [saveTriggeredScenario, setSaveTriggeredScenario] = useState(false)
+  const pendingSaveRef = useRef(false)
   const [showScenarioList, setShowScenarioList] = useState(false)
   const [scenarioLoading, setScenariosLoading] = useState(false)
   const [nextScenarioNum, setNextScenarioNum] = useState('')
@@ -1738,6 +1740,15 @@ export function AircraftRoutesBuilder({
 
   const handleSaveRoute = useCallback(() => {
     if (!form) return
+
+    // Must have a scenario — open creation dialog if missing
+    if (!selectedScenario) {
+      pendingSaveRef.current = true
+      setSaveTriggeredScenario(true)
+      openCreateScenarioDialog()
+      return
+    }
+
     if (hasRedErrors) { toast.error('Cannot save \u2014 resolve errors first'); return }
     if (isAdding && draft._duplicateError) { toast.error('Cannot save \u2014 resolve duplicate flight error first'); return }
 
@@ -1760,7 +1771,16 @@ export function AircraftRoutesBuilder({
     const warnings = computeWarnings()
     if (warnings.length > 0) { setSaveWarnings(warnings); setShowWarningDialog(true); return }
     executeSave()
-  }, [form, hasRedErrors, isAdding, draft._duplicateError, legs.length, computeWarnings, executeSave])
+  }, [form, selectedScenario, openCreateScenarioDialog, hasRedErrors, isAdding, draft._duplicateError, legs.length, computeWarnings, executeSave])
+
+  // ── Auto-save after scenario creation (when save triggered the dialog) ──
+  useEffect(() => {
+    if (pendingSaveRef.current && selectedScenario) {
+      pendingSaveRef.current = false
+      setSaveTriggeredScenario(false)
+      setTimeout(() => handleSaveRoute(), 50)
+    }
+  }, [selectedScenario, handleSaveRoute])
 
   const discardChanges = useCallback(() => {
     if (isNewRoute) {
@@ -2517,6 +2537,9 @@ export function AircraftRoutesBuilder({
                     Unsaved changes
                   </span>
                 )}
+                {!selectedScenario && isDirty && (
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400 ml-2">Scenario required</span>
+                )}
               </div>
               )}
             </div>
@@ -2543,10 +2566,22 @@ export function AircraftRoutesBuilder({
       </div>
 
       {/* ═══ CREATE SCENARIO DIALOG ═══ */}
-      <Dialog open={showCreateScenario} onOpenChange={setShowCreateScenario}>
+      <Dialog open={showCreateScenario} onOpenChange={(open) => {
+        setShowCreateScenario(open)
+        if (!open) { setSaveTriggeredScenario(false); pendingSaveRef.current = false }
+      }}>
         <DialogContent className="sm:max-w-[480px] p-0 border-0 bg-transparent shadow-none" hideClose>
           <div style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(40px) saturate(180%)', border: '1px solid rgba(255,255,255,0.5)', borderRadius: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.15)', padding: 32 }}>
             <DialogHeader className="mb-6"><DialogTitle className="text-lg font-semibold">Create New Scenario</DialogTitle></DialogHeader>
+            {saveTriggeredScenario && (
+              <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 mb-4">
+                <Info className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-[12px] font-medium text-amber-800 dark:text-amber-200">Scenario required to save</p>
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-0.5">Routes are organized into scenarios for version control and review. Create a scenario to continue saving your route.</p>
+                </div>
+              </div>
+            )}
             <div className="space-y-5">
               {/* Scenario No */}
               <div>
@@ -2609,7 +2644,7 @@ export function AircraftRoutesBuilder({
             </div>
             {/* Buttons */}
             <div className="flex items-center justify-end gap-2 mt-8">
-              <button onClick={() => setShowCreateScenario(false)}
+              <button onClick={() => { setShowCreateScenario(false); setSaveTriggeredScenario(false); pendingSaveRef.current = false }}
                 className="h-9 px-5 rounded-lg text-sm font-medium text-[#6b7280] hover:text-[#374151] transition-colors">
                 Cancel
               </button>

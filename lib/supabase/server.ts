@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
+import { cache } from 'react'
 
 /** Anon-key client bound to user session (respects RLS) */
 export async function createClient() {
@@ -38,6 +39,18 @@ export function createAdminClient() {
   )
 }
 
+/**
+ * Cached auth user — deduplicates getUser() calls within a single
+ * React server-component render pass (layout + page + guards).
+ * Safe: cache() scopes to one request, never leaks across users.
+ */
+export const getAuthUser = cache(async () => {
+  const supabase = await createClient()
+  const { data: { user }, error } = await supabase.auth.getUser()
+  if (error || !user) return null
+  return user
+})
+
 const OPERATOR_COOKIE = 'horizon_operator_id'
 
 /**
@@ -46,9 +59,8 @@ const OPERATOR_COOKIE = 'horizon_operator_id'
  * falling back to the first entry in user_roles.
  */
 export async function getCurrentOperatorId(): Promise<string> {
-  const supabase = await createClient()
-  const { data: { user }, error: authError } = await supabase.auth.getUser()
-  if (authError || !user) throw new Error('Not authenticated')
+  const user = await getAuthUser()
+  if (!user) throw new Error('Not authenticated')
 
   const cookieStore = await cookies()
   const selectedId = cookieStore.get(OPERATOR_COOKIE)?.value

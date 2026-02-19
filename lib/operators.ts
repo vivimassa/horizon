@@ -1,4 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { cache } from 'react'
+import { getAuthUser } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { cookies } from 'next/headers'
 import { ModuleName } from '@/types/database'
@@ -26,12 +27,13 @@ export interface OperatorWithRole {
 }
 
 /**
- * Get the current operator's data with user role
+ * Get the current operator's data with user role.
+ * Wrapped with React cache() — deduplicates across layout, page,
+ * and guard components within the same server render pass.
  */
-export async function getCurrentOperator(): Promise<OperatorWithRole | null> {
+export const getCurrentOperator = cache(async (): Promise<OperatorWithRole | null> => {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getAuthUser()
 
     if (!user) {
       return null
@@ -78,7 +80,7 @@ export async function getCurrentOperator(): Promise<OperatorWithRole | null> {
     console.error('getCurrentOperator failed (possible network timeout):', error)
     return null
   }
-}
+})
 
 /**
  * Check if operator has access to a specific module

@@ -7,6 +7,7 @@ import { Check, ChevronDown, X, Search } from 'lucide-react'
 export interface MultiSelectOption {
   value: string
   label: string
+  sublabel?: string
 }
 
 interface MultiSelectProps {
@@ -53,7 +54,10 @@ export function MultiSelect({
   }, [open, searchable])
 
   const filtered = search
-    ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+    ? options.filter(o =>
+        o.label.toLowerCase().includes(search.toLowerCase()) ||
+        (o.sublabel && o.sublabel.toLowerCase().includes(search.toLowerCase()))
+      )
     : options
 
   const toggle = (value: string) => {
@@ -167,7 +171,12 @@ export function MultiSelect({
                     )}>
                       {isSelected && <Check className="h-3 w-3" />}
                     </div>
-                    <span className="truncate text-left">{option.label}</span>
+                    <span className="truncate text-left">
+                      {option.label}
+                      {option.sublabel && (
+                        <span className="text-muted-foreground ml-1.5 text-[10px]">{option.sublabel}</span>
+                      )}
+                    </span>
                   </button>
                 )
               })

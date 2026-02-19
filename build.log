@@ -1,0 +1,109 @@
+  ▲ Next.js 14.2.35
+  - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Skipping linting
+   Checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/85) ...
+   Generating static pages (21/85) 
+   Generating static pages (42/85) 
+   Generating static pages (63/85) 
+ ✓ Generating static pages (85/85)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                        Size     First Load JS
+┌ ƒ /                                              23.8 kB         166 kB
+├ ƒ /_not-found                                    880 B          88.9 kB
+├ ƒ /admin                                         256 B          88.3 kB
+├ ƒ /admin/addon-config                            256 B          88.3 kB
+├ ƒ /admin/control                                 206 B            97 kB
+├ ƒ /admin/master-database/aircraft-registrations  11.5 kB         148 kB
+├ ƒ /admin/master-database/aircraft-types          12.3 kB         158 kB
+├ ƒ /admin/master-database/airlines                6.84 kB         120 kB
+├ ƒ /admin/master-database/airports                23.3 kB         163 kB
+├ ƒ /admin/master-database/cabin-classes           6.5 kB          120 kB
+├ ƒ /admin/master-database/city-pairs              16.8 kB         153 kB
+├ ƒ /admin/master-database/countries               10.5 kB         147 kB
+├ ƒ /admin/master-database/delay-codes             6.52 kB         140 kB
+├ ƒ /admin/master-database/flight-service-types    6.31 kB         119 kB
+├ ƒ /admin/master-database/units-of-measure        7.06 kB         137 kB
+├ ƒ /admin/network-config/cabin-config             6.57 kB         116 kB
+├ ƒ /admin/network-config/codeshare-config         256 B          88.3 kB
+├ ƒ /admin/network-config/schedule-preferences     1.41 kB        89.5 kB
+├ ƒ /admin/network-config/schedule-seasons         6.98 kB         116 kB
+├ ƒ /admin/network-config/schedule-templates       257 B          88.3 kB
+├ ƒ /admin/network-config/service-types            6.31 kB         116 kB
+├ ƒ /admin/operations-config/alert-thresholds      256 B          88.3 kB
+├ ƒ /admin/operations-config/delay-codes           256 B          88.3 kB
+├ ƒ /admin/operations-config/diversion-airports    256 B          88.3 kB
+├ ƒ /admin/operations-config/flight-status-rules   256 B          88.3 kB
+├ ƒ /admin/operations-config/ground-time-rules     256 B          88.3 kB
+├ ƒ /admin/operations-config/maintenance-types     256 B          88.3 kB
+├ ƒ /admin/operations-config/message-config        256 B          88.3 kB
+├ ƒ /admin/operations-config/occ-desk-config       256 B          88.3 kB
+├ ƒ /admin/reports                                 256 B          88.3 kB
+├ ƒ /admin/system/integrations                     257 B          88.3 kB
+├ ƒ /admin/system/modules                          5.94 kB         102 kB
+├ ƒ /admin/system/notifications                    257 B          88.3 kB
+├ ƒ /admin/system/operator-profile                 5.17 kB         101 kB
+├ ƒ /admin/system/users                            6.28 kB         136 kB
+├ ƒ /admin/tools                                   256 B          88.3 kB
+├ ƒ /admin/workforce-config/activity-codes         256 B          88.3 kB
+├ ƒ /admin/workforce-config/crew-bases             256 B          88.3 kB
+├ ƒ /admin/workforce-config/crew-groups            256 B          88.3 kB
+├ ƒ /admin/workforce-config/crew-ranks             256 B          88.3 kB
+├ ƒ /admin/workforce-config/fdtl-rule-advisor      256 B          88.3 kB
+├ ƒ /admin/workforce-config/fdtl-rule-sets         256 B          88.3 kB
+├ ƒ /admin/workforce-config/qualification-types    256 B          88.3 kB
+├ ƒ /admin/workforce-config/request-types          255 B          88.3 kB
+├ ƒ /admin/workforce-config/roster-rules           256 B          88.3 kB
+├ ƒ /admin/workforce-config/seniority-rules        256 B          88.3 kB
+├ ƒ /login                                         4.55 kB         109 kB
+├ ƒ /network                                       256 B          88.3 kB
+├ ƒ /network/control                               5.01 kB         102 kB
+├ ƒ /network/control/aircraft-tail-assignment      1.34 kB        89.4 kB
+├ ƒ /network/control/charter-manager               206 B            97 kB
+├ ƒ /network/control/codeshare-manager             206 B            97 kB
+├ ƒ /network/control/flight-publish                7.55 kB         104 kB
+├ ƒ /network/control/schedule-builder              25 kB           139 kB
+├ ƒ /network/control/schedule-comparison           206 B            97 kB
+├ ƒ /network/control/schedule-gantt                49.1 kB         173 kB
+├ ƒ /network/control/schedule-grid                 10.8 kB         120 kB
+├ ƒ /network/control/schedule-messages             11.4 kB         121 kB
+├ ƒ /network/control/schedule-messaging            206 B            97 kB
+├ ƒ /network/control/schedule-publish              206 B            97 kB
+├ ƒ /network/control/slot-manager                  206 B            97 kB
+├ ƒ /network/control/ssim                          256 B          88.3 kB
+├ ƒ /network/control/ssim-exchange                 256 B          88.3 kB
+├ ƒ /network/control/ssim/comparison               255 B          88.3 kB
+├ ƒ /network/control/ssim/export                   8.27 kB         106 kB
+├ ƒ /network/control/ssim/import                   10.8 kB         138 kB
+├ ƒ /network/reports                               256 B          88.3 kB
+├ ƒ /network/tools                                 256 B          88.3 kB
+├ ƒ /operations                                    256 B          88.3 kB
+├ ƒ /operations/control                            2.55 kB        90.6 kB
+├ ƒ /operations/control/movement-control           45.5 kB         170 kB
+├ ƒ /operations/reports                            256 B          88.3 kB
+├ ƒ /operations/tools                              256 B          88.3 kB
+├ ƒ /register                                      3.53 kB         108 kB
+├ ƒ /reports                                       256 B          88.3 kB
+├ ƒ /reports/control                               256 B          88.3 kB
+├ ƒ /reports/reports                               256 B          88.3 kB
+├ ƒ /reports/tools                                 256 B          88.3 kB
+├ ƒ /workforce                                     256 B          88.3 kB
+├ ƒ /workforce/control                             256 B          88.3 kB
+├ ƒ /workforce/reports                             256 B          88.3 kB
+└ ƒ /workforce/tools                               257 B          88.3 kB
++ First Load JS shared by all                      88 kB
+  ├ chunks/2117-6d21bbfa6eb950f3.js                31.9 kB
+  ├ chunks/fd9d1056-f0d11f441be4f9b9.js            53.6 kB
+  └ other shared chunks (total)                    2.5 kB
+
+
+ƒ Middleware                                       74.4 kB
+
+ƒ  (Dynamic)  server-rendered on demand
+

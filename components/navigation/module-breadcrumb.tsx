@@ -74,8 +74,8 @@ export function ModuleBreadcrumb({ leftOffset = 8, module: moduleProp }: ModuleB
           fontWeight: 500,
         }}
       >
-        <span className="text-red-800 font-semibold">{currentModule.code}.</span>
-        <span className="text-gray-700 dark:text-gray-300 ml-1">
+        <span className="text-primary font-semibold">{currentModule.code}.</span>
+        <span className="text-foreground ml-1">
           {currentModule.name}
         </span>
       </span>

@@ -1,32 +1,27 @@
-'use client'
+import { getScheduleRules } from '@/app/actions/schedule-rules'
+import { SchedulePreferences } from '@/components/admin/schedule-preferences'
+import { createClient } from '@/lib/supabase/server'
 
-import { SlidersHorizontal } from 'lucide-react'
+export default async function SchedulePreferencesPage() {
+  const supabase = await createClient()
 
-export default function SchedulePreferencesPage() {
+  const [rules, acTypesRes, registrationsRes, airportsRes, serviceTypesRes, countriesRes] = await Promise.all([
+    getScheduleRules(),
+    supabase.from('aircraft_types').select('id, icao_type, name, is_active').eq('is_active', true).order('icao_type'),
+    supabase.from('aircraft_registrations').select('id, registration, aircraft_types(icao_type)').eq('is_active', true).order('registration'),
+    supabase.from('airports').select('id, iata_code, name, country').order('iata_code'),
+    supabase.from('flight_service_types').select('id, code, name').eq('is_active', true).order('code'),
+    supabase.from('countries').select('id, iso_code_2, name, flag_emoji, is_active').eq('is_active', true).order('name'),
+  ])
+
   return (
-    <div className="p-8">
-      <h1 className="text-xl font-semibold">
-        4.3.3. Schedule Preferences &amp; Restrictions
-      </h1>
-      <p className="text-xs text-muted-foreground mt-1">
-        Define rules and constraints for aircraft tail assignment optimization
-      </p>
-
-      <div className="mt-12 flex flex-col items-center justify-center text-center">
-        <div
-          className="rounded-full bg-muted/30 flex items-center justify-center mb-4"
-          style={{ width: 64, height: 64 }}
-        >
-          <SlidersHorizontal className="text-muted-foreground" style={{ width: 28, height: 28 }} />
-        </div>
-        <p className="font-medium" style={{ fontSize: 13 }}>
-          Coming Soon
-        </p>
-        <p className="text-muted-foreground mt-1 max-w-md" style={{ fontSize: 11 }}>
-          Configure route-to-aircraft-type rules, base station constraints,
-          cycle limits, and other preferences that drive the tail assignment optimizer.
-        </p>
-      </div>
-    </div>
+    <SchedulePreferences
+      initialRules={rules}
+      aircraftTypes={acTypesRes.data || []}
+      registrations={(registrationsRes.data || []) as any}
+      airports={airportsRes.data || []}
+      serviceTypes={serviceTypesRes.data || []}
+      countries={countriesRes.data || []}
+    />
   )
 }

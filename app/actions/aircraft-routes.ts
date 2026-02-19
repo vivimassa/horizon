@@ -283,6 +283,7 @@ export interface SaveRouteInput {
  */
 export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; error?: string }> {
   if (input.legs.length === 0) return { error: 'Cannot save route with no legs' }
+  if (!input.scenario_id || input.scenario_id.trim() === '') return { error: 'Scenario is required. Please select or create a scenario first.' }
 
   const operatorId = await getCurrentOperatorId()
   const client = await pool.connect()

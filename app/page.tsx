@@ -1,23 +1,22 @@
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { getAuthUser } from '@/lib/supabase/server'
 import { getCurrentOperator, isAdmin as checkAdmin } from '@/lib/operators'
-import { getOperatorProfile } from '@/app/actions/operator-profile'
 import { getShortcuts } from '@/app/actions/shortcuts'
 import { Launchpad } from '@/components/myhorizon/launchpad'
 
 export default async function Home() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = await getAuthUser()
 
   if (!user) {
     redirect('/login')
   }
 
-  const operator = await getCurrentOperator()
-  const profile = await getOperatorProfile()
-  const shortcuts = await getShortcuts()
+  const [operator, shortcuts] = await Promise.all([
+    getCurrentOperator(),
+    getShortcuts(),
+  ])
 
-  const enabledModules = profile?.enabled_modules || []
+  const enabledModules = operator?.enabled_modules || []
   const userName = user.email?.split('@')[0] || 'User'
   const userRole = operator?.user_role || 'operator'
   const admin = checkAdmin(operator)

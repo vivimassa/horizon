@@ -457,6 +457,14 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const [assignmentMethod, setAssignmentMethod] = useState<OptimizerMethod>('greedy')
   const [optimizerRunning, setOptimizerRunning] = useState(false)
   const [lastOptRun, setLastOptRun] = useState<{ method: string; time: Date } | null>(null)
+  const [ruleCount, setRuleCount] = useState(0)
+
+  // Lazy-fetch schedule rule count (avoids bundling schedule-rules action)
+  useEffect(() => {
+    import('@/app/actions/schedule-rules').then(mod => {
+      mod.getScheduleRules().then(r => setRuleCount(r.length))
+    })
+  }, [])
 
   // ─── State ──────────────────────────────────────────────────────────
   const [startDate, setStartDate] = useState(() => startOfDay(new Date()))
@@ -1241,38 +1249,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     return result
   }, [flights, startDate, totalDaysToRender, scheduleFilters.published, scheduleFilters.finalized, scheduleFilters.wip, tailAssignments])
 
-  // ─── Flight search results (live-filtered) ─────────────────────────
-  const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
-    const q = flightSearchQuery.trim()
-    if (!q) return []
-    const normalizedQuery = q.replace(/^VJ/i, '').toLowerCase()
-
-    let results = expandedFlights.filter(f => {
-      const num = f.flightNumber.replace(/^VJ/i, '').toLowerCase()
-      return num === normalizedQuery
-    })
-
-    if (flightSearchDate.trim()) {
-      const parts = flightSearchDate.trim().split('/')
-      if (parts.length === 2) {
-        const day = parseInt(parts[0], 10)
-        const month = parseInt(parts[1], 10)
-        if (!isNaN(day) && !isNaN(month)) {
-          results = results.filter(f => f.date.getDate() === day && (f.date.getMonth() + 1) === month)
-        }
-      }
-    }
-
-    results.sort((a, b) => {
-      const da = a.date.getTime()
-      const db = b.date.getTime()
-      if (da !== db) return da - db
-      return a.stdMinutes - b.stdMinutes
-    })
-
-    return results
-  }, [expandedFlights, flightSearchQuery, flightSearchDate])
-
   // ─── Route cycle mate lookup ──────────────────────────────────────
   const routeCycleMap = useMemo(() => {
     const map = new Map<string, string[]>()
@@ -1323,6 +1299,38 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       assignedReg: assignmentResult.assignments.get(ef.id) || null,
     }))
   }, [expandedFlights, assignmentResult])
+
+  // ─── Flight search results (live-filtered) ─────────────────────────
+  const flightSearchResults = useMemo<ExpandedFlight[]>(() => {
+    const q = flightSearchQuery.trim()
+    if (!q) return []
+    const normalizedQuery = q.replace(/^VJ/i, '').toLowerCase()
+
+    let results = assignedFlights.filter(f => {
+      const num = f.flightNumber.replace(/^VJ/i, '').toLowerCase()
+      return num === normalizedQuery
+    })
+
+    if (flightSearchDate.trim()) {
+      const parts = flightSearchDate.trim().split('/')
+      if (parts.length === 2) {
+        const day = parseInt(parts[0], 10)
+        const month = parseInt(parts[1], 10)
+        if (!isNaN(day) && !isNaN(month)) {
+          results = results.filter(f => f.date.getDate() === day && (f.date.getMonth() + 1) === month)
+        }
+      }
+    }
+
+    results.sort((a, b) => {
+      const da = a.date.getTime()
+      const db = b.date.getTime()
+      if (da !== db) return da - db
+      return a.stdMinutes - b.stdMinutes
+    })
+
+    return results
+  }, [assignedFlights, flightSearchQuery, flightSearchDate])
 
   // ─── Flights indexed by registration for row rendering ──────────
   const flightsByReg = useMemo(() => {
@@ -2322,7 +2330,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   type RowItem =
     | { type: 'group'; icaoType: string; typeName: string; count: number }
     | { type: 'aircraft'; reg: AircraftWithRelations; cabin: string }
-    | { type: 'overflow'; icaoType: string; overflowCount: number }
+    | { type: 'overflow'; icaoType: string; overflowCount: number; subRowCount: number }
 
   // Utilization per registration (for type_util sort)
   const utilByReg = useMemo(() => {
@@ -2371,9 +2379,72 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     )
   }, [groups])
 
+  // Pack overflow flights into non-overlapping sub-rows (greedy interval scheduling).
+  // Returns the number of sub-rows needed (minimum 1).
+  const countOverflowSubRows = useCallback((flights: ExpandedFlight[]): number => {
+    if (flights.length === 0) return 1
+    const sorted = [...flights].sort((a, b) => {
+      const da = a.date.getTime() - b.date.getTime()
+      if (da !== 0) return da
+      return a.stdMinutes - b.stdMinutes
+    })
+    // Each sub-row tracks when it ends (as absolute minutes from epoch-start)
+    const subRowEnds: number[] = []
+    for (const f of sorted) {
+      const dayOffset = Math.floor((f.date.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
+      const fStart = dayOffset * 1440 + f.stdMinutes
+      const fEnd = dayOffset * 1440 + f.staMinutes
+      // Find a sub-row where the last flight ended before this one starts
+      let placed = false
+      for (let i = 0; i < subRowEnds.length; i++) {
+        if (subRowEnds[i] <= fStart) {
+          subRowEnds[i] = fEnd
+          placed = true
+          break
+        }
+      }
+      if (!placed) subRowEnds.push(fEnd)
+    }
+    return Math.max(1, subRowEnds.length)
+  }, [startDate])
+
+  // Map of flightId → sub-row index for overflow flights (used during rendering)
+  const overflowSubRowMap = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const [, flights] of Array.from(wsOverflowByType.entries())) {
+      if (!flights || flights.length === 0) continue
+      const sorted = [...flights].sort((a, b) => {
+        const da = a.date.getTime() - b.date.getTime()
+        if (da !== 0) return da
+        return a.stdMinutes - b.stdMinutes
+      })
+      const subRowEnds: number[] = []
+      for (const f of sorted) {
+        const dayOff = Math.floor((f.date.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
+        const fStart = dayOff * 1440 + f.stdMinutes
+        const fEnd = dayOff * 1440 + f.staMinutes
+        let assignedRow = -1
+        for (let i = 0; i < subRowEnds.length; i++) {
+          if (subRowEnds[i] <= fStart) {
+            subRowEnds[i] = fEnd
+            assignedRow = i
+            break
+          }
+        }
+        if (assignedRow === -1) {
+          assignedRow = subRowEnds.length
+          subRowEnds.push(fEnd)
+        }
+        map.set(f.id, assignedRow)
+      }
+    }
+    return map
+  }, [wsOverflowByType, startDate])
+
   const rows = useMemo<RowItem[]>(() => {
     const sortOrder = ganttSettings.fleetSortOrder ?? 'type_reg'
     const result: RowItem[] = []
+    const overflowRows: RowItem[] = []
 
     if (sortOrder === 'reg_only') {
       // Flat list: all registrations sorted alphabetically, no groups
@@ -2382,7 +2453,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       for (const reg of allRegs) {
         result.push({ type: 'aircraft', reg, cabin: getCabinString(reg) })
       }
-      return result
+      // Collect overflow rows for all types
+      for (const g of groups) {
+        const oFlights = overflowByType.get(g.icaoType)
+        const oCount = oFlights?.length || 0
+        if (oCount > 0) {
+          overflowRows.push({ type: 'overflow', icaoType: g.icaoType, overflowCount: oCount, subRowCount: countOverflowSubRows(oFlights!) })
+        }
+      }
+      return [...result, ...overflowRows]
     }
 
     for (const g of groups) {
@@ -2392,7 +2471,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         type: 'group',
         icaoType: g.icaoType,
         typeName: g.typeName,
-        count: g.registrations.length + (overflowCount > 0 ? 1 : 0),
+        count: g.registrations.length,
       })
       if (!collapsedTypes.has(g.icaoType)) {
         // Sort registrations within group
@@ -2412,19 +2491,21 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             cabin: getCabinString(reg),
           })
         }
-        // Overflow row (if any flights couldn't be assigned)
-        if (overflowCount > 0) {
-          result.push({
-            type: 'overflow',
-            icaoType: g.icaoType,
-            overflowCount,
-          })
-        }
+      }
+      // Collect overflow for bottom section
+      if (overflowCount > 0) {
+        overflowRows.push({
+          type: 'overflow',
+          icaoType: g.icaoType,
+          overflowCount,
+          subRowCount: countOverflowSubRows(overflowFlights!),
+        })
       }
     }
-    return result
+    // Append all overflow rows at the very bottom
+    return [...result, ...overflowRows]
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, collapsedTypes, seatingByAircraft, acTypeMap, overflowByType, ganttSettings.fleetSortOrder, utilByReg, customAircraftOrder])
+  }, [groups, collapsedTypes, seatingByAircraft, acTypeMap, overflowByType, ganttSettings.fleetSortOrder, utilByReg, customAircraftOrder, countOverflowSubRows])
 
   // ─── Move aircraft row within group ──────────────────────────────
   const moveAircraftRow = useCallback((reg: string, direction: 'up' | 'down' | 'top' | 'bottom') => {
@@ -2461,16 +2542,20 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   }, [ganttSettings.fleetSortOrder, regToIcao, customAircraftOrder, rows])
   moveAircraftRowRef.current = moveAircraftRow
 
-  const bodyHeight = rows.reduce(
-    (h, r) => h + (r.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT), 0
-  )
+  // Height helper: overflow rows expand to fit sub-rows
+  const getRowH = (row: RowItem) =>
+    row.type === 'group' ? GROUP_HEADER_HEIGHT
+    : row.type === 'overflow' ? row.subRowCount * ROW_HEIGHT
+    : ROW_HEIGHT
+
+  const bodyHeight = rows.reduce((h, r) => h + getRowH(r), 0)
 
   // ─── Row layout for drag hit-testing ──────────────────────────────
   const rowLayout = useMemo<RowLayoutItem[]>(() => {
     const result: RowLayoutItem[] = []
     let y = 0
     for (const row of rows) {
-      const h = row.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT
+      const h = getRowH(row)
       result.push({
         type: row.type,
         icaoType: row.type === 'group' ? row.icaoType : row.type === 'overflow' ? row.icaoType : (row.reg.aircraft_types?.icao_type || 'UNKN'),
@@ -3350,7 +3435,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             <div style={{ height: bodyHeight }}>
               {rows.map((row, rowIdx) => {
                 const rl = rowLayout[rowIdx]
-                const lpRowH = rl?.height ?? (row.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT)
+                const lpRowH = rl?.height ?? getRowH(row)
                 const lpRowTop = rl?.yTop ?? 0
 
                 // Vertical virtualization: placeholder for off-screen rows
@@ -3388,18 +3473,19 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 }
 
                 if (row.type === 'overflow') {
+                  const overflowLpH = row.subRowCount * ROW_HEIGHT
                   return (
                     <div
                       key={`overflow-lp-${row.icaoType}`}
                       className="flex flex-col justify-center px-3 border-b border-border/10"
-                      style={{ height: ROW_HEIGHT, background: 'rgba(239, 68, 68, 0.03)' }}
+                      style={{ height: overflowLpH, background: 'rgba(239, 68, 68, 0.03)' }}
                     >
                       <span className="font-medium text-amber-600 dark:text-amber-400 truncate leading-tight" style={{ fontSize: REG_FONT }}>
                         {row.icaoType} Unassigned
                       </span>
                       {REG_SUB_FONT > 7 && (
                         <span className="text-muted-foreground leading-tight" style={{ fontSize: REG_SUB_FONT }}>
-                          ({row.overflowCount})
+                          ({row.overflowCount}{row.subRowCount > 1 ? ` · ${row.subRowCount} rows` : ''})
                         </span>
                       )}
                     </div>
@@ -3954,7 +4040,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 const newSelection = new Set(selectedFlights)
                 let yOff = 0
                 for (const row of rows) {
-                  const rh = row.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT
+                  const rh = getRowH(row)
                   if (row.type === 'aircraft' || row.type === 'overflow') {
                     const rowTop = yOff
                     const rowBottom = yOff + rh
@@ -4083,9 +4169,14 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 let yOffset = 0
 
                 // Helper: render flight bars for a list of flights
-                const renderFlightBars = (rowFlights: ExpandedFlight[], isOverflow: boolean, regCode: string) => {
+                const renderFlightBars = (rowFlights: ExpandedFlight[], isOverflow: boolean, regCode: string, subRowMap?: Map<string, number>) => {
                   const showTatLabels = (ganttSettings.display?.tatLabels ?? true) && zoomDays <= 3
                   return rowFlights.map((ef, fi) => {
+                    // Sub-row vertical offset for overflow multi-row layout
+                    const subRowIdx = subRowMap?.get(ef.id) ?? 0
+                    const subRowOffset = subRowIdx * ROW_HEIGHT
+                    const barTop = BAR_TOP + subRowOffset
+
                     const x = getFlightX(ef)
                     const w = getFlightWidth(ef)
 
@@ -4156,7 +4247,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                               <div
                                 key={`tat-${ef.id}`}
                                 className="absolute flex items-center justify-center pointer-events-none select-none"
-                                style={{ left: gapX, width: gapW, top: BAR_TOP, height: BAR_HEIGHT }}
+                                style={{ left: gapX, width: gapW, top: barTop, height: BAR_HEIGHT }}
                               >
                                 <span className="font-semibold" style={{ fontSize: BAR_FONT * 0.8, color: showWarning ? '#ef4444' : undefined }}>
                                   <span className={showWarning ? '' : 'text-muted-foreground'}>{fmtTat(tat.gapMinutes)}</span>
@@ -4192,7 +4283,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           <div
                             key={`std-${ef.id}`}
                             className="absolute flex items-start justify-end"
-                            style={{ right: totalWidth - x + FLANK_GAP, top: BAR_TOP, ...flankStyle }}
+                            style={{ right: totalWidth - x + FLANK_GAP, top: barTop, ...flankStyle }}
                           >
                             {ef.stdLocal}
                           </div>
@@ -4206,7 +4297,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           <div
                             key={`sta-${ef.id}`}
                             className="absolute flex items-end"
-                            style={{ left: x + w + FLANK_GAP, top: BAR_TOP, height: BAR_HEIGHT, ...flankStyle }}
+                            style={{ left: x + w + FLANK_GAP, top: barTop, height: BAR_HEIGHT, ...flankStyle }}
                           >
                             {ef.staLocal}
                           </div>
@@ -4273,7 +4364,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                           <div
                             className="absolute pointer-events-none"
                             style={{
-                              left: x, width: w, height: BAR_HEIGHT, top: BAR_TOP,
+                              left: x, width: w, height: BAR_HEIGHT, top: barTop,
                               border: '1.5px dashed rgba(100,100,100,0.3)',
                               borderRadius: 5,
                               background: 'transparent',
@@ -4286,7 +4377,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                         <div
                           className="absolute cursor-grab group/bar select-none"
                           style={{
-                            left: x, width: w, height: BAR_HEIGHT, top: BAR_TOP,
+                            left: x, width: w, height: BAR_HEIGHT, top: barTop,
                             zIndex: isSearchHighlight ? 50 : barIsDragged ? 100 : isSelected ? 10 : isHovered ? 5 : 2,
                             transform: barIsDragged
                               ? `translateY(${getDragDeltaY(0)}px) scale(1.03)`
@@ -4367,7 +4458,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
                 return rows.map((row, rowIdx) => {
                   const currentY = yOffset
-                  const rowH = row.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT
+                  const rowH = getRowH(row)
                   yOffset += rowH
                   const rowRevealDelay = Math.min(rowIdx * (revealStage >= 5 ? 0 : 40), 800)
 
@@ -4389,19 +4480,25 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
                   if (row.type === 'overflow') {
                     const rowFlights = getOverflowFlightsSorted(row.icaoType)
+                    const overflowH = row.subRowCount * ROW_HEIGHT
                     return (
                       <div
                         key={`overflow-${row.icaoType}`}
                         className="absolute left-0 border-b border-border/10"
                         style={{
-                          top: currentY, height: ROW_HEIGHT, width: totalWidth,
+                          top: currentY, height: overflowH, width: totalWidth,
                           background: 'rgba(239, 68, 68, 0.03)',
                           opacity: revealStage >= 4 ? 1 : 0,
                           transform: revealStage >= 4 ? 'translateY(0)' : 'translateY(6px)',
                           transition: `opacity 0.3s cubic-bezier(0.16,1,0.3,1) ${rowRevealDelay}ms, transform 0.3s cubic-bezier(0.16,1,0.3,1) ${rowRevealDelay}ms`,
                         }}
                       >
-                        {renderFlightBars(rowFlights, true, 'Unassigned')}
+                        {/* Sub-row dividers */}
+                        {row.subRowCount > 1 && Array.from({ length: row.subRowCount - 1 }, (_, i) => (
+                          <div key={`sr-${i}`} className="absolute left-0 right-0 border-b border-border/5" style={{ top: (i + 1) * ROW_HEIGHT }} />
+                        ))}
+                        {/* Render bars with sub-row offset */}
+                        {renderFlightBars(rowFlights, true, 'Unassigned', overflowSubRowMap)}
                       </div>
                     )
                   }
@@ -6021,6 +6118,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         lastRun={lastOptRun}
         running={optimizerRunning}
         container={dialogContainer}
+        ruleCount={ruleCount}
       />
 
       {/* ── Fixed-position tooltip (rendered outside scroll containers) ── */}
