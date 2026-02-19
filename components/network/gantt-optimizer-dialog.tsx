@@ -251,7 +251,7 @@ export function GanttOptimizerDialog({
               className="mt-4 text-muted-foreground hover:text-foreground transition-colors"
               style={{ fontSize: 11, padding: '6px 14px', borderRadius: 6 }}
             >
-              Cancel and Use Good Solution
+              Cancel and Use Best Solution
             </button>
           </div>
         )}
