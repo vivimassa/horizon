@@ -4,7 +4,7 @@ import { Pool } from 'pg'
 import { getCurrentOperatorId } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
-import { parseSSIM, IATA_TO_ICAO_AIRCRAFT, toUtcTime } from '@/lib/utils/ssim-parser'
+import { parseSSIM, toUtcTime } from '@/lib/utils/ssim-parser'
 import type { SSIMFlightLeg, SSIMParseResult } from '@/lib/utils/ssim-parser'
 import { AIRPORT_COUNTRY, classifyRoute } from '@/lib/data/airport-countries'
 
@@ -131,12 +131,9 @@ export async function parseSSIMFile(fileContent: string): Promise<ParseSSIMResul
 
   const allAcTypes = new Set<string>()
   result.flights.forEach(f => { if (f.aircraftType) allAcTypes.add(f.aircraftType) })
-  const missingAircraftTypes = Array.from(allAcTypes).filter(t => {
-    if (existingIata.has(t)) return false
-    const icao = IATA_TO_ICAO_AIRCRAFT[t]
-    if (icao && existingIcao.has(icao)) return false
-    return true
-  })
+  const missingAircraftTypes = Array.from(allAcTypes).filter(t =>
+    !existingIata.has(t) && !existingIcao.has(t)
+  )
 
   const { data: seasons } = await supabase
     .from('schedule_seasons')
@@ -304,19 +301,14 @@ export async function importFlightBatch(
     if (t.icao_type) acByIcao.set(t.icao_type, t.id)
   })
 
-  const resolveAircraftTypeId = (iataCode: string) => {
-    // Always resolve to ICAO code first
-    const icao = IATA_TO_ICAO_AIRCRAFT[iataCode] || iataCode
-
-    // Try ICAO lookup
-    const icaoId = acByIcao.get(icao)
-    if (icaoId) return { id: icaoId, icao }
-
-    // Fallback: try IATA direct lookup but still use ICAO
-    const iataId = acByIata.get(iataCode)
-    if (iataId) return { id: iataId, icao }
-
-    return { id: null, icao }
+  const resolveAircraftTypeId = (code: string) => {
+    // Direct match against icao_type
+    const icaoId = acByIcao.get(code)
+    if (icaoId) return { id: icaoId, icao: code }
+    // Fallback to iata_type
+    const iataId = acByIata.get(code)
+    if (iataId) return { id: iataId, icao: code }
+    return { id: null, icao: code }
   }
 
   // Build INSERT values

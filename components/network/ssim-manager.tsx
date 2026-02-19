@@ -32,6 +32,7 @@ export function SsimManager({ seasons, aircraftTypes, operatorIataCode }: SsimMa
   const [parseErrors, setParseErrors] = useState<{ line: number; message: string; raw: string }[]>([])
   const [showErrors, setShowErrors] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [missingAcTypes, setMissingAcTypes] = useState<string[]>([])
   const [importResult, setImportResult] = useState<{
     newCount: number; updatedCount: number; unchangedCount: number; errorCount: number
   } | null>(null)
@@ -81,6 +82,13 @@ export function SsimManager({ seasons, aircraftTypes, operatorIataCode }: SsimMa
     }))
     setPreview(rows)
     setImportResult(null)
+
+    // Validate aircraft types against database
+    const dbIcao = new Set(aircraftTypes.map(t => t.icao_type))
+    const dbIata = new Set(aircraftTypes.map(t => t.iata_type).filter(Boolean))
+    const fileTypes = new Set(rows.map(r => r.aircraftType).filter(Boolean))
+    const missing = Array.from(fileTypes).filter(t => !dbIcao.has(t) && !dbIata.has(t))
+    setMissingAcTypes(missing)
   }
 
   // ── Import ──
@@ -106,6 +114,9 @@ export function SsimManager({ seasons, aircraftTypes, operatorIataCode }: SsimMa
       })),
     })
 
+    if (res.missingAircraftTypes?.length) {
+      setMissingAcTypes(res.missingAircraftTypes)
+    }
     setImportResult(res)
     setImporting(false)
   }
@@ -234,6 +245,27 @@ export function SsimManager({ seasons, aircraftTypes, operatorIataCode }: SsimMa
                 {filename && <span className="text-muted-foreground ml-auto">{filename}</span>}
               </div>
 
+              {/* Missing aircraft types banner */}
+              {missingAcTypes.length > 0 && (
+                <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                    <span className="text-[13px] font-medium">Missing aircraft types</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    The following aircraft types in this SSIM file do not exist in the database.
+                    Add them in <strong>Admin → Master Database → Aircraft Types</strong> before importing.
+                  </p>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {missingAcTypes.map(t => (
+                      <span key={t} className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 text-[11px] font-mono font-medium">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Error section */}
               {parseErrors.length > 0 && (
                 <div className="border border-red-500/30 rounded-lg bg-red-500/5">
@@ -319,10 +351,10 @@ export function SsimManager({ seasons, aircraftTypes, operatorIataCode }: SsimMa
 
               {/* Action buttons */}
               <div className="flex items-center gap-3">
-                <Button variant="outline" onClick={() => { setPreview(null); setRawContent(''); setFilename(null); setImportResult(null) }}>
+                <Button variant="outline" onClick={() => { setPreview(null); setRawContent(''); setFilename(null); setImportResult(null); setMissingAcTypes([]) }}>
                   Clear
                 </Button>
-                <Button onClick={handleImport} disabled={importing || !preview.some(r => r.status !== 'Error')}>
+                <Button onClick={handleImport} disabled={importing || !preview.some(r => r.status !== 'Error') || missingAcTypes.length > 0}>
                   {importing
                     ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Importing...</>
                     : <><Upload className="w-4 h-4 mr-2" />Import {(summary?.new || 0) + (summary?.updated || 0)} Records</>}

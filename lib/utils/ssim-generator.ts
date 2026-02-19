@@ -7,8 +7,6 @@
  * All column references are 0-indexed.
  */
 
-import { IATA_TO_ICAO_AIRCRAFT } from './ssim-parser'
-
 // ─── Types ─────────────────────────────────────────────────────────
 
 export interface SSIMExportOptions {
@@ -46,15 +44,8 @@ export interface SSIMFlightRecord {
 const LINE_WIDTH = 200
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
 
-// Reverse mapping: ICAO → IATA
+// Legacy export kept for compatibility — no longer needed since DB stores SSIM codes directly
 const ICAO_TO_IATA_AIRCRAFT: Record<string, string> = {}
-for (const [iata, icao] of Object.entries(IATA_TO_ICAO_AIRCRAFT)) {
-  // Only keep first mapping (some ICAO codes map to multiple IATA codes)
-  if (!ICAO_TO_IATA_AIRCRAFT[icao]) {
-    ICAO_TO_IATA_AIRCRAFT[icao] = iata
-  }
-}
-
 export { ICAO_TO_IATA_AIRCRAFT }
 
 // ─── Date Formatting ──────────────────────────────────────────────
@@ -99,9 +90,10 @@ export function formatDaysOfOperation(days: string): string {
   return active.join(', ')
 }
 
-/** Resolve ICAO aircraft type to IATA code */
-export function icaoToIataAircraftType(icao: string): string {
-  return ICAO_TO_IATA_AIRCRAFT[icao] || icao.substring(0, 3)
+/** Resolve aircraft type code to SSIM 3-char code.
+ *  Since DB now stores SSIM codes directly (320, 321, 330), this is a pass-through. */
+export function icaoToIataAircraftType(code: string): string {
+  return code.substring(0, 3)
 }
 
 // ─── Line Builders ────────────────────────────────────────────────

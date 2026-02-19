@@ -254,7 +254,7 @@ export function ToastProvider({ children }: { children?: React.ReactNode }) {
           aria-live="polite"
           style={{
             position: 'fixed',
-            top: 20,
+            top: 56,
             right: 20,
             zIndex: 99999,
             display: 'flex',

@@ -53,12 +53,17 @@ export function ShortcutCard({ code, onRemove }: ShortcutCardProps) {
           'transition-all duration-300',
           'hover:shadow-glass-lg dark:hover:shadow-none hover:scale-[1.03]',
           isDragging && 'opacity-70 rotate-[2deg] scale-105 shadow-xl',
+          color?.cardBg,
         )}
+        style={color ? { borderColor: `hsl(${color.hsl} / 0.15)` } : undefined}
         onClick={(e) => {
           if (isDragging) e.preventDefault()
         }}
       >
-        <div className={cn('p-3 rounded-xl', color ? `${color.bg} ${color.text}` : 'bg-primary/10 text-primary')}>
+        <div
+          className={cn('p-3 rounded-xl', color ? color.text : 'bg-primary/10 text-primary')}
+          style={color ? { backgroundColor: `hsl(${color.hsl} / 0.15)` } : undefined}
+        >
           <Icon className="h-6 w-6" />
         </div>
         <div className="text-center">

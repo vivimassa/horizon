@@ -21,17 +21,10 @@ export default async function Home() {
     ...(operator?.enabled_modules || []),
     ...(admin ? ['admin'] : []),
   ]
-  const userName = user.email?.split('@')[0] || 'User'
-  const userRole = operator?.user_role || 'operator'
 
   return (
     <Launchpad
-      userName={userName}
-      userRole={userRole}
-      isAdmin={admin}
       enabledModules={enabledModules}
-      currentOperatorId={operator?.id}
-      operatorLogoUrl={operator?.logo_url}
       initialShortcuts={shortcuts}
     />
   )

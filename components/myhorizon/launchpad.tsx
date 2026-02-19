@@ -19,7 +19,6 @@ import {
 import { ShortcutCard, AddShortcutCard } from './shortcut-card'
 import { AddShortcutDialog } from './add-shortcut-dialog'
 import { SearchBox } from '@/components/search/search-box'
-import { UserMenu } from '@/components/user-menu'
 import { Calendar } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { type ModuleEntry, isLeafModule, getModuleByCode } from '@/lib/modules/registry'
@@ -32,12 +31,7 @@ import {
 import { toast } from '@/components/ui/visionos-toast'
 
 interface LaunchpadProps {
-  userName: string
-  userRole: string
-  isAdmin: boolean
   enabledModules: string[]
-  currentOperatorId?: string
-  operatorLogoUrl?: string | null
   initialShortcuts: UserShortcut[]
 }
 
@@ -49,7 +43,7 @@ function formatDate(date: Date): string {
   return `${day}-${month}-${year}`
 }
 
-export function Launchpad({ userName, userRole, isAdmin, enabledModules, currentOperatorId, operatorLogoUrl, initialShortcuts }: LaunchpadProps) {
+export function Launchpad({ enabledModules, initialShortcuts }: LaunchpadProps) {
   const [shortcuts, setShortcuts] = useState<UserShortcut[]>(initialShortcuts)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [isDropTarget, setIsDropTarget] = useState(false)
@@ -215,30 +209,13 @@ export function Launchpad({ userName, userRole, isAdmin, enabledModules, current
     <div className="space-y-6">
       {/* Header */}
       <div className="animate-fade-in">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-4xl font-bold tracking-tight mb-1">
-              my<span className="text-primary">Horizon</span>
-            </h1>
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Calendar className="h-4 w-4" />
-              <span className="text-lg font-mono">{formattedDate}</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {operatorLogoUrl && (
-              <img
-                src={operatorLogoUrl}
-                alt="Operator logo"
-                className="h-10 w-auto object-contain"
-              />
-            )}
-            <UserMenu
-              userName={userName}
-              userRole={userRole}
-              isAdmin={isAdmin}
-              currentOperatorId={currentOperatorId}
-            />
+        <div>
+          <h1 className="text-4xl font-bold tracking-tight mb-1">
+            my<span className="text-primary">Horizon</span>
+          </h1>
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Calendar className="h-4 w-4" />
+            <span className="text-lg font-mono">{formattedDate}</span>
           </div>
         </div>
       </div>

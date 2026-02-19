@@ -28,6 +28,7 @@ export async function importSsimRecords(input: {
   unchangedCount: number
   errorCount: number
   errors: string[]
+  missingAircraftTypes?: string[]
 }> {
   const supabase = createAdminClient()
   const operatorId = await getCurrentOperatorId()
@@ -59,6 +60,25 @@ export async function importSsimRecords(input: {
     if (t.iata_type) acByIata.set(t.iata_type, t.id)
     acByIcao.set(t.icao_type, t.id)
   })
+
+  // Pre-validate: block import if any aircraft types are missing
+  const uniqueAcTypes = Array.from(new Set(input.records.map(r => r.aircraftType).filter(Boolean)))
+  const missingTypes: string[] = []
+  for (const t of uniqueAcTypes) {
+    if (!acByIata.get(t) && !acByIcao.get(t)) {
+      missingTypes.push(t)
+    }
+  }
+  if (missingTypes.length > 0) {
+    return {
+      newCount: 0,
+      updatedCount: 0,
+      unchangedCount: 0,
+      errorCount: input.records.length,
+      errors: [`Import blocked: aircraft type(s) not found in database: ${missingTypes.join(', ')}. Please add these types in Admin → Master Database → Aircraft Types before importing.`],
+      missingAircraftTypes: missingTypes,
+    }
+  }
 
   // Validate airport codes
   const { data: airports } = await supabase.from('airports').select('iata_code')

@@ -10,6 +10,9 @@ import {
   GitBranch, MapPin, Bell, MessageCircle, Award, BadgeCheck,
   Scale, Bot, ListChecks, UsersRound, FileQuestion, Trophy,
   Puzzle, Upload, Download, GitCompareArrows, Ruler,
+  PenLine, SendHorizonal, Link2, CalendarClock,
+  MessageSquareShare, FileInput, SlidersHorizontal, FileSpreadsheet,
+  Plug,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -26,6 +29,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   GitBranch, MapPin, Bell, MessageCircle, Award, BadgeCheck,
   Scale, Bot, ListChecks, UsersRound, FileQuestion, Trophy,
   Puzzle, Upload, Download, GitCompareArrows, Ruler,
+  PenLine, SendHorizonal, Link2, CalendarClock,
+  MessageSquareShare, FileInput, SlidersHorizontal, FileSpreadsheet,
+  Plug,
   // Aliases
   GitCompare: GitCompareArrows,
 }

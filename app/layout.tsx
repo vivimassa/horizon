@@ -11,6 +11,9 @@ import { StatusBar } from '@/components/status-bar'
 import { ToastProvider } from '@/components/ui/visionos-toast'
 import { LogoWatermark } from '@/components/logo-watermark'
 import { RoutePrefetcher } from '@/components/route-prefetcher'
+import { GlobalHeader } from '@/components/global-header'
+import { getAuthUser } from '@/lib/supabase/server'
+import { isAdmin as checkAdmin } from '@/lib/operators'
 
 const inter = Inter({
   subsets: ["latin"],
@@ -31,12 +34,16 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const operator = await getCurrentOperator()
+  const [operator, user] = await Promise.all([
+    getCurrentOperator(),
+    getAuthUser(),
+  ])
   const accessibleModules = operator ? getAccessibleModules(operator) : ['home']
 
-  const userName = operator ? (operator.name || 'User') : 'User'
+  const userName = user?.email?.split('@')[0] || operator?.name || 'User'
   const userRole = operator?.user_role || 'operator'
   const operatorName = operator?.name || 'Horizon'
+  const admin = checkAdmin(operator)
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -49,6 +56,13 @@ export default async function RootLayout({
             <div className="fixed inset-0 app-bg -z-10" />
 
             <LogoWatermark />
+            <GlobalHeader
+              userName={userName}
+              userRole={userRole}
+              isAdmin={admin}
+              currentOperatorId={operator?.id}
+              operatorLogoUrl={operator?.logo_url}
+            />
 
             <MainContent>
               {children}
