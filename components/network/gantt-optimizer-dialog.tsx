@@ -183,7 +183,7 @@ export function GanttOptimizerDialog({
         className="glass border shadow-lg p-0 gap-0"
         hideClose
         style={{
-          width: 480,
+          width: 560,
           maxWidth: '95vw',
           borderRadius: 16,
           overflow: 'hidden',
