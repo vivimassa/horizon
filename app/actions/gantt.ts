@@ -445,6 +445,65 @@ export async function getFlightTailAssignments(
   }))
 }
 
+// ─── Swap flight assignments between two registrations ────────
+
+export async function swapFlightAssignments(
+  sideA: FlightDateItem[],
+  regA: string,
+  sideB: FlightDateItem[],
+  regB: string,
+): Promise<{ error?: string }> {
+  if (sideA.length === 0 && sideB.length === 0) return {}
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    // Side A flights → regB
+    if (sideA.length > 0) {
+      const valuesA: string[] = []
+      const paramsA: unknown[] = [regB]
+      for (let i = 0; i < sideA.length; i++) {
+        const pi = i * 2 + 2
+        valuesA.push(`($${pi}::uuid, $${pi + 1}::date, $1)`)
+        paramsA.push(sideA[i].flightId, sideA[i].flightDate)
+      }
+      await client.query(
+        `INSERT INTO flight_tail_assignments (scheduled_flight_id, flight_date, aircraft_reg)
+         VALUES ${valuesA.join(', ')}
+         ON CONFLICT (scheduled_flight_id, flight_date)
+         DO UPDATE SET aircraft_reg = EXCLUDED.aircraft_reg`,
+        paramsA
+      )
+    }
+
+    // Side B flights → regA
+    if (sideB.length > 0) {
+      const valuesB: string[] = []
+      const paramsB: unknown[] = [regA]
+      for (let i = 0; i < sideB.length; i++) {
+        const pi = i * 2 + 2
+        valuesB.push(`($${pi}::uuid, $${pi + 1}::date, $1)`)
+        paramsB.push(sideB[i].flightId, sideB[i].flightDate)
+      }
+      await client.query(
+        `INSERT INTO flight_tail_assignments (scheduled_flight_id, flight_date, aircraft_reg)
+         VALUES ${valuesB.join(', ')}
+         ON CONFLICT (scheduled_flight_id, flight_date)
+         DO UPDATE SET aircraft_reg = EXCLUDED.aircraft_reg`,
+        paramsB
+      )
+    }
+
+    await client.query('COMMIT')
+    return {}
+  } catch (err) {
+    await client.query('ROLLBACK')
+    return { error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    client.release()
+  }
+}
+
 // ─── Batch route fetch for clipboard ─────────────────────────
 
 /**

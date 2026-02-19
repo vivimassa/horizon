@@ -26,10 +26,11 @@ import {
   Minimize2,
   Pin,
   Info,
+  ArrowLeftRight,
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
 import { AircraftType, AircraftSeatingConfig, CabinEntry, Airport, FlightServiceType } from '@/types/database'
-import { getGanttFlights, GanttFlight, getRouteWithLegs, excludeFlightDates, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, type GanttRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/gantt'
+import { getGanttFlights, GanttFlight, getRouteWithLegs, excludeFlightDates, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, swapFlightAssignments, type GanttRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/gantt'
 import { toast } from '@/components/ui/visionos-toast'
 import { friendlyError } from '@/lib/utils/error-handler'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -44,6 +45,7 @@ import { useGanttClipboard } from '@/lib/hooks/use-gantt-clipboard'
 import { useGanttDrag, type RowLayoutItem, type PendingDrop } from '@/lib/hooks/use-gantt-drag'
 import { GanttClipboardPill } from './gantt-clipboard-pill'
 import { GanttWorkspaceIndicator } from './gantt-workspace-indicator'
+import { SwapFlightsDialog, type SwapExpandedFlight } from '@/components/shared/swap-flights-dialog'
 
 // ─── Types & Constants ───────────────────────────────────────────────────
 
@@ -282,6 +284,10 @@ function stripFlightPrefix(fn: string): string {
   return match ? match[0] : fn
 }
 
+function fmtTat(minutes: number): string {
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`
+}
+
 function isRouteDomestic(routeType: string | null): boolean {
   if (!routeType) return true
   return routeType.toLowerCase() === 'domestic'
@@ -487,6 +493,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   // Unassign confirmation modal state
   const [unassignModalOpen, setUnassignModalOpen] = useState(false)
 
+  // Swap mode state
+  const [swapMode, setSwapMode] = useState(false)
+  const [swapSource, setSwapSource] = useState<ExpandedFlight[]>([])
+  const [swapDialogOpen, setSwapDialogOpen] = useState(false)
+  const [swapSideA, setSwapSideA] = useState<ExpandedFlight[]>([])
+  const [swapSideB, setSwapSideB] = useState<ExpandedFlight[]>([])
+  const [swapRegA, setSwapRegA] = useState('')
+  const [swapRegB, setSwapRegB] = useState('')
+
   // Row height zoom
   const [rowHeightLevel, setRowHeightLevel] = useState(2) // large (fits ~10 tails)
   const rowConfig = ROW_HEIGHT_LEVELS[rowHeightLevel]
@@ -620,13 +635,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   useEffect(() => {
     if (!isFullscreen || document.fullscreenElement) return // only for CSS fallback
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !deleteModalOpen && !miniBuilderOpen && !assignModalOpen && !unassignModalOpen && !contextMenu && selectedFlights.size === 0) {
+      if (e.key === 'Escape' && !deleteModalOpen && !miniBuilderOpen && !assignModalOpen && !unassignModalOpen && !swapDialogOpen && !contextMenu && selectedFlights.size === 0) {
         setIsFullscreen(false)
       }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [isFullscreen, deleteModalOpen, miniBuilderOpen, assignModalOpen, unassignModalOpen, contextMenu, selectedFlights.size])
+  }, [isFullscreen, deleteModalOpen, miniBuilderOpen, assignModalOpen, unassignModalOpen, swapDialogOpen, contextMenu, selectedFlights.size])
 
   // ─── Panel visibility logic ───────────────────────────────────────
   useEffect(() => {
@@ -707,6 +722,14 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     setAircraftHighlightReg(null)
   }, [])
 
+  // ─── Swap mode helpers (defined early for keyboard handler) ──────
+  const exitSwapMode = useCallback(() => {
+    setSwapMode(false)
+    setSwapSource([])
+  }, [])
+
+  const enterSwapModeRef = useRef(() => {})
+
   // ─── Keyboard handlers (Escape + Delete + Ctrl+F + Ctrl+G) ───────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -747,6 +770,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         if (aircraftSearchOpen) { closeAircraftSearch(); return }
         if (flightSearchOpen) { closeFlightSearch(); return }
         if (contextMenu) { setContextMenu(null); return }
+        if (swapMode) { exitSwapMode(); return }
         if (panelMode === 'day-stats') { setSelectedDays(new Set()); setPanelMode('flight'); return }
         if (panelMode === 'aircraft') { setPanelAircraftReg(null); setPanelMode('flight'); setSelectedAircraftRow(null); return }
         if (panelMode === 'rotation') { setRotationTarget(null); setPanelMode('flight'); setSelectedAircraftRow(null); return }
@@ -754,13 +778,23 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         if (selectedFlights.size > 0) { setSelectedFlights(new Set()); return }
         // Fullscreen CSS fallback exit handled by its own effect
       }
+      // S key — enter swap mode when flights are selected
+      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const active = document.activeElement
+        const isInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+        if (!isInput && selectedFlights.size > 0 && !deleteModalOpen && !miniBuilderOpen && !assignModalOpen && !swapDialogOpen && !swapMode) {
+          e.preventDefault()
+          enterSwapModeRef.current()
+          return
+        }
+      }
       if (e.key === 'Delete' && selectedFlights.size > 0 && !deleteModalOpen && !miniBuilderOpen && !assignModalOpen) {
         setDeleteModalOpen(true)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedFlights.size, deleteModalOpen, miniBuilderOpen, assignModalOpen, contextMenu, panelMode, flightSearchOpen, closeFlightSearch, aircraftSearchOpen, closeAircraftSearch, selectedAircraftRow])
+  }, [selectedFlights.size, deleteModalOpen, miniBuilderOpen, assignModalOpen, contextMenu, panelMode, flightSearchOpen, closeFlightSearch, aircraftSearchOpen, closeAircraftSearch, selectedAircraftRow, swapMode, swapDialogOpen, exitSwapMode])
 
   // ─── Scroll Sync ───────────────────────────────────────────────────
   // Use transform on inner content for header/histogram sync (more reliable than scrollLeft)
@@ -1397,7 +1431,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
   const {
     workspaceOverrides, dragState, targetRow, pendingDrop,
-    onBarMouseDown, onBodyMouseMove, onBodyMouseUp,
+    onBarMouseDown, onBodyMouseMove, onBodyMouseUp, cancelDrag,
     resetWorkspace, addWorkspaceOverrides, removeWorkspaceOverrides,
     isDragged, isGhostPlaceholder,
     getDragDeltaY, getWorkspaceReg, confirmDrop, cancelDrop,
@@ -1407,7 +1441,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     icaoToCategory,
     getFlightIcao,
     getRouteCycleMates,
-    anyModalOpen: deleteModalOpen || miniBuilderOpen || assignModalOpen || unassignModalOpen,
+    anyModalOpen: deleteModalOpen || miniBuilderOpen || assignModalOpen || unassignModalOpen || swapDialogOpen,
     clipboardActive: false, // clipboard hook runs after drag — anyModalOpen covers paste dialogs
   })
 
@@ -1419,7 +1453,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   } = useGanttClipboard({
     selectedFlights,
     clearSelection: () => setSelectedFlights(new Set()),
-    anyModalOpen: deleteModalOpen || miniBuilderOpen || assignModalOpen || unassignModalOpen || !!pendingDrop,
+    anyModalOpen: deleteModalOpen || miniBuilderOpen || assignModalOpen || unassignModalOpen || swapDialogOpen || !!pendingDrop,
     onAssign: () => setAssignModalOpen(true),
     onPaste: (expandedIds, targetReg) => addWorkspaceOverrides(expandedIds.map(id => [id, targetReg])),
   })
@@ -1748,7 +1782,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           conflicts.push({ type: 'station_mismatch', flightA: curr, flightB: next, detail: `${curr.arrStation} ≠ ${next.depStation}: ${stripFlightPrefix(curr.flightNumber)} arrives ${curr.arrStation} but ${stripFlightPrefix(next.flightNumber)} departs ${next.depStation}` })
         }
         if (curr.tatToNext && !curr.tatToNext.ok) {
-          conflicts.push({ type: 'insufficient_tat', flightA: curr, flightB: next, detail: `${curr.tatToNext.gapMinutes}min gap < ${curr.tatToNext.minTat}min minimum between ${stripFlightPrefix(curr.flightNumber)} and ${stripFlightPrefix(next.flightNumber)}` })
+          conflicts.push({ type: 'insufficient_tat', flightA: curr, flightB: next, detail: `${fmtTat(curr.tatToNext.gapMinutes)} gap < ${fmtTat(curr.tatToNext.minTat)} minimum between ${stripFlightPrefix(curr.flightNumber)} and ${stripFlightPrefix(next.flightNumber)}` })
         }
       }
     }
@@ -2046,6 +2080,65 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     window.addEventListener('click', handleClick)
     return () => window.removeEventListener('click', handleClick)
   }, [contextMenu])
+
+  // ─── Swap confirm handler ─────────────────────────────────────
+  const handleSwapConfirm = useCallback(async (sideAItems: FlightDateItem[], sideBItems: FlightDateItem[], rA: string, rB: string) => {
+    const res = await swapFlightAssignments(sideAItems, rA, sideBItems, rB)
+    if (res.error) { toast.error(friendlyError(res.error)); return }
+    const total = sideAItems.length + sideBItems.length
+    toast.success(`Swapped ${total} flight${total > 1 ? 's' : ''} between ${rA} and ${rB}`)
+    applyOptimisticAssign(sideAItems, rB)
+    applyOptimisticAssign(sideBItems, rA)
+    removeWorkspaceOverrides([...sideAItems, ...sideBItems].map(i => `${i.flightId}_${i.flightDate}`))
+    setSwapDialogOpen(false)
+    setSwapMode(false)
+    setSwapSource([])
+    setSelectedFlights(new Set())
+    setTimeout(() => refreshFlights(), 500)
+  }, [applyOptimisticAssign, removeWorkspaceOverrides, refreshFlights])
+
+  // ─── Enter swap mode from context menu ──────────────────────
+  const enterSwapMode = useCallback(() => {
+    if (selectedFlightObjects.length === 0) return
+    setSwapSource([...selectedFlightObjects])
+    setSwapMode(true)
+    setSelectedFlights(new Set())
+    setContextMenu(null)
+  }, [selectedFlightObjects])
+
+  // Keep ref in sync for keyboard handler
+  enterSwapModeRef.current = enterSwapMode
+
+  // Swap mode: when selection changes, check if selected flights are on a different reg
+  useEffect(() => {
+    if (!swapMode || selectedFlights.size === 0 || swapSource.length === 0) return
+    const selectedObjs = assignedFlights.filter(f => selectedFlights.has(f.id))
+    if (selectedObjs.length === 0) return
+
+    const sourceRegs = new Set(swapSource.map(f => f.aircraftReg || f.assignedReg).filter(Boolean))
+    const targetRegs = new Set(selectedObjs.map(f => f.aircraftReg || f.assignedReg).filter(Boolean))
+
+    // Check if any target flight is on the same reg as source
+    const sameReg = Array.from(targetRegs).some(r => sourceRegs.has(r))
+    if (sameReg && targetRegs.size === 1 && sourceRegs.size === 1 && Array.from(targetRegs)[0] === Array.from(sourceRegs)[0]) {
+      toast.info('Select flights on a different aircraft row', { duration: 2000 })
+      return
+    }
+
+    // Different reg — open swap dialog
+    const sourceReg = Array.from(sourceRegs)[0] || ''
+    const targetReg = Array.from(targetRegs).find(r => !sourceRegs.has(r)) || ''
+    if (sourceReg && targetReg) {
+      setSwapSideA(swapSource)
+      setSwapSideB(selectedObjs)
+      setSwapRegA(sourceReg)
+      setSwapRegB(targetReg)
+      setSwapDialogOpen(true)
+      setSwapMode(false)
+      setSwapSource([])
+      setSelectedFlights(new Set())
+    }
+  }, [swapMode, selectedFlights, swapSource, assignedFlights])
 
   // ─── Get cabin config string for a registration ───────────────────
   function getCabinString(reg: AircraftWithRelations): string {
@@ -2664,7 +2757,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       </button>
       <button
         onClick={() => {
-          if (!periodFrom || !periodTo) return
+          if (!periodFrom && !periodTo) { toast.warning('Please select a date range first'); return }
+          if (!periodFrom) { toast.warning('Please select a From date'); return }
+          if (!periodTo) { toast.warning('Please select a To date'); return }
           let from = periodFrom, to = periodTo
           if (to < from) { from = periodTo; to = periodFrom; setPeriodFrom(from); setPeriodTo(to) }
           const totalDays = diffDays(parseDate(from), parseDate(to)) + 1
@@ -2677,9 +2772,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         className="font-semibold text-white transition-all duration-200"
         style={{
           height: s(26), padding: `0 ${s(14)}px`, fontSize: s(10), borderRadius: s(6),
-          background: (!periodFrom || !periodTo) ? 'var(--muted)' : '#991B1B',
-          opacity: (!periodFrom || !periodTo) ? 0.4 : 1,
-          cursor: (!periodFrom || !periodTo) ? 'default' : 'pointer',
+          background: '#991B1B',
+          cursor: 'pointer',
           animation: periodDirty ? 'pulse 2s infinite' : 'none',
         }}
       >
@@ -3006,12 +3100,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 const isPasteTarget = clipboard?.targetReg === row.reg.registration
                 const isLpDragTarget = dragState && targetRow?.registration === row.reg.registration
                 const lpDragValidity = isLpDragTarget ? targetRow!.validity : null
+                const isLpSwapDrag = dragState?.dragMode === 'swap'
                 const lpDragStyle: React.CSSProperties = isLpDragTarget ? {
-                  borderLeft: lpDragValidity === 'valid' ? '3px solid #3b82f6'
+                  borderLeft: isLpSwapDrag ? '3px solid #f59e0b'
+                    : lpDragValidity === 'valid' ? '3px solid #3b82f6'
                     : lpDragValidity === 'same-family' ? '3px solid #f59e0b'
                     : lpDragValidity === 'invalid' ? '3px solid #ef4444'
                     : undefined,
-                  background: lpDragValidity === 'valid' ? 'rgba(59, 130, 246, 0.03)'
+                  background: isLpSwapDrag ? (isDark ? 'rgba(245, 158, 11, 0.06)' : 'rgba(245, 158, 11, 0.08)')
+                    : lpDragValidity === 'valid' ? 'rgba(59, 130, 246, 0.03)'
                     : lpDragValidity === 'same-family' ? 'rgba(245, 158, 11, 0.03)'
                     : lpDragValidity === 'invalid' ? 'rgba(239, 68, 68, 0.03)'
                     : undefined,
@@ -3425,6 +3522,22 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             <div className="h-[6px] shrink-0 border-b" />
           )}
 
+          {/* Swap mode banners */}
+          {dragState?.dragMode === 'swap' && (
+            <div className="flex items-center gap-1.5 px-3 shrink-0 border-b border-amber-500/20" style={{ height: 24, background: 'rgba(245,158,11,0.08)', fontSize: 10 }}>
+              <ArrowLeftRight className="h-3 w-3 text-amber-600" />
+              <span className="text-amber-700 dark:text-amber-400 font-medium">Swap mode — drop on target row</span>
+            </div>
+          )}
+          {swapMode && !dragState && (
+            <div className="flex items-center gap-1.5 px-3 shrink-0 border-b border-amber-500/20" style={{ height: 24, background: 'rgba(245,158,11,0.08)', fontSize: 10 }}>
+              <ArrowLeftRight className="h-3 w-3 text-amber-600" />
+              <span className="text-amber-700 dark:text-amber-400 font-medium">
+                Select flights to swap with &middot; {swapSource.length} flight{swapSource.length !== 1 ? 's' : ''} on {swapSource[0]?.aircraftReg || swapSource[0]?.assignedReg || '?'} &middot; Press Escape to cancel
+              </span>
+            </div>
+          )}
+
           {/* Gantt Body */}
           <div
             ref={bodyRef}
@@ -3476,7 +3589,39 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
               setRubberBand(prev => prev ? { ...prev, currentX: x, currentY: y } : null)
             }}
             onMouseUp={() => {
-              if (dragState) { onBodyMouseUp(); return }
+              if (dragState) {
+                // Swap mode: intercept before normal drop
+                if (dragState.dragMode === 'swap' && targetRow?.registration && targetRow.registration !== dragState.sourceReg && targetRow.validity !== 'group') {
+                  document.body.style.cursor = ''
+                  const sourceReg = dragState.sourceReg
+                  const tgtReg = targetRow.registration
+                  const sourceFOs = assignedFlights.filter(f => dragState.draggedIds.has(f.id))
+                  // Find overlapping flights on target row
+                  const tgtRowFlights = wsFlightsByReg.get(tgtReg) || []
+                  const overlaps = tgtRowFlights.filter(tf =>
+                    sourceFOs.some(sf =>
+                      sf.date.getTime() === tf.date.getTime() &&
+                      sf.stdMinutes < tf.staMinutes &&
+                      tf.stdMinutes < sf.staMinutes
+                    )
+                  )
+                  if (overlaps.length > 0) {
+                    setSwapSideA(sourceFOs)
+                    setSwapSideB(overlaps)
+                    setSwapRegA(sourceReg)
+                    setSwapRegB(tgtReg)
+                    setSwapDialogOpen(true)
+                    cancelDrag()
+                    return
+                  } else {
+                    toast.info('No overlapping flights on target row — use normal drag to move', { duration: 3000 })
+                    cancelDrag()
+                    return
+                  }
+                }
+                onBodyMouseUp()
+                return
+              }
               if (!rubberBand) return
               // Check if the user actually dragged (not just a click)
               const dx = Math.abs(rubberBand.currentX - rubberBand.startX)
@@ -3691,10 +3836,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                               <div
                                 key={`tat-${ef.id}`}
                                 className="absolute flex items-center justify-center pointer-events-none select-none"
-                                style={{ left: gapX, width: gapW, top: 0, height: ROW_HEIGHT }}
+                                style={{ left: gapX, width: gapW, top: BAR_TOP, height: BAR_HEIGHT }}
                               >
-                                <span className="font-semibold" style={{ fontSize: '7.5px', color: showWarning ? '#ef4444' : undefined }}>
-                                  <span className={showWarning ? '' : 'text-muted-foreground'}>{tat.gapMinutes}m</span>
+                                <span className="font-semibold" style={{ fontSize: BAR_FONT * 0.8, color: showWarning ? '#ef4444' : undefined }}>
+                                  <span className={showWarning ? '' : 'text-muted-foreground'}>{fmtTat(tat.gapMinutes)}</span>
                                 </span>
                               </div>
                             )
@@ -3711,7 +3856,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       const FLANK_GAP = 4
                       const MIN_SPACE = FLANK_TEXT_W + FLANK_GAP + 4
                       const flankStyle: React.CSSProperties = {
-                        fontSize: 7,
+                        fontSize: BAR_FONT * 0.75,
                         fontWeight: 400,
                         color: isDark ? 'rgba(156,163,175,0.5)' : 'rgba(107,114,128,0.5)',
                         whiteSpace: 'nowrap',
@@ -3726,8 +3871,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                         flankSTD = (
                           <div
                             key={`std-${ef.id}`}
-                            className="absolute flex items-center justify-end"
-                            style={{ right: totalWidth - x + FLANK_GAP, top: BAR_TOP, height: BAR_HEIGHT, ...flankStyle }}
+                            className="absolute flex items-start justify-end"
+                            style={{ right: totalWidth - x + FLANK_GAP, top: BAR_TOP, ...flankStyle }}
                           >
                             {ef.stdLocal}
                           </div>
@@ -3740,7 +3885,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                         flankSTA = (
                           <div
                             key={`sta-${ef.id}`}
-                            className="absolute flex items-center"
+                            className="absolute flex items-end"
                             style={{ left: x + w + FLANK_GAP, top: BAR_TOP, height: BAR_HEIGHT, ...flankStyle }}
                           >
                             {ef.staLocal}
@@ -3947,12 +4092,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                   // Drag target highlight
                   const isRowDragTarget = dragState && targetRow?.registration === reg.registration
                   const dragValidity = isRowDragTarget ? targetRow!.validity : null
+                  const isSwapDrag = dragState?.dragMode === 'swap'
                   const dragRowStyle: React.CSSProperties = isRowDragTarget ? {
-                    borderLeft: dragValidity === 'valid' ? '3px solid #3b82f6'
+                    borderLeft: isSwapDrag ? '3px solid #f59e0b'
+                      : dragValidity === 'valid' ? '3px solid #3b82f6'
                       : dragValidity === 'same-family' ? '3px solid #f59e0b'
                       : dragValidity === 'invalid' ? '3px solid #ef4444'
                       : undefined,
-                    background: dragValidity === 'valid' ? 'rgba(59, 130, 246, 0.03)'
+                    background: isSwapDrag ? (isDark ? 'rgba(245, 158, 11, 0.06)' : 'rgba(245, 158, 11, 0.08)')
+                      : dragValidity === 'valid' ? 'rgba(59, 130, 246, 0.03)'
                       : dragValidity === 'same-family' ? 'rgba(245, 158, 11, 0.03)'
                       : dragValidity === 'invalid' ? 'rgba(239, 68, 68, 0.03)'
                       : undefined,
@@ -4666,7 +4814,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                 <span style={{ fontSize: 10, color: statusColor }}>
                                   {link.stationMismatch
                                     ? `⚠ ${link.from.arrStation} ≠ ${link.to.depStation}  Station mismatch`
-                                    : `${link.gapMinutes}m ground · min ${link.minTat}m  ${statusIcon}`
+                                    : `${fmtTat(link.gapMinutes)} ground · min ${fmtTat(link.minTat)}  ${statusIcon}`
                                   }
                                 </span>
                               </div>
@@ -5104,13 +5252,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                                   return (
                                     <div className="mx-2 my-0.5 px-2 py-1 rounded text-[9px] bg-red-500/10 text-red-700 dark:text-red-400">
                                       <AlertTriangle className="h-2.5 w-2.5 inline mr-1" />
-                                      TAT {rf.tatToNext!.gapMinutes}min &lt; min {rf.tatToNext!.minTat}min
+                                      TAT {fmtTat(rf.tatToNext!.gapMinutes)} &lt; min {fmtTat(rf.tatToNext!.minTat)}
                                     </div>
                                   )
                                 }
                                 return (
                                   <div className="mx-2 my-0.5 text-[8px] text-muted-foreground/60 text-center">
-                                    TAT: {rf.tatToNext!.gapMinutes}min
+                                    TAT: {fmtTat(rf.tatToNext!.gapMinutes)}
                                   </div>
                                 )
                               })()}
@@ -5408,6 +5556,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             setContextMenu(null)
             setUnassignModalOpen(true)
           }}
+          hasRegistration={!!contextMenu.rowReg}
+          onSwap={() => { enterSwapMode() }}
           onEdit={() => {
             setContextMenu(null)
             const ef = selectedFlightObjects[0]
@@ -5417,6 +5567,25 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             setContextMenu(null)
             setDeleteModalOpen(true)
           }}
+        />
+      )}
+
+      {/* ── SWAP FLIGHTS DIALOG ─────────────────────────────────── */}
+      {swapDialogOpen && swapSideA.length > 0 && swapSideB.length > 0 && (
+        <SwapFlightsDialog
+          open={swapDialogOpen}
+          onClose={() => { setSwapDialogOpen(false); setSwapMode(false); setSwapSource([]) }}
+          sideA={swapSideA as SwapExpandedFlight[]}
+          regA={swapRegA}
+          acTypeA={swapSideA[0]?.aircraftTypeIcao || 'UNKN'}
+          sideB={swapSideB as SwapExpandedFlight[]}
+          regB={swapRegB}
+          acTypeB={swapSideB[0]?.aircraftTypeIcao || 'UNKN'}
+          rowAFlights={(wsFlightsByReg.get(swapRegA) || []) as SwapExpandedFlight[]}
+          rowBFlights={(wsFlightsByReg.get(swapRegB) || []) as SwapExpandedFlight[]}
+          tatMinutes={new Map()}
+          onConfirm={handleSwapConfirm}
+          container={dialogContainer}
         />
       )}
 
@@ -5850,7 +6019,7 @@ function FlightTooltip({
               style={{ color: tat.ok ? '#16a34a' : '#ef4444' }}
             />
             <span style={{ color: tat.ok ? '#16a34a' : '#ef4444', fontSize: '10px' }}>
-              TAT to next: {tat.gapMinutes}min (min:{tat.minTat})
+              TAT to next: {fmtTat(tat.gapMinutes)} (min:{fmtTat(tat.minTat)})
             </span>
           </div>
         )}
@@ -5864,11 +6033,11 @@ function FlightTooltip({
 function GanttContextMenu({
   x, y, selectionCount, hasDbAssigned, clipboardCount,
   onPaste, onCut,
-  onAssign, onUnassign, onEdit, onDelete,
+  onAssign, onUnassign, hasRegistration, onSwap, onEdit, onDelete,
 }: {
   x: number; y: number; selectionCount: number; hasDbAssigned: boolean; clipboardCount: number
   onPaste?: () => void; onCut: () => void
-  onAssign: () => void; onUnassign: () => void; onEdit: () => void; onDelete: () => void
+  onAssign: () => void; onUnassign: () => void; hasRegistration: boolean; onSwap: () => void; onEdit: () => void; onDelete: () => void
 }) {
   const isSingle = selectionCount === 1
 
@@ -5879,6 +6048,7 @@ function GanttContextMenu({
     { label: '', onClick: () => {}, show: true, separator: true },
     { label: 'Assign Aircraft Registration', shortcut: 'Ctrl+A', onClick: onAssign, show: true },
     { label: 'Unassign Tail', onClick: onUnassign, show: hasDbAssigned },
+    { label: '\u21C4 Swap with\u2026', shortcut: 'S', onClick: onSwap, show: hasRegistration },
     { label: '', onClick: () => {}, show: true, separator: true },
     { label: 'Edit Flight', onClick: onEdit, show: isSingle },
     { label: '', onClick: () => {}, show: true, separator: true },

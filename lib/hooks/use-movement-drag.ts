@@ -18,6 +18,8 @@ export interface DragState {
   isDragging: boolean
   /** Mouse Y in body-local coords */
   currentY: number
+  /** 'move' = normal drag, 'swap' = Shift+drag for swap */
+  dragMode: 'move' | 'swap'
 }
 
 export type DropValidity = 'valid' | 'same-family' | 'invalid' | 'same-row' | 'group'
@@ -121,6 +123,7 @@ export function useMovementDrag({
   const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingDragRef = useRef<{ expandedId: string; sourceReg: string } | null>(null)
   const dragStartedRef = useRef(false)
+  const shiftKeyRef = useRef(false)
 
   // Clean up timer on unmount
   useEffect(() => {
@@ -138,6 +141,7 @@ export function useMovementDrag({
     // Store pending drag info
     pendingDragRef.current = { expandedId, sourceReg }
     dragStartedRef.current = false
+    shiftKeyRef.current = e.shiftKey
 
     // Set timer — if held 200ms, enter drag mode
     dragTimerRef.current = setTimeout(() => {
@@ -163,12 +167,15 @@ export function useMovementDrag({
       })
       draggedIds = expanded
 
+      const mode = shiftKeyRef.current ? 'swap' : 'move'
+
       setDragState({
         primaryFlightId: eid,
         draggedIds,
         sourceReg: sReg,
         isDragging: true,
         currentY: 0,
+        dragMode: mode,
       })
 
       // Set cursor on body
