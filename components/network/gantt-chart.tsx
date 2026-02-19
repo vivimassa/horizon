@@ -3288,6 +3288,39 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         <Calendar style={{ width: s(14), height: s(14) }} />
       </button>
       <button
+        onClick={() => {
+          const now = new Date()
+          const y = now.getFullYear(), m = now.getMonth()
+          const from = `${y}-${String(m + 1).padStart(2, '0')}-01`
+          const last = new Date(y, m + 1, 0).getDate()
+          const to = `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`
+          setPeriodFrom(from); setPeriodTo(to)
+          if (periodCommitted) setPeriodCommitted(false)
+        }}
+        className="text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+        style={{ height: s(26), padding: `0 ${s(8)}px`, fontSize: s(9), borderRadius: s(6), border: '1px solid var(--border)' }}
+        title="Set to current month"
+      >
+        This Month
+      </button>
+      <button
+        onClick={() => {
+          const now = new Date()
+          const y = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear()
+          const m = (now.getMonth() + 1) % 12
+          const from = `${y}-${String(m + 1).padStart(2, '0')}-01`
+          const last = new Date(y, m + 1, 0).getDate()
+          const to = `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`
+          setPeriodFrom(from); setPeriodTo(to)
+          if (periodCommitted) setPeriodCommitted(false)
+        }}
+        className="text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+        style={{ height: s(26), padding: `0 ${s(8)}px`, fontSize: s(9), borderRadius: s(6), border: '1px solid var(--border)' }}
+        title="Set to next month"
+      >
+        Next Month
+      </button>
+      <button
         onClick={handleGo}
         disabled={loadingPhase !== 'idle' && loadingPhase !== 'done'}
         className="font-semibold text-white transition-all duration-200"
