@@ -223,7 +223,7 @@ export function GanttOptimizerDialog({
             {/* Cost comparison */}
             <div className="flex items-center gap-4 mb-4">
               <div className="text-center">
-                <div className="text-muted-foreground" style={{ fontSize: 9 }}>Greedy cost</div>
+                <div className="text-muted-foreground" style={{ fontSize: 9 }}>Greed Index</div>
                 <div className="font-mono font-medium" style={{ fontSize: 14 }}>
                   {aiProgress.initialCost.toLocaleString()}
                 </div>
@@ -251,7 +251,7 @@ export function GanttOptimizerDialog({
               className="mt-4 text-muted-foreground hover:text-foreground transition-colors"
               style={{ fontSize: 11, padding: '6px 14px', borderRadius: 6 }}
             >
-              Stop Early &amp; Use Best
+              Cancel and Use Good Solution
             </button>
           </div>
         )}
