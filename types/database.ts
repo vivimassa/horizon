@@ -605,6 +605,8 @@ export interface Database {
           cabin_rest_facility_class_override: string | null
           cockpit_rest_positions_override: number | null
           cabin_rest_positions_override: number | null
+          variant: string | null
+          performance_factor: number | null
         }
         Insert: {
           id?: string
@@ -639,6 +641,8 @@ export interface Database {
           cabin_rest_facility_class_override?: string | null
           cockpit_rest_positions_override?: number | null
           cabin_rest_positions_override?: number | null
+          variant?: string | null
+          performance_factor?: number | null
         }
         Update: {
           id?: string
@@ -673,6 +677,50 @@ export interface Database {
           cabin_rest_facility_class_override?: string | null
           cockpit_rest_positions_override?: number | null
           cabin_rest_positions_override?: number | null
+          variant?: string | null
+          performance_factor?: number | null
+        }
+      }
+      aircraft_performance_factors: {
+        Row: {
+          id: string
+          operator_id: string
+          aircraft_id: string
+          period_name: string
+          effective_from: string
+          effective_to: string | null
+          performance_factor: number
+          variant: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+          created_by: string | null
+        }
+        Insert: {
+          id?: string
+          operator_id: string
+          aircraft_id: string
+          period_name: string
+          effective_from: string
+          effective_to?: string | null
+          performance_factor?: number
+          variant?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+          created_by?: string | null
+        }
+        Update: {
+          id?: string
+          operator_id?: string
+          aircraft_id?: string
+          period_name?: string
+          effective_from?: string
+          effective_to?: string | null
+          performance_factor?: number
+          variant?: string | null
+          notes?: string | null
+          updated_at?: string
         }
       }
       aircraft_seating_configs: {
@@ -1544,6 +1592,7 @@ export type ScheduleSeason = Database['public']['Tables']['schedule_seasons']['R
 export type ServiceType = Database['public']['Tables']['service_types']['Row']
 export type CabinConfiguration = Database['public']['Tables']['cabin_configurations']['Row']
 export type Aircraft = Database['public']['Tables']['aircraft']['Row']
+export type AircraftPerformanceFactor = Database['public']['Tables']['aircraft_performance_factors']['Row']
 export type AircraftSeatingConfig = Database['public']['Tables']['aircraft_seating_configs']['Row']
 export type AirportTatRule = Database['public']['Tables']['airport_tat_rules']['Row']
 export type AirportRunway = Database['public']['Tables']['airport_runways']['Row']

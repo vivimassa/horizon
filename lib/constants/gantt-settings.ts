@@ -104,9 +104,11 @@ export const DEFAULT_GANTT_SETTINGS: GanttSettingsData = {
     avgRevenuePerSeat: 65,
     avgLoadFactor: 0.88,
     opsCostPerBlockHour: {
-      '320': 2800,
-      '321': 3200,
-      '330': 5500,
+      'A320': 2800,
+      'A321': 3200,
+      'A20N': 2800,
+      'A21N': 3200,
+      'A333': 5500,
     },
   },
 

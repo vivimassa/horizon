@@ -17,6 +17,9 @@ export interface AircraftWithRelations extends Aircraft {
     category: string
     mtow_kg: number | null
     max_range_nm: number | null
+    fuel_burn_rate_kg_per_hour: number | null
+    pax_capacity: number | null
+    family: string | null
     cockpit_rest_facility_class: string | null
     cabin_rest_facility_class: string | null
     cockpit_rest_positions: number | null
@@ -35,7 +38,7 @@ const ALLOWED_FIELDS = [
   'current_location_id', 'current_location_updated_at',
   'flight_hours_total', 'cycles_total',
   'next_maintenance_due', 'last_maintenance_date', 'last_maintenance_description',
-  'aircraft_version',
+  'aircraft_version', 'variant', 'performance_factor',
   'mtow_kg_override', 'max_range_nm_override',
   'cockpit_rest_facility_class_override', 'cabin_rest_facility_class_override',
   'cockpit_rest_positions_override', 'cabin_rest_positions_override',
@@ -51,7 +54,7 @@ export async function getAircraftRegistrations(): Promise<AircraftWithRelations[
       *,
       aircraft_types!aircraft_type_id (
         id, icao_type, name, image_url, category,
-        mtow_kg, max_range_nm,
+        mtow_kg, max_range_nm, fuel_burn_rate_kg_per_hour, pax_capacity, family,
         cockpit_rest_facility_class, cabin_rest_facility_class,
         cockpit_rest_positions, cabin_rest_positions
       ),

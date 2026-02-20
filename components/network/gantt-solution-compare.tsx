@@ -16,11 +16,17 @@ export interface SolutionMetrics {
     total: number
     blockHours: number
     avgUtil: number
+    avgDailyUsed: number
   }[]
   totalUsed: number
   totalAC: number
   spareAC: number
   bufferPct: number
+  peakDailyAC: number
+  avgDailyAC: number
+  avgDailySpare: number
+  avgUtilPerAC: number
+  numDays: number
   downgrades: number
   upgrades: number
   seatsLost: number
@@ -53,6 +59,7 @@ interface Props {
   activeSlotId: number | null
   onSelectSlot: (id: number) => void
   onDeleteSlot: (id: number) => void
+  onClearAll: () => void
   onClose: () => void
   s: (n: number) => number
   fuelPrice: number
@@ -77,6 +84,7 @@ export function GanttSolutionCompare({
   activeSlotId,
   onSelectSlot,
   onDeleteSlot,
+  onClearAll,
   onClose,
   s,
   fuelPrice,
@@ -85,8 +93,9 @@ export function GanttSolutionCompare({
   const best = {
     overflow: Math.min(...slots.map(s => s.metrics.overflow)),
     chainBreaks: Math.min(...slots.map(s => s.metrics.chainBreaks)),
-    totalUsed: Math.min(...slots.map(s => s.metrics.totalUsed)),
-    bufferPct: Math.max(...slots.map(s => s.metrics.bufferPct)),
+    peakDailyAC: Math.min(...slots.map(s => s.metrics.peakDailyAC)),
+    avgDailyAC: Math.min(...slots.map(s => s.metrics.avgDailyAC)),
+    avgUtilPerAC: Math.max(...slots.map(s => s.metrics.avgUtilPerAC)),
     totalCost: Math.min(...slots.map(s => s.metrics.totalCost)),
     seatsLost: Math.min(...slots.map(s => s.metrics.seatsLost)),
     revenueAtRisk: Math.min(...slots.map(s => s.metrics.revenueAtRisk)),
@@ -96,11 +105,14 @@ export function GanttSolutionCompare({
 
   return (
     <div
-      className="bg-background/95 backdrop-blur-xl border border-border/80 shadow-xl"
-      style={{ borderRadius: s(12), padding: s(12), overflow: 'hidden' }}
+      className="bg-background/95 backdrop-blur-xl border border-border/60 shadow-2xl flex flex-col overflow-hidden"
+      style={{ borderRadius: s(14), maxHeight: '100%' }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between" style={{ marginBottom: s(10) }}>
+      {/* ── Header ── */}
+      <div
+        className="shrink-0 flex items-center justify-between border-b"
+        style={{ padding: `${s(10)}px ${s(14)}px` }}
+      >
         <div className="flex items-center gap-2">
           <span style={{ fontSize: s(13), fontWeight: 600 }}>Solution Comparison</span>
           <span
@@ -110,16 +122,27 @@ export function GanttSolutionCompare({
             {slots.length}/3 slots
           </span>
         </div>
-        <button
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground transition-colors rounded-md"
-          style={{ padding: s(4) }}
-        >
-          <X style={{ width: s(14), height: s(14) }} />
-        </button>
+        <div className="flex items-center" style={{ gap: s(6) }}>
+          <button
+            onClick={onClearAll}
+            className="flex items-center text-muted-foreground hover:text-red-500 transition-colors rounded-md"
+            style={{ padding: `${s(3)}px ${s(8)}px`, gap: s(4), fontSize: s(10) }}
+          >
+            <Trash2 style={{ width: s(12), height: s(12) }} />
+            <span>Clear All</span>
+          </button>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground transition-colors rounded-md"
+            style={{ padding: s(4) }}
+          >
+            <X style={{ width: s(14), height: s(14) }} />
+          </button>
+        </div>
       </div>
 
-      {/* Cards grid */}
+      {/* ── Scrollable Body ── */}
+      <div className="flex-1 overflow-y-auto" style={{ padding: s(14) }}>
       <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(slots.length, 3)}, 1fr)` }}>
         {slots.map(slot => {
           const m = slot.metrics
@@ -213,8 +236,8 @@ export function GanttSolutionCompare({
                 <Kpi s={s} label="Rules Bent" value={String(m.rulesBent)} />
               </div>
 
-              {/* ── FLEET ── */}
-              <SectionLabel s={s}>Fleet</SectionLabel>
+              {/* ── FLEET (daily averages) ── */}
+              <SectionLabel s={s}>Fleet (avg/day over {m.numDays}d)</SectionLabel>
               <div style={{ marginBottom: s(8) }}>
                 {m.fleetByType.map(ft => (
                   <div key={ft.icaoType} className="flex items-center" style={{ gap: s(4), marginBottom: s(3) }}>
@@ -226,9 +249,9 @@ export function GanttSolutionCompare({
                     </span>
                     <span
                       className="text-muted-foreground"
-                      style={{ fontSize: s(9), width: s(36) }}
+                      style={{ fontSize: s(9), width: s(40) }}
                     >
-                      {ft.used}/{ft.total}
+                      {Math.round(ft.avgDailyUsed)}/{ft.total}
                     </span>
                     {/* Utilization bar */}
                     <div
@@ -242,7 +265,7 @@ export function GanttSolutionCompare({
                     >
                       <div
                         style={{
-                          width: `${ft.total > 0 ? Math.min((ft.used / ft.total) * 100, 100) : 0}%`,
+                          width: `${ft.total > 0 ? Math.min((ft.avgDailyUsed / ft.total) * 100, 100) : 0}%`,
                           height: '100%',
                           borderRadius: s(2),
                           background: 'hsl(var(--primary) / 0.6)',
@@ -258,23 +281,30 @@ export function GanttSolutionCompare({
                     </span>
                   </div>
                 ))}
-                <div
-                  className="flex items-center justify-between"
-                  style={{ marginTop: s(4) }}
-                >
+                <div className="grid grid-cols-2" style={{ gap: s(4), marginTop: s(5) }}>
                   <Kpi
                     s={s}
-                    label="AC Used"
-                    value={String(m.totalUsed)}
-                    good={m.totalUsed === best.totalUsed && slots.length > 1}
-                    inline
+                    label="Peak AC/day"
+                    value={String(m.peakDailyAC)}
+                    good={m.peakDailyAC === best.peakDailyAC && slots.length > 1}
                   />
                   <Kpi
                     s={s}
-                    label="Spare"
-                    value={`${m.spareAC} (${m.bufferPct}%)`}
+                    label="Avg AC/day"
+                    value={String(m.avgDailyAC)}
+                    good={m.avgDailyAC === best.avgDailyAC && slots.length > 1}
+                  />
+                  <Kpi
+                    s={s}
+                    label="Avg Spare/day"
+                    value={`${m.avgDailySpare} (${m.bufferPct}%)`}
                     bad={m.bufferPct < 10}
-                    inline
+                  />
+                  <Kpi
+                    s={s}
+                    label="Avg Util/AC"
+                    value={`${m.avgUtilPerAC}h`}
+                    good={m.avgUtilPerAC === best.avgUtilPerAC && slots.length > 1}
                   />
                 </div>
               </div>
@@ -343,11 +373,12 @@ export function GanttSolutionCompare({
           )
         })}
       </div>
+      </div>
 
-      {/* Footer */}
+      {/* ── Footer ── */}
       <div
-        className="flex items-center justify-between text-muted-foreground"
-        style={{ marginTop: s(8), fontSize: s(9) }}
+        className="shrink-0 flex items-center justify-between text-muted-foreground border-t"
+        style={{ padding: `${s(8)}px ${s(14)}px`, fontSize: s(9) }}
       >
         <span className="italic">
           Select a solution then click Assign All to commit

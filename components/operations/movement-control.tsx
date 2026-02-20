@@ -3085,52 +3085,6 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           ? <Loader2 className="animate-spin w-3 h-3" />
           : (periodDirty ? 'Go ↻' : 'Go')}
       </button>
-      <button
-        onClick={() => setSettingsPanelOpen(v => !v)}
-        className={`p-1.5 rounded-md transition-colors ${settingsPanelOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
-        title="Movement Settings"
-      >
-        <Settings2 className="h-3.5 w-3.5" />
-      </button>
-      {/* ── Assign All / De-assign All toggle buttons ── */}
-      <button
-        onClick={() => { setAssignmentsEnabled(true); handleAssignAll() }}
-        disabled={bulkAssigning}
-        className={`w-[26px] h-[26px] flex items-center justify-center rounded-[7px] transition-colors text-emerald-600 dark:text-emerald-400 ${
-          assignmentsEnabled
-            ? 'bg-emerald-500/15 border border-emerald-500/40'
-            : 'bg-emerald-500/10 border border-emerald-500/30 opacity-50 hover:opacity-100'
-        } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
-        title="Assign All"
-      >
-        {bulkAssigning
-          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          : <PlaneTakeoff className="h-3.5 w-3.5" />}
-      </button>
-      <button
-        onClick={handleDeassignAll}
-        disabled={bulkAssigning}
-        className={`w-[26px] h-[26px] flex items-center justify-center rounded-[7px] transition-colors text-red-600 dark:text-red-400 ${
-          !assignmentsEnabled
-            ? 'bg-red-500/15 border border-red-500/40'
-            : 'bg-red-500/10 border border-red-500/30 opacity-50 hover:opacity-100'
-        } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
-        title="De-assign All"
-      >
-        {bulkAssigning
-          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          : <PlaneLanding className="h-3.5 w-3.5" />}
-      </button>
-      <button
-        onClick={toggleFullscreen}
-        className="w-[26px] h-[26px] flex items-center justify-center rounded-[7px] border border-border/60 text-muted-foreground hover:bg-muted transition-colors"
-        title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-      >
-        {isFullscreen
-          ? <Minimize2 className="h-3.5 w-3.5" />
-          : <Maximize2 className="h-3.5 w-3.5" />
-        }
-      </button>
     </div>
   )
 
@@ -3341,6 +3295,46 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
             >
               ✈ Optimizer
             </button>
+            {/* ── Assign All ── */}
+            <button
+              onClick={() => { setAssignmentsEnabled(true); handleAssignAll() }}
+              disabled={bulkAssigning}
+              className={`w-[26px] h-[26px] flex items-center justify-center rounded-[7px] transition-colors text-emerald-600 dark:text-emerald-400 ${
+                assignmentsEnabled
+                  ? 'bg-emerald-500/15 border border-emerald-500/40'
+                  : 'bg-emerald-500/10 border border-emerald-500/30 opacity-50 hover:opacity-100'
+              } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="Assign All"
+            >
+              {bulkAssigning
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <PlaneTakeoff className="h-3.5 w-3.5" />}
+            </button>
+            {/* ── De-assign All ── */}
+            <button
+              onClick={handleDeassignAll}
+              disabled={bulkAssigning}
+              className={`w-[26px] h-[26px] flex items-center justify-center rounded-[7px] transition-colors text-red-600 dark:text-red-400 ${
+                !assignmentsEnabled
+                  ? 'bg-red-500/15 border border-red-500/40'
+                  : 'bg-red-500/10 border border-red-500/30 opacity-50 hover:opacity-100'
+              } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="De-assign All"
+            >
+              {bulkAssigning
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <PlaneLanding className="h-3.5 w-3.5" />}
+            </button>
+            {/* ── separator ── */}
+            <div className="w-px h-[18px] bg-border/40 mx-0.5" />
+            {/* ── Settings ── */}
+            <button
+              onClick={() => setSettingsPanelOpen(v => !v)}
+              className={`p-1.5 rounded-md transition-colors ${settingsPanelOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
+              title="Movement Settings"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+            </button>
             {scheduleRules.length > 0 && assignmentResult.summary && (
               <div
                 className="flex items-center gap-2 px-3 py-1 rounded-full"
@@ -3439,6 +3433,18 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                 title="Increase row height"
               >
                 <span className="text-xs font-bold leading-none">+</span>
+              </button>
+              {/* Vertical divider + Fullscreen */}
+              <div className="w-px h-4 bg-border/60 mx-0.5" />
+              <button
+                onClick={toggleFullscreen}
+                className="w-[26px] h-[26px] flex items-center justify-center rounded-[7px] border border-border/60 text-muted-foreground hover:bg-muted transition-colors"
+                title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              >
+                {isFullscreen
+                  ? <Minimize2 className="h-3.5 w-3.5" />
+                  : <Maximize2 className="h-3.5 w-3.5" />
+                }
               </button>
             </div>
           </div>
@@ -4652,8 +4658,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           {flightSearchOpen && (
             <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
               {/* Search Header */}
-              <div className="shrink-0 px-4 pt-4 pb-3 border-b flex items-center justify-between gap-2">
-                <div className="text-[13px] font-semibold tracking-tight">Flight Search</div>
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
+                <div className="text-[15px] font-bold truncate">Flight Search</div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   <button
                     onClick={() => setPanelPinned(p => !p)}
@@ -4797,8 +4803,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           {aircraftSearchOpen && (
             <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
               {/* Search Header */}
-              <div className="shrink-0 px-4 pt-4 pb-3 border-b flex items-center justify-between gap-2">
-                <div className="text-[13px] font-semibold tracking-tight">Aircraft Search</div>
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
+                <div className="text-[15px] font-bold truncate">Aircraft Search</div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   <button
                     onClick={() => setPanelPinned(p => !p)}
@@ -5086,9 +5092,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           ) : panelMode === 'flight' && flightLinksPanelData ? (
             <>
               {/* ── FLIGHT LINKS PANEL (multi-select same row) ──────── */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">Flight Links</div>
+                  <div className="text-[15px] font-bold truncate">Flight Links</div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
                     {flightLinksPanelData.legs} flights · {flightLinksPanelData.reg || flightLinksPanelData.icao} · {
                       flightLinksPanelData.singleDate
@@ -5247,9 +5253,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           ) : panelMode === 'flight' && flightPanelData ? (
             <>
               {/* ── FLIGHT PANEL ─────────────────────────────────────── */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">
+                  <div className="text-[15px] font-bold truncate">
                     {flightPanelData.mode === 'single'
                       ? stripFlightPrefix(flightPanelData.flight.flightNumber)
                       : `${flightPanelData.count} Flights Selected`
@@ -5455,9 +5461,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           ) : panelMode === 'aircraft' && aircraftPanelData ? (
             <>
               {/* ── AIRCRAFT PANEL ───────────────────────────────────── */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">{aircraftPanelData.registration}</div>
+                  <div className="text-[15px] font-bold truncate">{aircraftPanelData.registration}</div>
                   <div className="flex items-center gap-1 mt-0.5">
                     <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground">
                       {aircraftPanelData.icao}
@@ -5560,9 +5566,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           ) : panelMode === 'rotation' && rotationPanelData ? (
             <>
               {/* ── ROTATION PANEL ───────────────────────────────────── */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">{rotationPanelData.reg}</div>
+                  <div className="text-[15px] font-bold truncate">{rotationPanelData.reg}</div>
                   <div className="flex items-center gap-1 mt-0.5">
                     <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground">
                       {rotationPanelData.icao}
@@ -5807,8 +5813,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           ) : (
             /* Empty state */
             <>
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
-                <div className="text-[13px] font-semibold text-muted-foreground">Flight Info</div>
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
+                <div className="text-[15px] font-bold text-muted-foreground truncate">Flight Info</div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   <button
                     onClick={() => setPanelPinned(p => !p)}

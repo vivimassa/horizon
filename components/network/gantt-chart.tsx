@@ -463,12 +463,14 @@ function computeSolutionMetrics(
   // Build lookup maps
   const regToType = new Map<string, string>()
   const regToCapacity = new Map<string, number>()
+  const regToPerfFactor = new Map<string, number>()
   for (const r of registrations) {
     const icao = r.aircraft_types?.icao_type || 'UNKN'
     regToType.set(r.registration, icao)
     const sc = seatingConfigs.find(s => s.aircraft_id === r.id)
     const at = aircraftTypes.find(t => t.id === r.aircraft_type_id)
     regToCapacity.set(r.registration, sc?.total_capacity ?? at?.pax_capacity ?? 0)
+    regToPerfFactor.set(r.registration, r.performance_factor ?? 0)
   }
 
   const typeToCapacity = new Map<string, number>()
@@ -478,10 +480,14 @@ function computeSolutionMetrics(
     typeToBurnRate.set(t.icao_type, t.fuel_burn_rate_kg_per_hour ?? 0)
   }
 
-  // Per-type tracking
-  const typeStats = new Map<string, { used: Set<string>; blockMinutes: number }>()
+  // Per-type tracking (aggregate)
   const allTypes = Array.from(new Set(aircraftTypes.map(t => t.icao_type)))
+  const typeStats = new Map<string, { used: Set<string>; blockMinutes: number }>()
   for (const t of allTypes) typeStats.set(t, { used: new Set(), blockMinutes: 0 })
+
+  // Per-day tracking
+  const dailyAcUsed = new Map<string, Set<string>>()           // dateStr → Set<reg>
+  const dailyTypeUsed = new Map<string, Map<string, Set<string>>>()  // dateStr → icaoType → Set<reg>
 
   let downgrades = 0, upgrades = 0, seatsLost = 0, seatsGained = 0
   let extraBlockMinutesUpgrade = 0
@@ -500,8 +506,20 @@ function computeSolutionMetrics(
       stats.blockMinutes += ef.blockMinutes ?? 0
     }
 
-    const burnRate = typeToBurnRate.get(assignedType) ?? 0
-    totalFuelKg += burnRate * ((ef.blockMinutes ?? 0) / 60)
+    // Daily tracking
+    const dateStr = ef.date instanceof Date ? ef.date.toISOString().slice(0, 10) : String(ef.date).slice(0, 10)
+    if (!dailyAcUsed.has(dateStr)) dailyAcUsed.set(dateStr, new Set())
+    dailyAcUsed.get(dateStr)!.add(reg)
+
+    if (!dailyTypeUsed.has(dateStr)) dailyTypeUsed.set(dateStr, new Map())
+    const dayTypes = dailyTypeUsed.get(dateStr)!
+    if (!dayTypes.has(assignedType)) dayTypes.set(assignedType, new Set())
+    dayTypes.get(assignedType)!.add(reg)
+
+    const baseBurnRate = typeToBurnRate.get(assignedType) ?? 0
+    const perfFactor = regToPerfFactor.get(reg) ?? 0
+    const effectiveBurnRate = baseBurnRate * (1 + perfFactor / 100)
+    totalFuelKg += effectiveBurnRate * ((ef.blockMinutes ?? 0) / 60)
 
     const scheduledType = ef.aircraftTypeIcao
     if (scheduledType && assignedType !== scheduledType) {
@@ -518,6 +536,22 @@ function computeSolutionMetrics(
     }
   }
 
+  // Per-day aggregate stats
+  const numDays = Math.max(dailyAcUsed.size, 1)
+  const dailyCounts = Array.from(dailyAcUsed.values()).map(s => s.size)
+  const peakDailyAC = dailyCounts.length > 0 ? Math.max(...dailyCounts) : 0
+  const avgDailyAC = dailyCounts.length > 0 ? Math.round(dailyCounts.reduce((a, b) => a + b, 0) / dailyCounts.length) : 0
+
+  // Per-type daily averages
+  const typeDailyAvg = new Map<string, number>()
+  for (const t of allTypes) {
+    let totalDailyUsed = 0
+    for (const [, dayTypes] of Array.from(dailyTypeUsed.entries())) {
+      totalDailyUsed += dayTypes.get(t)?.size ?? 0
+    }
+    typeDailyAvg.set(t, numDays > 0 ? totalDailyUsed / numDays : 0)
+  }
+
   const totalPerType = new Map<string, number>()
   for (const r of registrations) {
     if (r.status !== 'active' && r.status !== 'operational') continue
@@ -532,17 +566,23 @@ function computeSolutionMetrics(
       const used = stats.used.size
       const total = totalPerType.get(t) ?? 0
       const blockHours = stats.blockMinutes / 60
+      const avgDailyUsed = Math.round((typeDailyAvg.get(t) ?? 0) * 10) / 10
       return {
         icaoType: t,
         used,
         total,
         blockHours: Math.round(blockHours * 10) / 10,
-        avgUtil: used > 0 ? Math.round((blockHours / used) * 10) / 10 : 0,
+        avgUtil: avgDailyUsed > 0 ? Math.round((blockHours / numDays / avgDailyUsed) * 10) / 10 : 0,
+        avgDailyUsed,
       }
     })
 
   const totalUsed = fleetByType.reduce((s, f) => s + f.used, 0)
   const totalAC = fleetByType.reduce((s, f) => s + f.total, 0)
+  const avgDailySpare = totalAC - avgDailyAC
+  const totalBlockHours = fleetByType.reduce((s, f) => s + f.blockHours, 0)
+  const avgUtilPerAC = avgDailyAC > 0 ? Math.round((totalBlockHours / numDays / avgDailyAC) * 10) / 10 : 0
+
   const revenueAtRisk = Math.round(seatsLost * costAssumptions.avgRevenuePerSeat * costAssumptions.avgLoadFactor)
   const extraOpsCost = Math.round(extraBlockMinutesUpgrade / 60 * 400)
   const fuelTons = Math.round(totalFuelKg / 1000 * 10) / 10
@@ -564,7 +604,12 @@ function computeSolutionMetrics(
     totalUsed,
     totalAC,
     spareAC: totalAC - totalUsed,
-    bufferPct: totalAC > 0 ? Math.round((totalAC - totalUsed) / totalAC * 100) : 0,
+    bufferPct: totalAC > 0 ? Math.round(avgDailySpare / totalAC * 100) : 0,
+    peakDailyAC,
+    avgDailyAC,
+    avgDailySpare,
+    avgUtilPerAC,
+    numDays,
     downgrades,
     upgrades,
     seatsLost,
@@ -1551,7 +1596,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       }
 
       try {
-        setMipProgress({ phase: 'solving', message: `Solving MIP (limit: ${config.timeLimitSec}s)...`, elapsedMs: 0 })
+        setMipProgress({ phase: 'solving', message: 'Solving optimization...', elapsedMs: 0 })
 
         const solverResponse = await solveMIP({
           flights: mipFlights,
@@ -3769,77 +3814,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           ? <Loader2 className="animate-spin" style={{ width: s(12), height: s(12) }} />
           : (periodDirty ? 'Go ↻' : 'Go')}
       </button>
-      {/* ── Compare button ── */}
-      <button
-        onClick={() => setCompareOpen(!compareOpen)}
-        disabled={solutionSlots.length === 0}
-        className={`flex items-center gap-1 transition-all duration-200 ${
-          compareOpen
-            ? 'bg-primary/10 text-primary border border-primary/30'
-            : solutionSlots.length > 0
-              ? 'text-muted-foreground hover:bg-muted border border-border/60'
-              : 'text-muted-foreground/40 border border-border/30 cursor-not-allowed'
-        }`}
-        style={{ height: s(26), paddingLeft: s(8), paddingRight: s(8), borderRadius: s(7), fontSize: s(11) }}
-        title={solutionSlots.length === 0 ? 'Run optimizer first' : `Compare ${solutionSlots.length} solutions`}
-      >
-        <BarChart3 style={{ width: s(14), height: s(14) }} />
-        {solutionSlots.length > 0 && (
-          <span className="font-mono font-semibold" style={{ fontSize: s(10) }}>
-            {solutionSlots.length}
-          </span>
-        )}
-      </button>
-      {/* ── Assign All / De-assign All toggle buttons ── */}
-      <button
-        onClick={() => { setAssignmentsEnabled(true); handleAssignAll() }}
-        disabled={bulkAssigning}
-        className={`flex items-center justify-center transition-all duration-200 text-emerald-600 dark:text-emerald-400 ${
-          assignmentsEnabled
-            ? 'bg-emerald-500/15 border border-emerald-500/40'
-            : 'bg-emerald-500/10 border border-emerald-500/30 opacity-50 hover:opacity-100'
-        } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
-        style={{ width: s(26), height: s(26), borderRadius: s(7) }}
-        title="Assign All"
-      >
-        {bulkAssigning
-          ? <Loader2 className="animate-spin" style={{ width: s(14), height: s(14) }} />
-          : <PlaneTakeoff style={{ width: s(14), height: s(14) }} />}
-      </button>
-      <button
-        onClick={handleDeassignAll}
-        disabled={bulkAssigning}
-        className={`flex items-center justify-center transition-all duration-200 text-red-600 dark:text-red-400 ${
-          !assignmentsEnabled
-            ? 'bg-red-500/15 border border-red-500/40'
-            : 'bg-red-500/10 border border-red-500/30 opacity-50 hover:opacity-100'
-        } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
-        style={{ width: s(26), height: s(26), borderRadius: s(7) }}
-        title="De-assign All"
-      >
-        {bulkAssigning
-          ? <Loader2 className="animate-spin" style={{ width: s(14), height: s(14) }} />
-          : <PlaneLanding style={{ width: s(14), height: s(14) }} />}
-      </button>
-      <button
-        onClick={() => setSettingsPanelOpen(v => !v)}
-        className={`rounded-md transition-all duration-200 ${settingsPanelOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
-        style={{ padding: s(6), width: s(26), height: s(26) }}
-        title="Gantt Settings"
-      >
-        <Settings2 style={{ width: s(14), height: s(14) }} />
-      </button>
-      <button
-        onClick={toggleFullscreen}
-        className="flex items-center justify-center border border-border/60 text-muted-foreground hover:bg-muted transition-all duration-200"
-        style={{ width: s(26), height: s(26), borderRadius: s(7) }}
-        title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-      >
-        {isFullscreen
-          ? <Minimize2 style={{ width: s(14), height: s(14) }} />
-          : <Maximize2 style={{ width: s(14), height: s(14) }} />
-        }
-      </button>
     </div>
   )
 
@@ -4058,6 +4032,70 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             >
               ✈ Optimizer
             </button>
+            {/* ── Compare ── */}
+            <button
+              onClick={() => setCompareOpen(!compareOpen)}
+              disabled={solutionSlots.length === 0}
+              className={`flex items-center gap-1 transition-all duration-200 ${
+                compareOpen
+                  ? 'bg-primary/10 text-primary border border-primary/30'
+                  : solutionSlots.length > 0
+                    ? 'text-muted-foreground hover:bg-muted border border-border/60'
+                    : 'text-muted-foreground/40 border border-border/30 cursor-not-allowed'
+              }`}
+              style={{ height: s(26), paddingLeft: s(8), paddingRight: s(8), borderRadius: s(7), fontSize: s(11) }}
+              title={solutionSlots.length === 0 ? 'Run optimizer first' : `Compare ${solutionSlots.length} solutions`}
+            >
+              <BarChart3 style={{ width: s(14), height: s(14) }} />
+              {solutionSlots.length > 0 && (
+                <span className="font-mono font-semibold" style={{ fontSize: s(10) }}>
+                  {solutionSlots.length}
+                </span>
+              )}
+            </button>
+            {/* ── Assign All ── */}
+            <button
+              onClick={() => { setAssignmentsEnabled(true); handleAssignAll() }}
+              disabled={bulkAssigning}
+              className={`flex items-center justify-center transition-all duration-200 text-emerald-600 dark:text-emerald-400 ${
+                assignmentsEnabled
+                  ? 'bg-emerald-500/15 border border-emerald-500/40'
+                  : 'bg-emerald-500/10 border border-emerald-500/30 opacity-50 hover:opacity-100'
+              } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
+              style={{ width: s(26), height: s(26), borderRadius: s(7) }}
+              title="Assign All"
+            >
+              {bulkAssigning
+                ? <Loader2 className="animate-spin" style={{ width: s(14), height: s(14) }} />
+                : <PlaneTakeoff style={{ width: s(14), height: s(14) }} />}
+            </button>
+            {/* ── De-assign All ── */}
+            <button
+              onClick={handleDeassignAll}
+              disabled={bulkAssigning}
+              className={`flex items-center justify-center transition-all duration-200 text-red-600 dark:text-red-400 ${
+                !assignmentsEnabled
+                  ? 'bg-red-500/15 border border-red-500/40'
+                  : 'bg-red-500/10 border border-red-500/30 opacity-50 hover:opacity-100'
+              } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
+              style={{ width: s(26), height: s(26), borderRadius: s(7) }}
+              title="De-assign All"
+            >
+              {bulkAssigning
+                ? <Loader2 className="animate-spin" style={{ width: s(14), height: s(14) }} />
+                : <PlaneLanding style={{ width: s(14), height: s(14) }} />}
+            </button>
+            {/* ── separator ── */}
+            <div className="bg-border/40" style={{ width: 1, height: s(18), margin: `0 ${s(2)}px` }} />
+            {/* ── Settings ── */}
+            <button
+              onClick={() => setSettingsPanelOpen(v => !v)}
+              className={`rounded-md transition-all duration-200 ${settingsPanelOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
+              style={{ padding: s(6), width: s(26), height: s(26) }}
+              title="Gantt Settings"
+            >
+              <Settings2 style={{ width: s(14), height: s(14) }} />
+            </button>
             {scheduleRules.length > 0 && activeResult.summary && (
               <div
                 className="flex items-center gap-2 px-3 py-1 rounded-full"
@@ -4159,6 +4197,19 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
               >
                 <span className="font-bold leading-none" style={{ fontSize: s(12) }}>+</span>
               </button>
+              {/* Vertical divider + Fullscreen */}
+              <div className="bg-border/60 transition-all duration-200" style={{ width: 1, height: s(16), margin: `0 ${s(2)}px` }} />
+              <button
+                onClick={toggleFullscreen}
+                className="flex items-center justify-center border border-border/60 text-muted-foreground hover:bg-muted transition-all duration-200"
+                style={{ width: s(26), height: s(26), borderRadius: s(7) }}
+                title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              >
+                {isFullscreen
+                  ? <Minimize2 style={{ width: s(14), height: s(14) }} />
+                  : <Maximize2 style={{ width: s(14), height: s(14) }} />
+                }
+              </button>
             </div>
           </div>
         </div>
@@ -4229,27 +4280,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       </div>
 
       {/* ── COMPARISON PANEL OVERLAY ──────────────────────────────── */}
-      {compareOpen && solutionSlots.length > 0 && (
-        <div className="shrink-0 z-30 border-b" style={{ padding: `${s(4)}px ${s(12)}px` }}>
-          <GanttSolutionCompare
-            slots={solutionSlots}
-            activeSlotId={activeSlotId}
-            onSelectSlot={setActiveSlotId}
-            onDeleteSlot={(id) => {
-              setSolutionSlots(prev => {
-                const next = prev.filter(sl => sl.id !== id)
-                if (activeSlotId === id) setActiveSlotId(next.length > 0 ? next[next.length - 1].id : null)
-                if (next.length === 0) setCompareOpen(false)
-                return next
-              })
-            }}
-            onClose={() => setCompareOpen(false)}
-            s={s}
-            fuelPrice={ganttSettings.costAssumptions?.fuelPricePerKg ?? 0.80}
-          />
-        </div>
-      )}
-
       {/* ── BODY ───────────────────────────────────────────────────── */}
       <div className="flex-1 flex min-h-0 relative" style={{ pointerEvents: (loadingPhase !== 'idle' && loadingPhase !== 'done') ? 'none' : 'auto' }}>
         {/* ── LEFT PANEL (Aircraft Registry) ─────────────────────── */}
@@ -5538,8 +5568,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           {flightSearchOpen && (
             <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
               {/* Search Header */}
-              <div className="shrink-0 px-4 pt-4 pb-3 border-b flex items-center justify-between gap-2">
-                <div className="text-[13px] font-semibold tracking-tight">Flight Search</div>
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
+                <div className="text-[15px] font-bold truncate">Flight Search</div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   <button
                     onClick={() => setPanelPinned(p => !p)}
@@ -5684,8 +5714,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           {aircraftSearchOpen && (
             <div className="absolute inset-0 z-10 flex flex-col" style={{ background: 'hsl(var(--background))' }}>
               {/* Search Header */}
-              <div className="shrink-0 px-4 pt-4 pb-3 border-b flex items-center justify-between gap-2">
-                <div className="text-[13px] font-semibold tracking-tight">Aircraft Search</div>
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
+                <div className="text-[15px] font-bold truncate">Aircraft Search</div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   <button
                     onClick={() => setPanelPinned(p => !p)}
@@ -6213,9 +6243,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           ) : panelMode === 'flight' && flightLinksPanelData ? (
             <>
               {/* ── FLIGHT LINKS PANEL (multi-select same row) ──────── */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">Flight Links</div>
+                  <div className="text-[15px] font-bold truncate">Flight Links</div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
                     {flightLinksPanelData.legs} flights · {flightLinksPanelData.reg || flightLinksPanelData.icao} · {
                       flightLinksPanelData.singleDate
@@ -6374,9 +6404,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           ) : panelMode === 'flight' && flightPanelData ? (
             <>
               {/* ── FLIGHT PANEL ─────────────────────────────────────── */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[12px] font-bold tracking-tight">
+                  <div className="text-[15px] font-bold truncate">
                     {flightPanelData.mode === 'single' ? 'Flight Statistics' : `${flightPanelData.count} Flights Selected`}
                   </div>
                   {flightPanelData.mode === 'single' && (
@@ -6579,9 +6609,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           ) : panelMode === 'aircraft' && aircraftPanelData ? (
             <>
               {/* ── AIRCRAFT PANEL ───────────────────────────────────── */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[12px] font-bold tracking-tight">Aircraft Statistics</div>
+                  <div className="text-[15px] font-bold truncate">Aircraft Statistics</div>
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className="text-[11px] font-semibold">{aircraftPanelData.registration}</span>
                     <span className="text-[9px] text-muted-foreground">{aircraftPanelData.typeName}</span>
@@ -6763,9 +6793,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           ) : panelMode === 'rotation' && rotationPanelData ? (
             <>
               {/* ── ROTATION PANEL ───────────────────────────────────── */}
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">{rotationPanelData.reg}</div>
+                  <div className="text-[15px] font-bold truncate">{rotationPanelData.reg}</div>
                   <div className="flex items-center gap-1 mt-0.5">
                     <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded bg-muted text-muted-foreground">
                       {rotationPanelData.icao}
@@ -7010,8 +7040,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           ) : (
             /* Empty state */
             <>
-              <div className="shrink-0 px-3 py-2.5 border-b flex items-center justify-between gap-2">
-                <div className="text-[13px] font-semibold text-muted-foreground">Flight Info</div>
+              <div className="shrink-0 px-4 pt-4 pb-3 border-b border-[#F3F4F6] dark:border-[#1F2937] flex items-center justify-between gap-2">
+                <div className="text-[15px] font-bold text-muted-foreground truncate">Flight Info</div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   <button
                     onClick={() => setPanelPinned(p => !p)}
@@ -7041,6 +7071,42 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           )}
           </>)}
         </div>
+
+        {/* ── SOLUTION COMPARISON DIALOG ── */}
+        {compareOpen && solutionSlots.length > 0 && (
+          <div
+            className="absolute inset-0 z-40 flex items-center justify-center"
+            onClick={(e) => { if (e.target === e.currentTarget) setCompareOpen(false) }}
+          >
+            <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" />
+            <div
+              className="relative z-10 w-full mx-auto flex flex-col"
+              style={{ maxWidth: s(900), maxHeight: '92%', margin: s(16) }}
+            >
+              <GanttSolutionCompare
+                slots={solutionSlots}
+                activeSlotId={activeSlotId}
+                onSelectSlot={setActiveSlotId}
+                onDeleteSlot={(id) => {
+                  setSolutionSlots(prev => {
+                    const next = prev.filter(sl => sl.id !== id)
+                    if (activeSlotId === id) setActiveSlotId(next.length > 0 ? next[next.length - 1].id : null)
+                    if (next.length === 0) setCompareOpen(false)
+                    return next
+                  })
+                }}
+                onClearAll={() => {
+                  setSolutionSlots([])
+                  setActiveSlotId(null)
+                  setCompareOpen(false)
+                }}
+                onClose={() => setCompareOpen(false)}
+                s={s}
+                fuelPrice={ganttSettings.costAssumptions?.fuelPricePerKg ?? 0.80}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── LEGEND BAR ─────────────────────────────────────────────── */}

@@ -53,6 +53,7 @@ export function AircraftRegistrationsTable({ aircraft, aircraftTypes, airports }
         a.registration.toLowerCase().includes(q) ||
         a.aircraft_types?.icao_type.toLowerCase().includes(q) ||
         a.aircraft_types?.name.toLowerCase().includes(q) ||
+        a.variant?.toLowerCase().includes(q) ||
         a.status.toLowerCase().includes(q) ||
         a.home_base?.iata_code?.toLowerCase().includes(q)
       )
@@ -112,6 +113,8 @@ export function AircraftRegistrationsTable({ aircraft, aircraftTypes, airports }
             <TableRow>
               <TableHead><Button variant="ghost" onClick={() => handleSort('registration')} className="font-semibold">Registration{getSortIcon('registration')}</Button></TableHead>
               <TableHead>Type</TableHead>
+              <TableHead>Variant</TableHead>
+              <TableHead>PF %</TableHead>
               <TableHead><Button variant="ghost" onClick={() => handleSort('status')} className="font-semibold">Status{getSortIcon('status')}</Button></TableHead>
               <TableHead>Home Base</TableHead>
               <TableHead>Cabin Config</TableHead>
@@ -120,11 +123,21 @@ export function AircraftRegistrationsTable({ aircraft, aircraftTypes, airports }
           </TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">{searchQuery ? 'No aircraft found matching your search.' : 'No aircraft registrations in database.'}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">{searchQuery ? 'No aircraft found matching your search.' : 'No aircraft registrations in database.'}</TableCell></TableRow>
             ) : filtered.map(a => (
               <TableRow key={a.id}>
                 <TableCell className="font-mono font-semibold">{a.registration}</TableCell>
                 <TableCell className="font-mono">{a.aircraft_types?.icao_type || '—'}</TableCell>
+                <TableCell className="font-mono text-[11px]">{a.variant || '—'}</TableCell>
+                <TableCell className="font-mono text-[11px]">
+                  {a.performance_factor != null && a.performance_factor !== 0 ? (
+                    <span className={a.performance_factor > 0 ? 'text-amber-500' : 'text-green-500'}>
+                      {a.performance_factor > 0 ? '+' : ''}{a.performance_factor.toFixed(1)}%
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">0.0%</span>
+                  )}
+                </TableCell>
                 <TableCell><StatusBadge status={a.status} /></TableCell>
                 <TableCell className="font-mono">{a.home_base?.iata_code || '—'}</TableCell>
                 <TableCell className="font-mono text-sm">{formatSeatingConfig(a.seating_config as unknown as Record<string, number> | null)}</TableCell>

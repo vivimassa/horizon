@@ -103,6 +103,7 @@ export function AircraftRegistrationsMasterDetail({
       (a.aircraft_types?.icao_type || '').toLowerCase().includes(q) ||
       (a.aircraft_types?.name || '').toLowerCase().includes(q) ||
       (a.serial_number || '').toLowerCase().includes(q) ||
+      (a.variant || '').toLowerCase().includes(q) ||
       (a.status || '').toLowerCase().includes(q)
     )
   }, [aircraft, search])
@@ -686,6 +687,46 @@ function BasicTab({ ac, aircraftTypes, airports, onSaved, onDelete }: {
           <InlineField label="Serial Number (MSN)" field="serial_number" value={ac.serial_number || ''} acId={ac.id} onSaved={onSaved} mono />
           <InlineField label="Sub-operator" field="sub_operator" value={ac.sub_operator || ''} acId={ac.id} onSaved={onSaved} />
         </div>
+      </Section>
+
+      <Section title="Performance">
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+          <div>
+            <div className="text-[10px] text-muted-foreground">Variant</div>
+            <div className="text-xs font-mono mt-0.5">{ac.variant || '—'}</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-muted-foreground">PF</div>
+            <div className="text-xs font-mono mt-0.5" style={{ color: ac.performance_factor && ac.performance_factor > 5 ? '#ef4444' : ac.performance_factor && ac.performance_factor >= 2 ? '#f59e0b' : ac.performance_factor && ac.performance_factor < 0 ? '#22c55e' : undefined }}>
+              {ac.performance_factor != null ? `${ac.performance_factor > 0 ? '+' : ''}${Number(ac.performance_factor).toFixed(1)}%` : '—'}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] text-muted-foreground">Eff. Burn</div>
+            <div className="text-xs font-mono mt-0.5 text-muted-foreground">
+              {(() => {
+                const baseBurn = (ac.aircraft_types as any)?.fuel_burn_rate_kg_per_hour
+                if (!baseBurn) return '—'
+                const eff = Math.round(baseBurn * (1 + (Number(ac.performance_factor) || 0) / 100))
+                return `${eff.toLocaleString()} kg/h`
+              })()}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] text-muted-foreground">Base</div>
+            <div className="text-xs font-mono mt-0.5 text-muted-foreground">
+              {(ac.aircraft_types as any)?.fuel_burn_rate_kg_per_hour
+                ? `${Number((ac.aircraft_types as any).fuel_burn_rate_kg_per_hour).toLocaleString()} kg/h (${ac.aircraft_types?.icao_type})`
+                : '—'}
+            </div>
+          </div>
+        </div>
+        <a
+          href="/admin/master-database/aircraft-registrations/performance-factor"
+          className="text-[10px] text-primary hover:underline mt-2 inline-block"
+        >
+          Manage in Performance Factor →
+        </a>
       </Section>
 
       <Section title="Status & Location">

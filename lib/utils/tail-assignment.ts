@@ -990,6 +990,16 @@ function findBalancedAircraft(
     stats.totalPenaltyCost += best.softPenalty
   }
 
+  // Record chain break if station mismatch
+  const bestSt = states.get(best.reg)!
+  if (bestSt.lastARR && bestSt.lastARR !== firstFlight.depStation) {
+    chainBreaks.push({
+      flightId: firstFlight.id,
+      prevArr: bestSt.lastARR,
+      nextDep: firstFlight.depStation,
+    })
+  }
+
   // Record non-winners as rejected by score
   for (const c of candidates) {
     if (c.reg === best.reg) continue

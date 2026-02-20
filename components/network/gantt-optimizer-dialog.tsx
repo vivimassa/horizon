@@ -346,10 +346,6 @@ export function GanttOptimizerDialog({
                 : 'Processing result...'}
             </div>
 
-            <p className="text-muted-foreground mt-1" style={{ fontSize: 11 }}>
-              {mipProgress.message}
-            </p>
-
             <div className="text-muted-foreground mt-3" style={{ fontSize: 10 }}>
               {mipElapsed < 60
                 ? `${mipElapsed}s elapsed`
