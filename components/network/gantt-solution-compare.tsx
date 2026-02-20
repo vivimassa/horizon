@@ -1,6 +1,6 @@
 'use client'
 
-import { X, Trash2 } from 'lucide-react'
+import { X, Trash2, Shuffle } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -47,7 +47,6 @@ export interface SolutionSlot {
     tatMode: 'scheduled' | 'minimum'
     familySub: boolean
     saPreset?: string
-    mipPreset?: string
   }
   timestamp: Date
   label: string
@@ -111,39 +110,46 @@ export function GanttSolutionCompare({
       {/* ── Header ── */}
       <div
         className="shrink-0 flex items-center justify-between border-b"
-        style={{ padding: `${s(10)}px ${s(14)}px` }}
+        style={{ padding: `${s(14)}px ${s(20)}px` }}
       >
         <div className="flex items-center gap-2">
-          <span style={{ fontSize: s(13), fontWeight: 600 }}>Solution Comparison</span>
+          <span style={{ fontSize: s(16), fontWeight: 600 }}>Solution Comparison</span>
           <span
             className="text-muted-foreground font-mono"
-            style={{ fontSize: s(9) }}
+            style={{ fontSize: s(11) }}
           >
             {slots.length}/3 slots
           </span>
         </div>
-        <div className="flex items-center" style={{ gap: s(6) }}>
+        <div className="flex items-center" style={{ gap: s(8) }}>
           <button
             onClick={onClearAll}
             className="flex items-center text-muted-foreground hover:text-red-500 transition-colors rounded-md"
-            style={{ padding: `${s(3)}px ${s(8)}px`, gap: s(4), fontSize: s(10) }}
+            style={{ padding: `${s(4)}px ${s(10)}px`, gap: s(5), fontSize: s(12) }}
           >
-            <Trash2 style={{ width: s(12), height: s(12) }} />
+            <Trash2 style={{ width: s(14), height: s(14) }} />
             <span>Clear All</span>
           </button>
           <button
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground transition-colors rounded-md"
-            style={{ padding: s(4) }}
+            style={{ padding: s(5) }}
           >
-            <X style={{ width: s(14), height: s(14) }} />
+            <X style={{ width: s(16), height: s(16) }} />
           </button>
         </div>
       </div>
 
       {/* ── Scrollable Body ── */}
-      <div className="flex-1 overflow-y-auto" style={{ padding: s(14) }}>
-      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(slots.length, 3)}, 1fr)` }}>
+      <div className="flex-1 overflow-y-auto" style={{ padding: s(20) }}>
+      {/* Always 3-column grid; cards are centered when fewer than 3 */}
+      <div
+        className="grid justify-center"
+        style={{
+          gridTemplateColumns: `repeat(3, ${s(370)}px)`,
+          gap: s(10),
+        }}
+      >
         {slots.map(slot => {
           const m = slot.metrics
           const isActive = slot.id === activeSlotId
@@ -159,31 +165,31 @@ export function GanttSolutionCompare({
                 isActive ? 'ring-2 ring-primary/50' : 'hover:bg-muted/30'
               }`}
               style={{
-                border: isActive ? '1.5px solid hsl(var(--primary))' : '1.5px solid var(--border)',
-                borderRadius: s(10),
-                padding: s(10),
+                border: isActive ? '2px solid hsl(var(--primary))' : '1.5px solid hsl(var(--foreground) / 0.15)',
+                borderRadius: s(12),
+                padding: s(16),
                 background: isActive ? 'hsl(var(--primary) / 0.03)' : 'transparent',
               }}
             >
               {/* Delete button */}
               <div
                 className="absolute opacity-0 group-hover:opacity-100 transition-opacity"
-                style={{ top: s(6), right: s(6) }}
+                style={{ top: s(8), right: s(8) }}
               >
                 <span
                   role="button"
                   onClick={(e) => { e.stopPropagation(); onDeleteSlot(slot.id) }}
                   className="text-muted-foreground/50 hover:text-red-500 transition-colors cursor-pointer"
                 >
-                  <Trash2 style={{ width: s(11), height: s(11) }} />
+                  <Trash2 style={{ width: s(13), height: s(13) }} />
                 </span>
               </div>
 
               {/* Card header */}
-              <div className="flex items-center gap-1.5" style={{ marginBottom: s(8) }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: s(6) }}>
                 <span
                   style={{
-                    fontSize: s(12),
+                    fontSize: s(15),
                     fontWeight: 600,
                     color: isActive ? 'hsl(var(--primary))' : 'inherit',
                   }}
@@ -193,30 +199,47 @@ export function GanttSolutionCompare({
                 {isActive && (
                   <span
                     style={{
-                      fontSize: s(7),
+                      fontSize: s(9),
                       fontWeight: 700,
                       textTransform: 'uppercase',
                       letterSpacing: '0.04em',
                       color: 'hsl(var(--primary))',
                       background: 'hsl(var(--primary) / 0.1)',
-                      padding: `${s(1)}px ${s(5)}px`,
-                      borderRadius: s(3),
+                      padding: `${s(2)}px ${s(7)}px`,
+                      borderRadius: s(4),
                     }}
                   >
                     Viewing
                   </span>
                 )}
+                {slot.settings.familySub && (
+                  <span
+                    className="inline-flex items-center"
+                    style={{
+                      fontSize: s(9),
+                      fontWeight: 600,
+                      color: '#F59E0B',
+                      background: 'rgba(245,158,11,0.1)',
+                      padding: `${s(2)}px ${s(7)}px`,
+                      borderRadius: s(4),
+                      gap: s(3),
+                    }}
+                  >
+                    <Shuffle style={{ width: s(10), height: s(10) }} />
+                    Family Sub
+                  </span>
+                )}
               </div>
               <div
                 className="font-mono text-muted-foreground/50"
-                style={{ fontSize: s(8), marginBottom: s(8) }}
+                style={{ fontSize: s(10), marginBottom: s(10) }}
               >
                 {slot.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </div>
 
               {/* ── ASSIGNMENT ── */}
               <SectionLabel s={s}>Assignment</SectionLabel>
-              <div className="grid grid-cols-2" style={{ gap: s(4), marginBottom: s(8) }}>
+              <div className="grid grid-cols-2" style={{ gap: s(6), marginBottom: s(12) }}>
                 <Kpi s={s} label="Assigned" value={`${m.assigned}/${m.totalFlights}`} big />
                 <Kpi
                   s={s}
@@ -238,18 +261,18 @@ export function GanttSolutionCompare({
 
               {/* ── FLEET (daily averages) ── */}
               <SectionLabel s={s}>Fleet (avg/day over {m.numDays}d)</SectionLabel>
-              <div style={{ marginBottom: s(8) }}>
+              <div style={{ marginBottom: s(12) }}>
                 {m.fleetByType.map(ft => (
-                  <div key={ft.icaoType} className="flex items-center" style={{ gap: s(4), marginBottom: s(3) }}>
+                  <div key={ft.icaoType} className="flex items-center" style={{ gap: s(6), marginBottom: s(5) }}>
                     <span
                       className="font-mono font-semibold"
-                      style={{ fontSize: s(9), width: s(28) }}
+                      style={{ fontSize: s(11), width: s(36) }}
                     >
                       {ft.icaoType}
                     </span>
                     <span
                       className="text-muted-foreground"
-                      style={{ fontSize: s(9), width: s(40) }}
+                      style={{ fontSize: s(11), width: s(50) }}
                     >
                       {Math.round(ft.avgDailyUsed)}/{ft.total}
                     </span>
@@ -257,8 +280,8 @@ export function GanttSolutionCompare({
                     <div
                       style={{
                         flex: 1,
-                        height: s(4),
-                        borderRadius: s(2),
+                        height: s(6),
+                        borderRadius: s(3),
                         background: 'hsl(var(--border) / 0.5)',
                         overflow: 'hidden',
                       }}
@@ -267,7 +290,7 @@ export function GanttSolutionCompare({
                         style={{
                           width: `${ft.total > 0 ? Math.min((ft.avgDailyUsed / ft.total) * 100, 100) : 0}%`,
                           height: '100%',
-                          borderRadius: s(2),
+                          borderRadius: s(3),
                           background: 'hsl(var(--primary) / 0.6)',
                           transition: 'width 0.3s',
                         }}
@@ -275,13 +298,13 @@ export function GanttSolutionCompare({
                     </div>
                     <span
                       className="text-muted-foreground font-mono"
-                      style={{ fontSize: s(8), width: s(32), textAlign: 'right' }}
+                      style={{ fontSize: s(10), width: s(40), textAlign: 'right' }}
                     >
                       {ft.avgUtil}h
                     </span>
                   </div>
                 ))}
-                <div className="grid grid-cols-2" style={{ gap: s(4), marginTop: s(5) }}>
+                <div className="grid grid-cols-2" style={{ gap: s(6), marginTop: s(8) }}>
                   <Kpi
                     s={s}
                     label="Peak AC/day"
@@ -311,16 +334,16 @@ export function GanttSolutionCompare({
 
               {/* ── SUBSTITUTION ── */}
               <SectionLabel s={s}>Substitution Impact</SectionLabel>
-              <div style={{ marginBottom: s(8) }}>
+              <div style={{ marginBottom: s(12) }}>
                 {m.downgrades === 0 && m.upgrades === 0 ? (
                   <div
                     className="text-muted-foreground/60 italic"
-                    style={{ fontSize: s(9), marginBottom: s(4) }}
+                    style={{ fontSize: s(11), marginBottom: s(4) }}
                   >
                     No substitutions
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2" style={{ gap: s(4) }}>
+                  <div className="grid grid-cols-2" style={{ gap: s(6) }}>
                     <Kpi
                       s={s}
                       label="Downgrades"
@@ -346,22 +369,22 @@ export function GanttSolutionCompare({
 
               {/* ── EST. DAILY COST ── */}
               <SectionLabel s={s}>Est. Daily Cost</SectionLabel>
-              <div className="grid grid-cols-2" style={{ gap: s(4) }}>
+              <div className="grid grid-cols-2" style={{ gap: s(6) }}>
                 <Kpi s={s} label={`Fuel (${m.fuelTons}t)`} value={fmt$(m.fuelCost)} />
                 <Kpi s={s} label="Operations" value={fmt$(m.opsCost)} />
               </div>
               <div
                 className="flex items-center justify-between"
-                style={{ marginTop: s(6), paddingTop: s(6), borderTop: '1px dashed var(--border)' }}
+                style={{ marginTop: s(8), paddingTop: s(8), borderTop: '1px dashed var(--border)' }}
               >
-                <span className="font-mono font-bold" style={{ fontSize: s(14) }}>
+                <span className="font-mono font-bold" style={{ fontSize: s(18) }}>
                   {fmt$(m.totalCost)}
                 </span>
                 {slots.length > 1 && (
                   <span
                     className="font-mono font-semibold"
                     style={{
-                      fontSize: s(9),
+                      fontSize: s(11),
                       color: isCheapest ? '#22C55E' : '#EF4444',
                     }}
                   >
@@ -378,12 +401,12 @@ export function GanttSolutionCompare({
       {/* ── Footer ── */}
       <div
         className="shrink-0 flex items-center justify-between text-muted-foreground border-t"
-        style={{ padding: `${s(8)}px ${s(14)}px`, fontSize: s(9) }}
+        style={{ padding: `${s(10)}px ${s(20)}px`, fontSize: s(11) }}
       >
         <span className="italic">
           Select a solution then click Assign All to commit
         </span>
-        <span className="font-mono" style={{ fontSize: s(8) }}>
+        <span className="font-mono" style={{ fontSize: s(10) }}>
           Cost estimates based on operator rates &middot; Fuel at ${fuelPrice.toFixed(2)}/kg
         </span>
       </div>
@@ -398,11 +421,11 @@ function SectionLabel({ s, children }: { s: (n: number) => number; children: Rea
     <div
       className="text-muted-foreground"
       style={{
-        fontSize: s(7),
+        fontSize: s(9),
         fontWeight: 700,
         textTransform: 'uppercase',
         letterSpacing: '0.06em',
-        marginBottom: s(4),
+        marginBottom: s(5),
       }}
     >
       {children}
@@ -432,18 +455,18 @@ function Kpi({
   if (inline) {
     return (
       <span className="flex items-center gap-1">
-        <span className="text-muted-foreground" style={{ fontSize: s(9) }}>{label}:</span>
-        <span className="font-mono font-semibold" style={{ fontSize: s(10), color }}>{value}</span>
+        <span className="text-muted-foreground" style={{ fontSize: s(11) }}>{label}:</span>
+        <span className="font-mono font-semibold" style={{ fontSize: s(12), color }}>{value}</span>
       </span>
     )
   }
 
   return (
     <div>
-      <div className="text-muted-foreground" style={{ fontSize: s(9) }}>{label}</div>
+      <div className="text-muted-foreground" style={{ fontSize: s(11) }}>{label}</div>
       <div
         className="font-mono font-semibold"
-        style={{ fontSize: big ? s(13) : s(10), fontWeight: big ? 700 : 600, color }}
+        style={{ fontSize: big ? s(16) : s(13), fontWeight: big ? 700 : 600, color }}
       >
         {value}
       </div>

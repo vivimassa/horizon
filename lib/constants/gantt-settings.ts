@@ -39,6 +39,7 @@ export interface GanttSettingsData {
 
   // Optimizer
   allowFamilySub: boolean
+  useMinimumTat: boolean
 
   // AC type display order (empty = alphabetical)
   acTypeOrder: string[]
@@ -96,6 +97,7 @@ export const DEFAULT_GANTT_SETTINGS: GanttSettingsData = {
   },
 
   allowFamilySub: false,
+  useMinimumTat: false,
 
   acTypeOrder: [],
 

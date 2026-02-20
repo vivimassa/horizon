@@ -40,7 +40,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { MiniBuilderModal } from './gantt-mini-builder'
 import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult, type AircraftTypeTAT } from '@/lib/utils/tail-assignment'
 import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } from '@/lib/utils/tail-assignment-sa'
-import { solveMIP } from '@/app/actions/mip-solver'
+import { solveMIP, solveMIPAuto } from '@/app/actions/mip-solver'
 
 // MIP types (previously from tail-assignment-mip.ts, now using Cloud Run solver)
 interface MIPProgress { phase: 'building' | 'solving' | 'extracting'; message: string; elapsedMs: number }
@@ -51,11 +51,6 @@ interface MIPResult extends TailAssignmentResult {
     elapsedMs: number; timeLimitSec: number; gap?: number; message?: string
   }
 }
-const MIP_PRESETS = {
-  quick:  { timeLimitSec: 15,  mipGap: 0.05 },
-  normal: { timeLimitSec: 45,  mipGap: 0.02 },
-  deep:   { timeLimitSec: 120, mipGap: 0.005 },
-} as const
 
 import { useGanttSettings } from '@/lib/hooks/use-gantt-settings'
 import { type GanttSettingsData, DEFAULT_GANTT_SETTINGS, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/gantt-settings'
@@ -1554,22 +1549,22 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   }, [expandedFlights, registrations, aircraftTypes, seatingConfigs, ganttSettings.costAssumptions])
 
   // ─── Optimizer handler ─────────────────────────────────────────────
-  const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep', mipPreset?: 'quick' | 'normal' | 'deep') => {
+  const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep') => {
     if (method === 'optimal') {
       // ── Optimal Solver via Cloud Run ──
       preMipStateRef.current = { method: assignmentMethod, mip: mipResult, ai: aiResult }
       setOptimizerRunning(true)
       setMipProgress({ phase: 'building', message: 'Preparing payload...', elapsedMs: 0 })
 
-      const config = MIP_PRESETS[mipPreset || 'normal']
+      const config = { timeLimitSec: 120, mipGap: 0.02 }
 
       // Build payload for the remote solver
       const mipFlights = expandedFlights.map(f => ({
         id: f.id,
         depStation: f.depStation,
         arrStation: f.arrStation,
-        startMs: (f.dayOffset * 1440 + f.stdMinutes) * 60000,
-        endMs: (f.dayOffset * 1440 + f.staMinutes) * 60000,
+        startMs: (Math.floor((f.date.getTime() - startDate.getTime()) / 86400000) * 1440 + f.stdMinutes) * 60000,
+        endMs: (Math.floor((f.date.getTime() - startDate.getTime()) / 86400000) * 1440 + f.staMinutes) * 60000,
         icaoType: f.aircraftTypeIcao || '',
         pinned: !!f.aircraftReg,
         pinnedReg: f.aircraftReg || null,
@@ -1587,7 +1582,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
       const tatObj: Record<string, number> = {}
       for (const t of aircraftTypes) {
-        tatObj[t.icao_type] = t.default_tat_minutes ?? 30
+        if (ganttSettings.useMinimumTat ?? false) {
+          tatObj[t.icao_type] = t.tat_min_dd_minutes ?? t.default_tat_minutes ?? 30
+        } else {
+          tatObj[t.icao_type] = t.tat_dom_dom_minutes ?? t.default_tat_minutes ?? 30
+        }
       }
 
       const familyObj: Record<string, string> = {}
@@ -1598,7 +1597,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       try {
         setMipProgress({ phase: 'solving', message: 'Solving optimization...', elapsedMs: 0 })
 
-        const solverResponse = await solveMIP({
+        const solverResponse = await solveMIPAuto({
           flights: mipFlights,
           aircraft: mipAircraft,
           tatMinutes: tatObj,
@@ -1653,9 +1652,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         setAssignmentsEnabled(true)
         preMipStateRef.current = null
         storeSolution(result, `Optimal (${result.mip.status})`, {
-          tatMode: 'scheduled',
+          tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
           familySub: ganttSettings.allowFamilySub ?? false,
-          mipPreset: mipPreset || 'normal',
         })
         setLastOptRun({
           method: `Optimal Solver (${result.mip.status})`,
@@ -1704,7 +1702,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         expandedFlights, assignableAircraft, tatByType, 'minimize',
         scheduleRules, aircraftFamilies,
         ganttSettings.allowFamilySub ?? false,
-        new Map(aircraftTypes.filter(t => t.family).map(t => [t.icao_type, t.family!]))
+        new Map(aircraftTypes.filter(t => t.family).map(t => [t.icao_type, t.family!])),
+        ganttSettings.useMinimumTat ?? false
       )
 
       // Run SA
@@ -1748,7 +1747,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         setAssignmentMethod('ai')
         setAssignmentsEnabled(true)
         storeSolution(result, `AI ${aiPreset || 'normal'}`, {
-          tatMode: 'minimum',
+          tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
           familySub: ganttSettings.allowFamilySub ?? false,
           saPreset: aiPreset || 'normal',
         })
@@ -1797,14 +1796,15 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         expandedFlights, greedyAC, greedyTat,
         method === 'good' ? 'balance' : 'minimize',
         scheduleRules, aircraftFamilies,
-        ganttSettings.allowFamilySub ?? false, greedyFamilyMap
+        ganttSettings.allowFamilySub ?? false, greedyFamilyMap,
+        ganttSettings.useMinimumTat ?? false
       )
       storeSolution(greedyResult, label, {
-        tatMode: 'scheduled',
+        tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
         familySub: ganttSettings.allowFamilySub ?? false,
       })
     }
-  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, storeSolution])
+  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat, storeSolution])
 
   const handleCancelAi = useCallback(() => {
     aiAbortRef.current?.abort()
@@ -1876,9 +1876,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       expandedFlights, assignableAircraft, tatByType,
       assignmentMethod === 'good' ? 'balance' : 'minimize',
       scheduleRules, aircraftFamilies,
-      ganttSettings.allowFamilySub ?? false, typeFamilyMap
+      ganttSettings.allowFamilySub ?? false, typeFamilyMap,
+      ganttSettings.useMinimumTat ?? false
     )
-  }, [assignmentsEnabled, expandedFlights, registrations, aircraftTypes, assignmentMethod, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, aiResult, mipResult])
+  }, [assignmentsEnabled, expandedFlights, registrations, aircraftTypes, assignmentMethod, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat, aiResult, mipResult])
 
   /** The result currently displayed on the Gantt — either from a selected slot or the live engine. */
   const activeResult = useMemo<TailAssignmentResult>(() => {
@@ -3733,32 +3734,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         tabIndex={-1}
         onChange={handleCalendarPick}
       />
-      <div className="flex items-center gap-1">
-        <span style={{ fontSize: s(10), fontWeight: 600, color: 'var(--muted-foreground)' }}>From</span>
-        <input
-          type="text"
-          placeholder="DD/MM/YYYY"
-          value={fromText}
-          onChange={(e) => setFromText(e.target.value)}
-          onBlur={handleFromBlur}
-          onKeyDown={(e) => { if (e.key === 'Enter') { handleFromBlur(); (e.target as HTMLInputElement).blur() } }}
-          className="bg-background border border-border rounded-md text-foreground tabular-nums outline-none focus:ring-1 focus:ring-foreground/20 transition-all duration-200 placeholder:text-muted-foreground/40 placeholder:font-normal"
-          style={{ width: s(110), height: s(26), fontSize: s(11), fontWeight: 500, textAlign: 'center', padding: `0 ${s(6)}px`, borderRadius: s(6) }}
-        />
-      </div>
-      <div className="flex items-center gap-1">
-        <span style={{ fontSize: s(10), fontWeight: 600, color: 'var(--muted-foreground)' }}>To</span>
-        <input
-          type="text"
-          placeholder="DD/MM/YYYY"
-          value={toText}
-          onChange={(e) => setToText(e.target.value)}
-          onBlur={handleToBlur}
-          onKeyDown={(e) => { if (e.key === 'Enter') { handleToBlur(); (e.target as HTMLInputElement).blur() } }}
-          className="bg-background border border-border rounded-md text-foreground tabular-nums outline-none focus:ring-1 focus:ring-foreground/20 transition-all duration-200 placeholder:text-muted-foreground/40 placeholder:font-normal"
-          style={{ width: s(110), height: s(26), fontSize: s(11), fontWeight: 500, textAlign: 'center', padding: `0 ${s(6)}px`, borderRadius: s(6) }}
-        />
-      </div>
+      <span style={{ fontSize: s(10), fontWeight: 600, color: 'var(--muted-foreground)' }}>Period</span>
+      <input
+        type="text"
+        placeholder="DD/MM/YYYY"
+        value={fromText}
+        onChange={(e) => setFromText(e.target.value)}
+        onBlur={handleFromBlur}
+        onKeyDown={(e) => { if (e.key === 'Enter') { handleFromBlur(); (e.target as HTMLInputElement).blur() } }}
+        className="bg-background border border-border rounded-md text-foreground tabular-nums outline-none focus:ring-1 focus:ring-foreground/20 transition-all duration-200 placeholder:text-muted-foreground/40 placeholder:font-normal"
+        style={{ width: s(86), height: s(26), fontSize: s(11), fontWeight: 500, textAlign: 'center', padding: `0 ${s(4)}px`, borderRadius: s(6) }}
+      />
       <button
         onClick={() => { pickTargetRef.current = 'from'; calendarRef.current?.showPicker?.() }}
         className="flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
@@ -3767,6 +3753,16 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       >
         <Calendar style={{ width: s(14), height: s(14) }} />
       </button>
+      <input
+        type="text"
+        placeholder="DD/MM/YYYY"
+        value={toText}
+        onChange={(e) => setToText(e.target.value)}
+        onBlur={handleToBlur}
+        onKeyDown={(e) => { if (e.key === 'Enter') { handleToBlur(); (e.target as HTMLInputElement).blur() } }}
+        className="bg-background border border-border rounded-md text-foreground tabular-nums outline-none focus:ring-1 focus:ring-foreground/20 transition-all duration-200 placeholder:text-muted-foreground/40 placeholder:font-normal"
+        style={{ width: s(86), height: s(26), fontSize: s(11), fontWeight: 500, textAlign: 'center', padding: `0 ${s(4)}px`, borderRadius: s(6) }}
+      />
       <button
         onClick={() => {
           const now = new Date()
@@ -4030,7 +4026,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                 border: '1.5px solid hsl(var(--primary))', background: 'transparent', color: 'hsl(var(--primary))',
               }}
             >
-              ✈ Optimizer
+              Optimizer
             </button>
             {/* ── Compare ── */}
             <button
@@ -7081,7 +7077,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" />
             <div
               className="relative z-10 w-full mx-auto flex flex-col"
-              style={{ maxWidth: s(900), maxHeight: '92%', margin: s(16) }}
+              style={{ maxWidth: s(1200), height: '100%', padding: `${s(8)}px ${s(16)}px` }}
             >
               <GanttSolutionCompare
                 slots={solutionSlots}
@@ -7403,6 +7399,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         ruleCount={scheduleRules.length}
         allowFamilySub={ganttSettings.allowFamilySub ?? false}
         onAllowFamilySubChange={(val) => updateGanttSettings({ allowFamilySub: val })}
+        useMinimumTat={ganttSettings.useMinimumTat ?? false}
+        onUseMinimumTatChange={(val) => updateGanttSettings({ useMinimumTat: val })}
         aiProgress={aiProgress}
         aiResult={aiResult}
         onCancelAi={handleCancelAi}
@@ -7411,6 +7409,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         mipResult={mipResult}
         onCancelMip={handleCancelMip}
         accentColor={ganttSettings.colorAssignment?.assigned ?? '#3B82F6'}
+        container={dialogContainer}
       />
 
       {/* ── Fixed-position tooltip (rendered outside scroll containers) ── */}

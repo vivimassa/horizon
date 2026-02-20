@@ -58,6 +58,7 @@ function mergeWithDefaults(partial: Record<string, unknown>): GanttSettingsData 
     acTypeOrder: Array.isArray(partial.acTypeOrder) ? partial.acTypeOrder as string[] : [],
 
     allowFamilySub: typeof partial.allowFamilySub === 'boolean' ? partial.allowFamilySub : d.allowFamilySub,
+    useMinimumTat: typeof partial.useMinimumTat === 'boolean' ? partial.useMinimumTat : d.useMinimumTat,
 
     costAssumptions: { ...d.costAssumptions, ...(partial.costAssumptions as object | undefined) },
 

@@ -42,11 +42,6 @@ import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } fro
 import { solveMIP } from '@/app/actions/mip-solver'
 import type { MIPProgress, MIPResult } from '@/components/network/gantt-optimizer-dialog'
 
-const MIP_PRESETS = {
-  quick:  { timeLimitSec: 15,  mipGap: 0.05 },
-  normal: { timeLimitSec: 45,  mipGap: 0.02 },
-  deep:   { timeLimitSec: 120, mipGap: 0.005 },
-} as const
 import { useMovementSettings } from '@/lib/hooks/use-movement-settings'
 import { type MovementSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/movement-settings'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
@@ -1281,14 +1276,14 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   }, [registrations, aircraftTypes])
 
   // ─── Optimizer handler ─────────────────────────────────────────────
-  const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep', mipPreset?: 'quick' | 'normal' | 'deep') => {
+  const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep') => {
     if (method === 'optimal') {
       // ── Optimal Solver via Cloud Run ──
       preMipStateRef.current = { method: assignmentMethod, mip: mipResult, ai: aiResult }
       setOptimizerRunning(true)
       setMipProgress({ phase: 'building', message: 'Preparing payload...', elapsedMs: 0 })
 
-      const config = MIP_PRESETS[mipPreset || 'normal']
+      const config = { timeLimitSec: 120, mipGap: 0.02 }
 
       const mipFlights = expandedFlights.map(f => ({
         id: f.id,
@@ -3035,32 +3030,17 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         tabIndex={-1}
         onChange={handleCalendarPick}
       />
-      <div className="flex items-center gap-1">
-        <span className="text-[10px] font-semibold text-muted-foreground">From</span>
-        <input
-          type="text"
-          placeholder="DD/MM/YYYY"
-          value={fromText}
-          onChange={(e) => setFromText(e.target.value)}
-          onBlur={handleFromBlur}
-          onKeyDown={(e) => { if (e.key === 'Enter') { handleFromBlur(); (e.target as HTMLInputElement).blur() } }}
-          className="bg-background border border-border rounded-md text-[11px] font-medium text-foreground tabular-nums text-center outline-none focus:ring-1 focus:ring-foreground/20 transition-colors placeholder:text-muted-foreground/40 placeholder:font-normal"
-          style={{ width: 110, height: 26, padding: '0 6px', borderRadius: 6 }}
-        />
-      </div>
-      <div className="flex items-center gap-1">
-        <span className="text-[10px] font-semibold text-muted-foreground">To</span>
-        <input
-          type="text"
-          placeholder="DD/MM/YYYY"
-          value={toText}
-          onChange={(e) => setToText(e.target.value)}
-          onBlur={handleToBlur}
-          onKeyDown={(e) => { if (e.key === 'Enter') { handleToBlur(); (e.target as HTMLInputElement).blur() } }}
-          className="bg-background border border-border rounded-md text-[11px] font-medium text-foreground tabular-nums text-center outline-none focus:ring-1 focus:ring-foreground/20 transition-colors placeholder:text-muted-foreground/40 placeholder:font-normal"
-          style={{ width: 110, height: 26, padding: '0 6px', borderRadius: 6 }}
-        />
-      </div>
+      <span className="text-[10px] font-semibold text-muted-foreground">Period</span>
+      <input
+        type="text"
+        placeholder="DD/MM/YYYY"
+        value={fromText}
+        onChange={(e) => setFromText(e.target.value)}
+        onBlur={handleFromBlur}
+        onKeyDown={(e) => { if (e.key === 'Enter') { handleFromBlur(); (e.target as HTMLInputElement).blur() } }}
+        className="bg-background border border-border rounded-md text-[11px] font-medium text-foreground tabular-nums text-center outline-none focus:ring-1 focus:ring-foreground/20 transition-colors placeholder:text-muted-foreground/40 placeholder:font-normal"
+        style={{ width: 86, height: 26, padding: '0 4px', borderRadius: 6 }}
+      />
       <button
         onClick={() => { pickTargetRef.current = 'from'; calendarRef.current?.showPicker?.() }}
         className="flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
@@ -3069,6 +3049,16 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       >
         <Calendar style={{ width: 14, height: 14 }} />
       </button>
+      <input
+        type="text"
+        placeholder="DD/MM/YYYY"
+        value={toText}
+        onChange={(e) => setToText(e.target.value)}
+        onBlur={handleToBlur}
+        onKeyDown={(e) => { if (e.key === 'Enter') { handleToBlur(); (e.target as HTMLInputElement).blur() } }}
+        className="bg-background border border-border rounded-md text-[11px] font-medium text-foreground tabular-nums text-center outline-none focus:ring-1 focus:ring-foreground/20 transition-colors placeholder:text-muted-foreground/40 placeholder:font-normal"
+        style={{ width: 86, height: 26, padding: '0 4px', borderRadius: 6 }}
+      />
       <button
         onClick={handleGo}
         disabled={loadingPhase !== 'idle' && loadingPhase !== 'done'}

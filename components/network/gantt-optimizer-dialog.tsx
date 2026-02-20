@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { X, SlidersHorizontal, Loader2, ChevronRight, Sparkles, Check } from 'lucide-react'
+import { X, SlidersHorizontal, Loader2, ChevronRight, Check } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
 import type { SAProgress, SAResult } from '@/lib/utils/tail-assignment-sa'
@@ -31,7 +31,7 @@ export type OptimizerMethod = 'greedy' | 'good' | 'ai' | 'optimal'
 export interface GanttOptimizerDialogProps {
   open: boolean
   onClose: () => void
-  onRunComplete: (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep', mipPreset?: 'quick' | 'normal' | 'deep') => void
+  onRunComplete: (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep') => void
   currentMethod: OptimizerMethod
   lastRun: { method: string; time: Date } | null
   running: boolean
@@ -46,6 +46,9 @@ export interface GanttOptimizerDialogProps {
   mipResult?: MIPResult | null
   onCancelMip?: () => void
   accentColor?: string
+  container?: HTMLElement | null
+  useMinimumTat?: boolean
+  onUseMinimumTatChange?: (val: boolean) => void
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -168,11 +171,13 @@ export function GanttOptimizerDialog({
   mipResult,
   onCancelMip,
   accentColor = '#3B82F6',
+  container,
+  useMinimumTat,
+  onUseMinimumTatChange,
 }: GanttOptimizerDialogProps) {
   const router = useRouter()
   const [selectedMethod, setSelectedMethod] = useState<OptimizerMethod>(currentMethod)
   const [aiPreset, setAiPreset] = useState<'quick' | 'normal' | 'deep'>('normal')
-  const [mipPreset, setMipPreset] = useState<'quick' | 'normal' | 'deep'>('normal')
 
   // Live elapsed timer for MIP overlay
   const mipStartRef = useRef<number>(0)
@@ -206,9 +211,8 @@ export function GanttOptimizerDialog({
     onRunComplete(
       selectedMethod,
       selectedMethod === 'ai' ? aiPreset : undefined,
-      selectedMethod === 'optimal' ? mipPreset : undefined,
     )
-  }, [selectedMethod, aiPreset, mipPreset, onRunComplete])
+  }, [selectedMethod, aiPreset, onRunComplete])
 
   const CIRCUMFERENCE = 2 * Math.PI * 42
 
@@ -217,8 +221,9 @@ export function GanttOptimizerDialog({
       <DialogContent
         className="glass border shadow-lg p-0 gap-0"
         hideClose
+        container={container}
         style={{
-          width: 560,
+          width: 640,
           maxWidth: '95vw',
           borderRadius: 16,
           overflow: 'hidden',
@@ -297,9 +302,8 @@ export function GanttOptimizerDialog({
             className="absolute inset-0 z-10 flex flex-col items-center justify-center px-8"
             style={{ background: 'hsl(var(--background) / 0.95)', borderRadius: 16 }}
           >
-            {/* Pulsing logo */}
+            {/* Pulsing logo — keep exactly as-is */}
             <div className="relative mb-6" style={{ width: 200 }}>
-              {/* Glow behind logo */}
               <div
                 style={{
                   position: 'absolute',
@@ -309,7 +313,6 @@ export function GanttOptimizerDialog({
                   animation: 'mip-logo-glow 3s ease-in-out infinite',
                 }}
               />
-              {/* Logo tinted with accent color via CSS mask */}
               <img
                 src="/horizon-watermark.png"
                 alt=""
@@ -337,21 +340,84 @@ export function GanttOptimizerDialog({
                   0%, 100% { opacity: 0.3; transform: scale(0.9); }
                   50% { opacity: 0.7; transform: scale(1.1); }
                 }
+                @keyframes solver-msg-flash {
+                  0% { opacity: 0; transform: translateX(30px); filter: blur(4px); }
+                  8% { opacity: 1; transform: translateX(0); filter: blur(0); }
+                  88% { opacity: 1; transform: translateX(0); filter: blur(0); }
+                  100% { opacity: 0; transform: translateX(-30px); filter: blur(4px); }
+                }
               `}</style>
             </div>
 
+            {/* Phase text */}
             <div className="font-medium" style={{ fontSize: 14 }}>
-              {mipProgress.phase === 'building' ? 'Sending to solver...'
-                : mipProgress.phase === 'solving' ? 'Solving optimization...'
+              {mipProgress.phase === 'building' ? 'Preparing optimization...'
+                : mipProgress.phase === 'solving' ? 'Finding optimal assignment...'
                 : 'Processing result...'}
             </div>
 
+            {/* Sub-text with rotating messages */}
+            <div
+              key={mipProgress.phase === 'solving' ? Math.floor(mipElapsed / 4) : mipProgress.phase}
+              className="text-muted-foreground mt-2"
+              style={{
+                fontSize: 11,
+                animation: mipProgress.phase === 'solving' ? 'solver-msg-flash 4s ease-out both' : undefined,
+              }}
+            >
+              {mipProgress.phase === 'solving'
+                ? (() => {
+                    const messages = [
+                      'Decomposing by aircraft type...',
+                      'Evaluating chain continuity...',
+                      'Minimizing repositioning...',
+                      'Checking overlap constraints...',
+                      'Optimizing fleet utilization...',
+                      'Reducing overflow flights...',
+                      'Balancing daily assignments...',
+                    ]
+                    return messages[Math.floor(mipElapsed / 4) % messages.length]
+                  })()
+                : mipProgress.phase === 'building' ? 'Analyzing schedule structure...'
+                : 'Almost there...'}
+            </div>
+
+            {/* Progress bar */}
+            <div style={{ width: '60%', marginTop: 20 }}>
+              <div
+                style={{
+                  height: 4,
+                  borderRadius: 2,
+                  background: 'hsl(var(--border))',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    borderRadius: 2,
+                    background: accentColor,
+                    transition: 'width 1s ease-out',
+                    width: (() => {
+                      if (mipProgress.phase === 'building') return '5%'
+                      if (mipProgress.phase === 'extracting') return '100%'
+                      // Solving: asymptotic approach to 95%
+                      const pct = Math.min(95, 95 * (1 - Math.exp(-mipElapsed / 40)))
+                      return `${pct}%`
+                    })(),
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Elapsed time */}
             <div className="text-muted-foreground mt-3" style={{ fontSize: 10 }}>
               {mipElapsed < 60
                 ? `${mipElapsed}s elapsed`
                 : `${Math.floor(mipElapsed / 60)}m ${mipElapsed % 60}s elapsed`}
             </div>
 
+            {/* Cancel */}
             {onCancelMip && (
               <button
                 type="button"
@@ -419,6 +485,23 @@ export function GanttOptimizerDialog({
               <Switch
                 checked={allowFamilySub ?? false}
                 onCheckedChange={(val) => onAllowFamilySubChange?.(val)}
+              />
+            </label>
+
+            <label
+              className="flex items-center justify-between p-3 rounded-[10px] border border-border cursor-pointer hover:bg-muted/30 transition-colors"
+            >
+              <div className="flex-1 min-w-0 mr-3">
+                <div style={{ fontSize: 13, fontWeight: 500 }}>
+                  Use minimum turnaround time
+                </div>
+                <p style={{ fontSize: 11 }} className="text-muted-foreground mt-0.5">
+                  Use operational minimum TAT instead of scheduled TAT. Shorter turnarounds may allow tighter rotations but reduce ground buffer.
+                </p>
+              </div>
+              <Switch
+                checked={useMinimumTat ?? false}
+                onCheckedChange={(val) => onUseMinimumTatChange?.(val)}
               />
             </label>
           </div>
@@ -516,44 +599,6 @@ export function GanttOptimizerDialog({
               </div>
             )}
 
-            {/* Time limit selector (Optimal only) */}
-            {selectedMethod === 'optimal' && (
-              <div className="mt-3 ml-1">
-                <span
-                  className="text-muted-foreground block mb-2"
-                  style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}
-                >
-                  Solver Time Limit
-                </span>
-                <div className="flex gap-1.5">
-                  {([
-                    { key: 'quick' as const, label: '15 sec', desc: 'Good solution' },
-                    { key: 'normal' as const, label: '45 sec', desc: 'Near-optimal' },
-                    { key: 'deep' as const, label: '2 min', desc: 'Provably optimal' },
-                  ]).map(preset => (
-                    <button
-                      key={preset.key}
-                      type="button"
-                      onClick={() => setMipPreset(preset.key)}
-                      className="flex-1 py-2 rounded-lg border text-center transition-colors"
-                      style={{
-                        borderColor: mipPreset === preset.key ? 'hsl(var(--primary))' : 'var(--border)',
-                        background: mipPreset === preset.key ? 'hsl(var(--primary) / 0.05)' : 'transparent',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (mipPreset !== preset.key) e.currentTarget.style.borderColor = 'var(--muted-foreground)'
-                      }}
-                      onMouseLeave={(e) => {
-                        if (mipPreset !== preset.key) e.currentTarget.style.borderColor = 'var(--border)'
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 500 }}>{preset.label}</div>
-                      <div style={{ fontSize: 9 }} className="text-muted-foreground">{preset.desc}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Divider */}
@@ -725,17 +770,6 @@ export function GanttOptimizerDialog({
               : 'No assignment run yet'}
           </span>
           <div className="flex items-center gap-2">
-            {lastRun && onAskAdvisor && (
-              <button
-                type="button"
-                onClick={() => { onClose(); onAskAdvisor() }}
-                className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                style={{ height: 34, padding: '0 12px', fontSize: 11, fontWeight: 500, borderRadius: 8 }}
-              >
-                <Sparkles style={{ width: 13, height: 13 }} />
-                AI Advisor
-              </button>
-            )}
             <button
               type="button"
               onClick={onClose}
