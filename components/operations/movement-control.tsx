@@ -32,14 +32,21 @@ import {
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
 import { AircraftType, AircraftSeatingConfig, CabinEntry, Airport, FlightServiceType } from '@/types/database'
-import { getMovementFlights, MovementFlight, getRouteWithLegs, excludeFlightDates, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, swapFlightAssignments, type MovementRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/movement-control'
+import { getMovementFlights, MovementFlight, getRouteWithLegs, excludeFlightDates, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, swapFlightAssignments, bulkAssignFlightsToAircraft, bulkUnassignFlightsTail, type MovementRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/movement-control'
 import { toast } from '@/components/ui/visionos-toast'
 import { friendlyError } from '@/lib/utils/error-handler'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { MiniBuilderModal } from './movement-mini-builder'
-import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult } from '@/lib/utils/ops-tail-assignment'
+import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult, type AircraftTypeTAT } from '@/lib/utils/ops-tail-assignment'
 import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } from '@/lib/utils/ops-tail-assignment-sa'
-import { runMIPSolver, MIP_PRESETS, type MIPProgress, type MIPResult } from '@/lib/utils/ops-tail-assignment-mip'
+import { solveMIP } from '@/app/actions/mip-solver'
+import type { MIPProgress, MIPResult } from '@/components/network/gantt-optimizer-dialog'
+
+const MIP_PRESETS = {
+  quick:  { timeLimitSec: 15,  mipGap: 0.05 },
+  normal: { timeLimitSec: 45,  mipGap: 0.02 },
+  deep:   { timeLimitSec: 120, mipGap: 0.005 },
+} as const
 import { useMovementSettings } from '@/lib/hooks/use-movement-settings'
 import { type MovementSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/movement-settings'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
@@ -453,6 +460,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const aiAbortRef = useRef<AbortController | null>(null)
   const [mipProgress, setMipProgress] = useState<MIPProgress | null>(null)
   const [mipResult, setMipResult] = useState<MIPResult | null>(null)
+  const preMipStateRef = useRef<{ method: OptimizerMethod; mip: MIPResult | null; ai: SAResult | null } | null>(null)
 
   // ─── AI Advisor state ─────────────────────────────────────────────
   const [advisorLoading, setAdvisorLoading] = useState(false)
@@ -607,6 +615,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
   // Assign All / De-assign All toggle
   const [assignmentsEnabled, setAssignmentsEnabled] = useState(true)
+  const [bulkAssigning, setBulkAssigning] = useState(false)
 
   // Collapsible right panel + pin state (hydrated from localStorage after mount)
   const [panelPinned, setPanelPinned] = useState(false)
@@ -1009,6 +1018,19 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     }
   }, [periodCommitted, committedFrom, committedTo, refreshFlights])
 
+  /** Re-fetch only tail assignments for the committed period (lighter than full refreshFlights). */
+  const refreshTailAssignments = useCallback(async () => {
+    if (!committedFrom || !committedTo) return
+    const rangeEnd = formatISO(addDays(parseDate(committedTo), 1))
+    const ta = await getFlightTailAssignments(committedFrom, rangeEnd)
+    const taMap = new Map<string, string>()
+    for (const row of ta) {
+      taMap.set(`${row.scheduledFlightId}__${row.flightDate}`, row.aircraftReg)
+    }
+    pendingOpsRef.current = { adds: new Map(), deletes: new Set() }
+    setTailAssignments(taMap)
+  }, [committedFrom, committedTo])
+
   const handleGo = useCallback(async () => {
     if (!periodFrom && !periodTo) { toast.warning('Please select a date range first'); return }
     if (!periodFrom) { toast.warning('Please select a From date'); return }
@@ -1261,65 +1283,113 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   // ─── Optimizer handler ─────────────────────────────────────────────
   const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep', mipPreset?: 'quick' | 'normal' | 'deep') => {
     if (method === 'optimal') {
-      // ── Optimal Solver flow ──
+      // ── Optimal Solver via Cloud Run ──
+      preMipStateRef.current = { method: assignmentMethod, mip: mipResult, ai: aiResult }
       setOptimizerRunning(true)
-      setMipProgress(null)
-      setMipResult(null)
-      setAiResult(null)
-
-      const assignableAircraft: AssignableAircraft[] = registrations
-        .filter(r => r.status === 'active' || r.status === 'operational')
-        .map(r => ({
-          registration: r.registration,
-          icaoType: r.aircraft_types?.icao_type || 'UNKN',
-          homeBase: r.home_base?.iata_code || null,
-        }))
-
-      const defaultTat = new Map<string, number>()
-      for (const t of aircraftTypes) {
-        defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
-      }
-
-      const regFamilyMap = new Map<string, string>()
-      for (const t of aircraftTypes) {
-        if (t.family) {
-          for (const r of registrations) {
-            if (r.aircraft_types?.icao_type === t.icao_type) {
-              regFamilyMap.set(r.registration, t.family)
-            }
-          }
-        }
-      }
-
-      const icaoFamilyMap = new Map<string, string>()
-      for (const t of aircraftTypes) {
-        if (t.family) icaoFamilyMap.set(t.icao_type, t.family)
-      }
+      setMipProgress({ phase: 'building', message: 'Preparing payload...', elapsedMs: 0 })
 
       const config = MIP_PRESETS[mipPreset || 'normal']
 
+      const mipFlights = expandedFlights.map(f => ({
+        id: f.id,
+        depStation: f.depStation,
+        arrStation: f.arrStation,
+        startMs: (f.dayOffset * 1440 + f.stdMinutes) * 60000,
+        endMs: (f.dayOffset * 1440 + f.staMinutes) * 60000,
+        icaoType: f.aircraftTypeIcao || '',
+        pinned: !!f.aircraftReg,
+        pinnedReg: f.aircraftReg || null,
+        routeType: f.routeType || null,
+      }))
+
+      const mipAircraft = registrations
+        .filter(r => r.status === 'active' || r.status === 'operational')
+        .map((r, i) => ({
+          index: i,
+          registration: r.registration,
+          icaoType: r.aircraft_types?.icao_type || 'UNKN',
+          family: aircraftTypes.find(t => t.icao_type === r.aircraft_types?.icao_type)?.family || null,
+        }))
+
+      const tatObj: Record<string, number> = {}
+      for (const t of aircraftTypes) {
+        tatObj[t.icao_type] = t.default_tat_minutes ?? 30
+      }
+
+      const familyObj: Record<string, string> = {}
+      for (const t of aircraftTypes) {
+        if (t.family) familyObj[t.icao_type] = t.family
+      }
+
       try {
-        const result = await runMIPSolver(
-          expandedFlights,
-          assignableAircraft,
-          defaultTat,
-          config,
-          (progress) => setMipProgress(progress),
-          scheduleRules as any[],
-          regFamilyMap,
-          movementSettings.allowFamilySub ?? false,
-          icaoFamilyMap,
-        )
+        setMipProgress({ phase: 'solving', message: `Solving MIP (limit: ${config.timeLimitSec}s)...`, elapsedMs: 0 })
+
+        const solverResponse = await solveMIP({
+          flights: mipFlights,
+          aircraft: mipAircraft,
+          tatMinutes: tatObj,
+          timeLimitSec: config.timeLimitSec,
+          mipGap: config.mipGap,
+          allowFamilySub: movementSettings.allowFamilySub ?? false,
+          familyMap: familyObj,
+        })
+
+        setMipProgress({ phase: 'extracting', message: 'Processing result...', elapsedMs: 0 })
+
+        const mipAssignments = new Map<string, string>(Object.entries(solverResponse.assignments))
+        const mipOverflow = expandedFlights.filter(f => solverResponse.overflow.includes(f.id))
+        const mipChainBreaks = (solverResponse.chainBreaks || []).map(cb => ({
+          flightId: cb.flightId,
+          prevArr: cb.prevArr,
+          nextDep: cb.nextDep,
+        }))
+
+        const result: MIPResult = {
+          assignments: mipAssignments,
+          overflow: mipOverflow,
+          chainBreaks: mipChainBreaks,
+          ruleViolations: new Map(),
+          rejections: new Map(),
+          summary: {
+            totalFlights: expandedFlights.length,
+            assigned: mipAssignments.size,
+            overflowed: mipOverflow.length,
+            hardRulesEnforced: 0,
+            softRulesBent: 0,
+            totalPenaltyCost: 0,
+          },
+          mip: {
+            status: solverResponse.status === 'Optimal' ? 'Optimal'
+              : solverResponse.status === 'Feasible' ? 'Feasible'
+              : solverResponse.status === 'Infeasible' ? 'Infeasible'
+              : 'Error',
+            objectiveValue: solverResponse.objectiveValue,
+            totalVariables: solverResponse.totalVariables,
+            totalConstraints: solverResponse.totalConstraints,
+            elapsedMs: solverResponse.elapsedMs,
+            timeLimitSec: config.timeLimitSec,
+            message: solverResponse.message,
+          },
+        }
 
         setMipResult(result)
+        setAiResult(null)
         setAssignmentMethod('optimal')
         setAssignmentsEnabled(true)
+        preMipStateRef.current = null
         setLastOptRun({
           method: `Optimal Solver (${result.mip.status})`,
           time: new Date(),
         })
       } catch (e) {
         console.error('MIP solver failed:', e)
+        const prev = preMipStateRef.current
+        if (prev) {
+          setAssignmentMethod(prev.method)
+          setMipResult(prev.mip)
+          setAiResult(prev.ai)
+          preMipStateRef.current = null
+        }
       } finally {
         setOptimizerRunning(false)
         setMipProgress(null)
@@ -1338,13 +1408,19 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           homeBase: r.home_base?.iata_code || null,
         }))
 
-      const defaultTat = new Map<string, number>()
+      const tatByType = new Map<string, AircraftTypeTAT>()
       for (const t of aircraftTypes) {
-        defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
+        tatByType.set(t.icao_type, {
+          sched_dd: t.tat_dom_dom_minutes, sched_di: t.tat_dom_int_minutes,
+          sched_id: t.tat_int_dom_minutes, sched_ii: t.tat_int_int_minutes,
+          min_dd: t.tat_min_dd_minutes, min_di: t.tat_min_di_minutes,
+          min_id: t.tat_min_id_minutes, min_ii: t.tat_min_ii_minutes,
+          default: t.default_tat_minutes ?? 30,
+        })
       }
 
       const greedyResult = autoAssignFlights(
-        expandedFlights, assignableAircraft, defaultTat, 'minimize',
+        expandedFlights, assignableAircraft, tatByType, 'minimize',
         scheduleRules, aircraftFamilies,
         movementSettings.allowFamilySub ?? false,
         new Map(aircraftTypes.filter(t => t.family).map(t => [t.icao_type, t.family!]))
@@ -1375,9 +1451,10 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
             aircraftReg: ef.aircraftReg,
             dayOffset: ef.dayOffset,
             serviceType: ef.serviceType,
+            routeType: ef.routeType,
           })),
           assignableAircraft,
-          defaultTat,
+          tatByType,
           config,
           (progress) => setAiProgress(progress),
           abort.signal,
@@ -1416,6 +1493,18 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     aiAbortRef.current?.abort()
   }, [])
 
+  const handleCancelMip = useCallback(() => {
+    const prev = preMipStateRef.current
+    if (prev) {
+      setAssignmentMethod(prev.method)
+      setMipResult(prev.mip)
+      setAiResult(prev.ai)
+      preMipStateRef.current = null
+    }
+    setMipProgress(null)
+    setOptimizerRunning(false)
+  }, [])
+
   // ─── Virtual tail assignment engine ──────────────────────────────
   const assignmentResult = useMemo<TailAssignmentResult>(() => {
     // Guard: when assignments disabled, return empty result
@@ -1448,10 +1537,16 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         homeBase: r.home_base?.iata_code || null,
       }))
 
-    // Build default TAT per AC type
-    const defaultTat = new Map<string, number>()
+    // Build directional TAT per AC type
+    const tatByType = new Map<string, AircraftTypeTAT>()
     for (const t of aircraftTypes) {
-      defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
+      tatByType.set(t.icao_type, {
+        sched_dd: t.tat_dom_dom_minutes, sched_di: t.tat_dom_int_minutes,
+        sched_id: t.tat_int_dom_minutes, sched_ii: t.tat_int_int_minutes,
+        min_dd: t.tat_min_dd_minutes, min_di: t.tat_min_di_minutes,
+        min_id: t.tat_min_id_minutes, min_ii: t.tat_min_ii_minutes,
+        default: t.default_tat_minutes ?? 30,
+      })
     }
 
     // Build icaoType → family map for family substitution
@@ -1461,7 +1556,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     }
 
     return autoAssignFlights(
-      expandedFlights, assignableAircraft, defaultTat,
+      expandedFlights, assignableAircraft, tatByType,
       assignmentMethod === 'good' ? 'balance' : 'minimize',
       scheduleRules, aircraftFamilies,
       movementSettings.allowFamilySub ?? false, typeFamilyMap
@@ -1475,6 +1570,67 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       assignedReg: assignmentResult.assignments.get(ef.id) || null,
     }))
   }, [expandedFlights, assignmentResult])
+
+  /** Commit all optimizer assignments to the DB. */
+  const handleAssignAll = useCallback(async () => {
+    if (bulkAssigning) return
+    const entries = Array.from(assignmentResult.assignments.entries())
+    if (entries.length === 0) {
+      toast.warning('No optimizer assignments to commit')
+      return
+    }
+    setBulkAssigning(true)
+    try {
+      const payload = entries.map(([expandedId, reg]) => {
+        const m = expandedId.match(/_(\d{4}-\d{2}-\d{2})$/)
+        const flightDate = m ? m[1] : ''
+        const flightId = m ? expandedId.slice(0, m.index!) : expandedId
+        return { flightId, flightDate, aircraftReg: reg }
+      })
+      const res = await bulkAssignFlightsToAircraft(payload)
+      if (res.error) {
+        toast.error(res.error)
+      } else {
+        toast.success(`Assigned ${res.count ?? payload.length} flights`)
+        await refreshTailAssignments()
+      }
+    } catch (e: any) {
+      toast.error(friendlyError(e))
+    } finally {
+      setBulkAssigning(false)
+    }
+  }, [bulkAssigning, assignmentResult, refreshTailAssignments])
+
+  /** Remove all DB tail assignments for every flight in the current view. */
+  const handleDeassignAll = useCallback(async () => {
+    if (bulkAssigning) return
+    const items: FlightDateItem[] = []
+    tailAssignments.forEach((_reg, key) => {
+      const parts = key.split('__')
+      if (parts.length === 2) {
+        items.push({ flightId: parts[0], flightDate: parts[1] })
+      }
+    })
+    if (items.length === 0) {
+      toast.warning('No DB assignments to remove')
+      return
+    }
+    setBulkAssigning(true)
+    try {
+      const res = await bulkUnassignFlightsTail(items)
+      if (res.error) {
+        toast.error(res.error)
+      } else {
+        toast.success(`De-assigned ${res.count ?? items.length} flights`)
+        setAssignmentsEnabled(false)
+        await refreshTailAssignments()
+      }
+    } catch (e: any) {
+      toast.error(friendlyError(e))
+    } finally {
+      setBulkAssigning(false)
+    }
+  }, [bulkAssigning, tailAssignments, refreshTailAssignments])
 
   // ─── AI Advisor handler ─────────────────────────────────────────────
   const handleAskAdvisor = useCallback(async () => {
@@ -2847,13 +3003,13 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const handleFromBlur = () => {
     if (fromText === '') { setPeriodFrom(null); return }
     const parsed = parseUserDate(fromText)
-    if (parsed) { setPeriodFrom(parsed); if (periodCommitted) setPeriodCommitted(false) }
+    if (parsed) { setPeriodFrom(parsed) }
     else setFromText(periodFrom ? isoToDisplay(periodFrom) : '')
   }
   const handleToBlur = () => {
     if (toText === '') { setPeriodTo(null); return }
     const parsed = parseUserDate(toText)
-    if (parsed) { setPeriodTo(parsed); if (periodCommitted) setPeriodCommitted(false) }
+    if (parsed) { setPeriodTo(parsed) }
     else setToText(periodTo ? isoToDisplay(periodTo) : '')
   }
   const handleCalendarPick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2861,12 +3017,10 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     if (!iso) return
     if (pickTargetRef.current === 'from') {
       setPeriodFrom(iso)
-      if (periodCommitted) setPeriodCommitted(false)
       pickTargetRef.current = 'to'
       setTimeout(() => calendarRef.current?.showPicker?.(), 100)
     } else {
       setPeriodTo(iso)
-      if (periodCommitted) setPeriodCommitted(false)
       pickTargetRef.current = 'from'
     }
   }
@@ -2940,26 +3094,32 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       </button>
       {/* ── Assign All / De-assign All toggle buttons ── */}
       <button
-        onClick={() => setAssignmentsEnabled(true)}
+        onClick={() => { setAssignmentsEnabled(true); handleAssignAll() }}
+        disabled={bulkAssigning}
         className={`w-[26px] h-[26px] flex items-center justify-center rounded-[7px] transition-colors text-emerald-600 dark:text-emerald-400 ${
           assignmentsEnabled
             ? 'bg-emerald-500/15 border border-emerald-500/40'
             : 'bg-emerald-500/10 border border-emerald-500/30 opacity-50 hover:opacity-100'
-        }`}
+        } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
         title="Assign All"
       >
-        <PlaneTakeoff className="h-3.5 w-3.5" />
+        {bulkAssigning
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : <PlaneTakeoff className="h-3.5 w-3.5" />}
       </button>
       <button
-        onClick={() => setAssignmentsEnabled(false)}
+        onClick={handleDeassignAll}
+        disabled={bulkAssigning}
         className={`w-[26px] h-[26px] flex items-center justify-center rounded-[7px] transition-colors text-red-600 dark:text-red-400 ${
           !assignmentsEnabled
             ? 'bg-red-500/15 border border-red-500/40'
             : 'bg-red-500/10 border border-red-500/30 opacity-50 hover:opacity-100'
-        }`}
+        } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
         title="De-assign All"
       >
-        <PlaneLanding className="h-3.5 w-3.5" />
+        {bulkAssigning
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : <PlaneLanding className="h-3.5 w-3.5" />}
       </button>
       <button
         onClick={toggleFullscreen}
@@ -5980,6 +6140,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         onAskAdvisor={handleAskAdvisor}
         mipProgress={mipProgress}
         mipResult={mipResult}
+        onCancelMip={handleCancelMip}
+        accentColor={movementSettings.colorAssignment?.assigned ?? '#3B82F6'}
       />
 
       {/* ── Fixed-position tooltip (rendered outside scroll containers) ── */}

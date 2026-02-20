@@ -445,6 +445,77 @@ export async function getFlightTailAssignments(
   }))
 }
 
+// ─── Bulk assign flights (multi-registration) ───────────────
+
+export async function bulkAssignFlightsToAircraft(
+  assignments: { flightId: string; flightDate: string; aircraftReg: string }[]
+): Promise<{ error?: string; count?: number }> {
+  if (assignments.length === 0) return { count: 0 }
+  try {
+    const CHUNK_SIZE = 500
+    let totalCount = 0
+
+    for (let i = 0; i < assignments.length; i += CHUNK_SIZE) {
+      const chunk = assignments.slice(i, i + CHUNK_SIZE)
+      const values: string[] = []
+      const params: unknown[] = []
+
+      for (let j = 0; j < chunk.length; j++) {
+        const pi = j * 3 + 1
+        values.push(`($${pi}::uuid, $${pi + 1}::date, $${pi + 2})`)
+        params.push(chunk[j].flightId, chunk[j].flightDate, chunk[j].aircraftReg)
+      }
+
+      await pool.query(
+        `INSERT INTO flight_tail_assignments (scheduled_flight_id, flight_date, aircraft_reg)
+         VALUES ${values.join(', ')}
+         ON CONFLICT (scheduled_flight_id, flight_date)
+         DO UPDATE SET aircraft_reg = EXCLUDED.aircraft_reg`,
+        params
+      )
+      totalCount += chunk.length
+    }
+
+    return { count: totalCount }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+// ─── Bulk unassign flights ──────────────────────────────────
+
+export async function bulkUnassignFlightsTail(
+  items: FlightDateItem[]
+): Promise<{ error?: string; count?: number }> {
+  if (items.length === 0) return { count: 0 }
+  try {
+    const CHUNK_SIZE = 500
+    let totalCount = 0
+
+    for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+      const chunk = items.slice(i, i + CHUNK_SIZE)
+      const conditions: string[] = []
+      const params: unknown[] = []
+
+      for (let j = 0; j < chunk.length; j++) {
+        const pi = j * 2 + 1
+        conditions.push(`(scheduled_flight_id = $${pi}::uuid AND flight_date = $${pi + 1}::date)`)
+        params.push(chunk[j].flightId, chunk[j].flightDate)
+      }
+
+      await pool.query(
+        `DELETE FROM flight_tail_assignments WHERE ${conditions.join(' OR ')}`,
+        params
+      )
+      totalCount += chunk.length
+    }
+
+    return { count: totalCount }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 // ─── Swap flight assignments between two registrations ────────
 
 export async function swapFlightAssignments(

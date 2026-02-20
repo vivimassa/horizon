@@ -20,6 +20,7 @@ const ALLOWED_FIELDS = [
   'etops_capable', 'etops_max_minutes',
   'noise_category', 'emissions_class',
   'tat_dom_dom_minutes', 'tat_dom_int_minutes', 'tat_int_dom_minutes', 'tat_int_int_minutes',
+  'tat_min_dd_minutes', 'tat_min_di_minutes', 'tat_min_id_minutes', 'tat_min_ii_minutes',
   'max_cargo_weight_kg', 'cargo_positions', 'uld_types_accepted', 'bulk_hold_capacity_kg',
   'cockpit_rest_facility_class', 'cabin_rest_facility_class',
   'cockpit_rest_positions', 'cabin_rest_positions',
@@ -98,6 +99,14 @@ export async function createAircraftType(formData: FormData) {
     cabin_crew_required: parseInt(formData.get('cabin_crew') as string) || null,
     default_tat_minutes: hhmmToMinutes(formData.get('default_tat_minutes') as string || '') ?? null,
     default_cabin_config: defaultCabinConfig,
+    tat_dom_dom_minutes: hhmmToMinutes(formData.get('tat_dom_dom_minutes') as string || '') ?? null,
+    tat_dom_int_minutes: hhmmToMinutes(formData.get('tat_dom_int_minutes') as string || '') ?? null,
+    tat_int_dom_minutes: hhmmToMinutes(formData.get('tat_int_dom_minutes') as string || '') ?? null,
+    tat_int_int_minutes: hhmmToMinutes(formData.get('tat_int_int_minutes') as string || '') ?? null,
+    tat_min_dd_minutes: hhmmToMinutes(formData.get('tat_min_dd_minutes') as string || '') ?? null,
+    tat_min_di_minutes: hhmmToMinutes(formData.get('tat_min_di_minutes') as string || '') ?? null,
+    tat_min_id_minutes: hhmmToMinutes(formData.get('tat_min_id_minutes') as string || '') ?? null,
+    tat_min_ii_minutes: hhmmToMinutes(formData.get('tat_min_ii_minutes') as string || '') ?? null,
   }
 
   if (!aircraftData.icao_type || !aircraftData.name) {
@@ -138,6 +147,14 @@ export async function updateAircraftType(id: string, formData: FormData) {
     cabin_crew_required: parseInt(formData.get('cabin_crew') as string) || null,
     default_tat_minutes: hhmmToMinutes(formData.get('default_tat_minutes') as string || '') ?? null,
     default_cabin_config: defaultCabinConfig,
+    tat_dom_dom_minutes: hhmmToMinutes(formData.get('tat_dom_dom_minutes') as string || '') ?? null,
+    tat_dom_int_minutes: hhmmToMinutes(formData.get('tat_dom_int_minutes') as string || '') ?? null,
+    tat_int_dom_minutes: hhmmToMinutes(formData.get('tat_int_dom_minutes') as string || '') ?? null,
+    tat_int_int_minutes: hhmmToMinutes(formData.get('tat_int_int_minutes') as string || '') ?? null,
+    tat_min_dd_minutes: hhmmToMinutes(formData.get('tat_min_dd_minutes') as string || '') ?? null,
+    tat_min_di_minutes: hhmmToMinutes(formData.get('tat_min_di_minutes') as string || '') ?? null,
+    tat_min_id_minutes: hhmmToMinutes(formData.get('tat_min_id_minutes') as string || '') ?? null,
+    tat_min_ii_minutes: hhmmToMinutes(formData.get('tat_min_ii_minutes') as string || '') ?? null,
   }
 
   if (!aircraftData.icao_type || !aircraftData.name) {

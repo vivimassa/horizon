@@ -12,7 +12,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowUpDown, ArrowUp, ArrowDown, Plus, Pencil, Trash2, Search } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
-type SortColumn = 'icao_type' | 'name' | 'family' | 'category' | 'pax_capacity' | 'default_tat_minutes' | null
+type SortColumn = 'icao_type' | 'name' | 'family' | 'category' | 'pax_capacity' | 'tat_dom_dom_minutes' | null
 type SortDirection = 'asc' | 'desc'
 
 interface AircraftTypesTableProps {
@@ -102,7 +102,7 @@ export function AircraftTypesTable({ aircraftTypes }: AircraftTypesTableProps) {
               <TableHead><Button variant="ghost" onClick={() => handleSort('name')} className="font-semibold">Name{getSortIcon('name')}</Button></TableHead>
               <TableHead><Button variant="ghost" onClick={() => handleSort('category')} className="font-semibold">Category{getSortIcon('category')}</Button></TableHead>
               <TableHead><Button variant="ghost" onClick={() => handleSort('pax_capacity')} className="font-semibold">Pax{getSortIcon('pax_capacity')}</Button></TableHead>
-              <TableHead><Button variant="ghost" onClick={() => handleSort('default_tat_minutes')} className="font-semibold">Turn Around Time{getSortIcon('default_tat_minutes')}</Button></TableHead>
+              <TableHead><Button variant="ghost" onClick={() => handleSort('tat_dom_dom_minutes')} className="font-semibold">TAT (D→D){getSortIcon('tat_dom_dom_minutes')}</Button></TableHead>
               <TableHead>Cabin Config</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -117,7 +117,7 @@ export function AircraftTypesTable({ aircraftTypes }: AircraftTypesTableProps) {
                 <TableCell>{t.name}</TableCell>
                 <TableCell><span className="text-xs bg-secondary px-2 py-0.5 rounded">{t.category}</span></TableCell>
                 <TableCell>{t.pax_capacity}</TableCell>
-                <TableCell className="font-mono">{minutesToHHMM(t.default_tat_minutes) || '—'}</TableCell>
+                <TableCell className="font-mono">{minutesToHHMM(t.tat_dom_dom_minutes) || minutesToHHMM(t.default_tat_minutes) || '—'}</TableCell>
                 <TableCell className="font-mono text-sm">{formatCabinConfig(t.default_cabin_config)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">

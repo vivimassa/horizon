@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache'
 import { parseSSIM, toUtcTime } from '@/lib/utils/ssim-parser'
 import type { SSIMFlightLeg, SSIMParseResult } from '@/lib/utils/ssim-parser'
 import { AIRPORT_COUNTRY, classifyRoute } from '@/lib/data/airport-countries'
+import { lookupAirportByIATA } from '@/app/actions/airport-inquiry'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -187,18 +188,42 @@ export async function createMissingAirports(
   countries?.forEach(c => isoToCountryId.set(c.iso_code_2, c.id))
 
   for (const iata of airportCodes) {
-    const isoCode = AIRPORT_COUNTRY[iata] ?? null
+    // Look up real airport data from OurAirports
+    const info = await lookupAirportByIATA(iata)
+
+    const realIcao = info?.icao_code || `Z${iata}`
+    const name = info?.name || iata
+    const city = info?.city || null
+    const isoCode = info?.iso_country || AIRPORT_COUNTRY[iata] || null
     const countryId = isoCode ? isoToCountryId.get(isoCode) ?? null : null
+    const lat = info?.latitude ?? null
+    const lon = info?.longitude ?? null
+    const elev = info?.elevation_ft ?? null
+
+    // Resolve timezone from country's timezone zones
+    let timezone = 'UTC'
+    if (countryId) {
+      const { data: zones } = await supabase
+        .from('timezone_zones')
+        .select('iana_timezone')
+        .eq('country_id', countryId)
+        .limit(1)
+      if (zones?.[0]) timezone = zones[0].iana_timezone
+    }
 
     const { data } = await supabase
       .from('airports')
       .insert({
         iata_code: iata,
-        icao_code: `Z${iata}`, // placeholder ICAO — user should fix later
-        name: iata,
-        timezone: isoCode === 'VN' ? 'Asia/Ho_Chi_Minh' : 'UTC',
-        country: isoCode ?? null,
+        icao_code: realIcao,
+        name,
+        city,
+        timezone,
+        country: isoCode,
         country_id: countryId,
+        latitude: lat,
+        longitude: lon,
+        elevation_ft: elev,
         is_active: true,
       })
       .select('id')

@@ -43,6 +43,14 @@ export interface GanttSettingsData {
   // AC type display order (empty = alphabetical)
   acTypeOrder: string[]
 
+  // Cost assumptions for comparison
+  costAssumptions: {
+    fuelPricePerKg: number
+    avgRevenuePerSeat: number
+    avgLoadFactor: number
+    opsCostPerBlockHour: Record<string, number>
+  }
+
   // Existing
   tatOverrides: Record<string, { dd?: number; di?: number; id?: number; ii?: number }>
   utilizationTargets: Record<string, number>
@@ -90,6 +98,17 @@ export const DEFAULT_GANTT_SETTINGS: GanttSettingsData = {
   allowFamilySub: false,
 
   acTypeOrder: [],
+
+  costAssumptions: {
+    fuelPricePerKg: 0.80,
+    avgRevenuePerSeat: 65,
+    avgLoadFactor: 0.88,
+    opsCostPerBlockHour: {
+      '320': 2800,
+      '321': 3200,
+      '330': 5500,
+    },
+  },
 
   tatOverrides: {},
   utilizationTargets: {},

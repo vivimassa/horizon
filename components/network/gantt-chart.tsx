@@ -29,19 +29,36 @@ import {
   Info,
   ArrowLeftRight,
   Loader2,
+  BarChart3,
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
 import { AircraftType, AircraftSeatingConfig, CabinEntry, Airport, FlightServiceType } from '@/types/database'
-import { getGanttFlights, GanttFlight, getRouteWithLegs, excludeFlightDates, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, swapFlightAssignments, type GanttRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/gantt'
+import { getGanttFlights, GanttFlight, getRouteWithLegs, excludeFlightDates, assignFlightsToAircraft, unassignFlightsTail, getFlightTailAssignments, swapFlightAssignments, bulkAssignFlightsToAircraft, bulkUnassignFlightsTail, type GanttRouteData, type FlightDateItem, type TailAssignmentRow } from '@/app/actions/gantt'
 import { toast } from '@/components/ui/visionos-toast'
 import { friendlyError } from '@/lib/utils/error-handler'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { MiniBuilderModal } from './gantt-mini-builder'
-import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult } from '@/lib/utils/tail-assignment'
+import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult, type AircraftTypeTAT } from '@/lib/utils/tail-assignment'
 import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } from '@/lib/utils/tail-assignment-sa'
-import { runMIPSolver, MIP_PRESETS, type MIPProgress, type MIPResult } from '@/lib/utils/tail-assignment-mip'
+import { solveMIP } from '@/app/actions/mip-solver'
+
+// MIP types (previously from tail-assignment-mip.ts, now using Cloud Run solver)
+interface MIPProgress { phase: 'building' | 'solving' | 'extracting'; message: string; elapsedMs: number }
+interface MIPResult extends TailAssignmentResult {
+  mip: {
+    status: 'Optimal' | 'Feasible' | 'Infeasible' | 'TimeLimitReached' | 'Error'
+    objectiveValue: number; totalVariables: number; totalConstraints: number
+    elapsedMs: number; timeLimitSec: number; gap?: number; message?: string
+  }
+}
+const MIP_PRESETS = {
+  quick:  { timeLimitSec: 15,  mipGap: 0.05 },
+  normal: { timeLimitSec: 45,  mipGap: 0.02 },
+  deep:   { timeLimitSec: 120, mipGap: 0.005 },
+} as const
+
 import { useGanttSettings } from '@/lib/hooks/use-gantt-settings'
-import { type GanttSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/gantt-settings'
+import { type GanttSettingsData, DEFAULT_GANTT_SETTINGS, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/gantt-settings'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
 import { GanttSettingsPanel, type FleetPreviewItem } from './gantt-settings-panel'
 import { GanttOptimizerDialog, type OptimizerMethod } from './gantt-optimizer-dialog'
@@ -51,6 +68,7 @@ import { GanttClipboardPill } from './gantt-clipboard-pill'
 import { GanttWorkspaceIndicator } from './gantt-workspace-indicator'
 import { SwapFlightsDialog, type SwapExpandedFlight } from '@/components/shared/swap-flights-dialog'
 import type { ScheduleRule } from '@/app/actions/schedule-rules'
+import { GanttSolutionCompare, type SolutionSlot, type SolutionMetrics } from './gantt-solution-compare'
 
 // ─── Types & Constants ───────────────────────────────────────────────────
 
@@ -430,6 +448,136 @@ function getTatMinutes(
 
 // ─── Component ───────────────────────────────────────────────────────────
 
+// ─── Solution Metrics Computation ─────────────────────────────────────
+
+function computeSolutionMetrics(
+  result: TailAssignmentResult,
+  expandedFlights: ExpandedFlight[],
+  registrations: AircraftWithRelations[],
+  aircraftTypes: AircraftType[],
+  seatingConfigs: AircraftSeatingConfig[],
+  costAssumptions: GanttSettingsData['costAssumptions'],
+): SolutionMetrics {
+  const assignments = result.assignments
+
+  // Build lookup maps
+  const regToType = new Map<string, string>()
+  const regToCapacity = new Map<string, number>()
+  for (const r of registrations) {
+    const icao = r.aircraft_types?.icao_type || 'UNKN'
+    regToType.set(r.registration, icao)
+    const sc = seatingConfigs.find(s => s.aircraft_id === r.id)
+    const at = aircraftTypes.find(t => t.id === r.aircraft_type_id)
+    regToCapacity.set(r.registration, sc?.total_capacity ?? at?.pax_capacity ?? 0)
+  }
+
+  const typeToCapacity = new Map<string, number>()
+  const typeToBurnRate = new Map<string, number>()
+  for (const t of aircraftTypes) {
+    typeToCapacity.set(t.icao_type, t.pax_capacity ?? 0)
+    typeToBurnRate.set(t.icao_type, t.fuel_burn_rate_kg_per_hour ?? 0)
+  }
+
+  // Per-type tracking
+  const typeStats = new Map<string, { used: Set<string>; blockMinutes: number }>()
+  const allTypes = Array.from(new Set(aircraftTypes.map(t => t.icao_type)))
+  for (const t of allTypes) typeStats.set(t, { used: new Set(), blockMinutes: 0 })
+
+  let downgrades = 0, upgrades = 0, seatsLost = 0, seatsGained = 0
+  let extraBlockMinutesUpgrade = 0
+  let totalFuelKg = 0
+
+  for (const ef of expandedFlights) {
+    const reg = assignments.get(ef.id)
+    if (!reg) continue
+
+    const assignedType = regToType.get(reg)
+    if (!assignedType) continue
+
+    const stats = typeStats.get(assignedType)
+    if (stats) {
+      stats.used.add(reg)
+      stats.blockMinutes += ef.blockMinutes ?? 0
+    }
+
+    const burnRate = typeToBurnRate.get(assignedType) ?? 0
+    totalFuelKg += burnRate * ((ef.blockMinutes ?? 0) / 60)
+
+    const scheduledType = ef.aircraftTypeIcao
+    if (scheduledType && assignedType !== scheduledType) {
+      const scheduledCap = typeToCapacity.get(scheduledType) ?? 0
+      const assignedCap = regToCapacity.get(reg) ?? typeToCapacity.get(assignedType) ?? 0
+      if (assignedCap < scheduledCap) {
+        downgrades++
+        seatsLost += (scheduledCap - assignedCap)
+      } else if (assignedCap > scheduledCap) {
+        upgrades++
+        seatsGained += (assignedCap - scheduledCap)
+        extraBlockMinutesUpgrade += ef.blockMinutes ?? 0
+      }
+    }
+  }
+
+  const totalPerType = new Map<string, number>()
+  for (const r of registrations) {
+    if (r.status !== 'active' && r.status !== 'operational') continue
+    const t = regToType.get(r.registration)
+    if (t) totalPerType.set(t, (totalPerType.get(t) ?? 0) + 1)
+  }
+
+  const fleetByType = allTypes
+    .filter(t => totalPerType.get(t))
+    .map(t => {
+      const stats = typeStats.get(t)!
+      const used = stats.used.size
+      const total = totalPerType.get(t) ?? 0
+      const blockHours = stats.blockMinutes / 60
+      return {
+        icaoType: t,
+        used,
+        total,
+        blockHours: Math.round(blockHours * 10) / 10,
+        avgUtil: used > 0 ? Math.round((blockHours / used) * 10) / 10 : 0,
+      }
+    })
+
+  const totalUsed = fleetByType.reduce((s, f) => s + f.used, 0)
+  const totalAC = fleetByType.reduce((s, f) => s + f.total, 0)
+  const revenueAtRisk = Math.round(seatsLost * costAssumptions.avgRevenuePerSeat * costAssumptions.avgLoadFactor)
+  const extraOpsCost = Math.round(extraBlockMinutesUpgrade / 60 * 400)
+  const fuelTons = Math.round(totalFuelKg / 1000 * 10) / 10
+  const fuelCost = Math.round(totalFuelKg * costAssumptions.fuelPricePerKg)
+
+  let opsCost = 0
+  for (const ft of fleetByType) {
+    const rate = costAssumptions.opsCostPerBlockHour[ft.icaoType] ?? 3000
+    opsCost += Math.round(ft.blockHours * rate)
+  }
+
+  return {
+    totalFlights: expandedFlights.length,
+    assigned: assignments.size,
+    overflow: result.overflow.length,
+    chainBreaks: result.chainBreaks?.length ?? 0,
+    rulesBent: result.summary?.softRulesBent ?? 0,
+    fleetByType,
+    totalUsed,
+    totalAC,
+    spareAC: totalAC - totalUsed,
+    bufferPct: totalAC > 0 ? Math.round((totalAC - totalUsed) / totalAC * 100) : 0,
+    downgrades,
+    upgrades,
+    seatsLost,
+    seatsGained,
+    revenueAtRisk,
+    extraOpsCost,
+    fuelTons,
+    fuelCost,
+    opsCost,
+    totalCost: fuelCost + opsCost,
+  }
+}
+
 interface GanttChartProps {
   registrations: AircraftWithRelations[]
   aircraftTypes: AircraftType[]
@@ -467,6 +615,12 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const aiAbortRef = useRef<AbortController | null>(null)
   const [mipProgress, setMipProgress] = useState<MIPProgress | null>(null)
   const [mipResult, setMipResult] = useState<MIPResult | null>(null)
+  const preMipStateRef = useRef<{ method: OptimizerMethod; mip: MIPResult | null; ai: SAResult | null } | null>(null)
+
+  // ─── Solution comparison state ────────────────────────────────────
+  const [solutionSlots, setSolutionSlots] = useState<SolutionSlot[]>([])
+  const [activeSlotId, setActiveSlotId] = useState<number | null>(null)
+  const [compareOpen, setCompareOpen] = useState(false)
 
   // ─── AI Advisor state ─────────────────────────────────────────────
   const [advisorLoading, setAdvisorLoading] = useState(false)
@@ -623,6 +777,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
   // Assign All / De-assign All toggle
   const [assignmentsEnabled, setAssignmentsEnabled] = useState(true)
+  const [bulkAssigning, setBulkAssigning] = useState(false)
 
   // Collapsible right panel + pin state (hydrated from localStorage after mount)
   const [panelPinned, setPanelPinned] = useState(false)
@@ -1047,6 +1202,19 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     }
   }, [periodCommitted, committedFrom, committedTo, refreshFlights])
 
+  /** Re-fetch only tail assignments for the committed period (lighter than full refreshFlights). */
+  const refreshTailAssignments = useCallback(async () => {
+    if (!committedFrom || !committedTo) return
+    const rangeEnd = formatISO(addDays(parseDate(committedTo), 1))
+    const ta = await getFlightTailAssignments(committedFrom, rangeEnd)
+    const taMap = new Map<string, string>()
+    for (const row of ta) {
+      taMap.set(`${row.scheduledFlightId}__${row.flightDate}`, row.aircraftReg)
+    }
+    pendingOpsRef.current = { adds: new Map(), deletes: new Set() }
+    setTailAssignments(taMap)
+  }, [committedFrom, committedTo])
+
   const handleGo = useCallback(async () => {
     // Validation (same as current)
     if (!periodFrom && !periodTo) { toast.warning('Please select a date range first'); return }
@@ -1304,68 +1472,159 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     return map
   }, [registrations, aircraftTypes])
 
+  // ─── Solution comparison helpers ──────────────────────────────────
+
+  const storeSolution = useCallback((
+    result: TailAssignmentResult,
+    methodLabel: string,
+    settings: SolutionSlot['settings'],
+  ) => {
+    const metrics = computeSolutionMetrics(
+      result, expandedFlights, registrations, aircraftTypes,
+      seatingConfigs, ganttSettings.costAssumptions ?? DEFAULT_GANTT_SETTINGS.costAssumptions,
+    )
+
+    setSolutionSlots(prev => {
+      const newSlot: SolutionSlot = {
+        id: 0,
+        result,
+        method: methodLabel,
+        settings,
+        timestamp: new Date(),
+        label: methodLabel,
+        metrics,
+      }
+
+      let updated: SolutionSlot[]
+      if (prev.length < 3) {
+        updated = [...prev, newSlot]
+      } else {
+        updated = [...prev.slice(1), newSlot]
+      }
+      updated.forEach((s, i) => s.id = i + 1)
+      setActiveSlotId(updated[updated.length - 1].id)
+      if (updated.length >= 2) setCompareOpen(true)
+      return updated
+    })
+  }, [expandedFlights, registrations, aircraftTypes, seatingConfigs, ganttSettings.costAssumptions])
+
   // ─── Optimizer handler ─────────────────────────────────────────────
   const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep', mipPreset?: 'quick' | 'normal' | 'deep') => {
     if (method === 'optimal') {
-      // ── Optimal Solver flow ──
+      // ── Optimal Solver via Cloud Run ──
+      preMipStateRef.current = { method: assignmentMethod, mip: mipResult, ai: aiResult }
       setOptimizerRunning(true)
-      setMipProgress(null)
-      setMipResult(null)
-      setAiResult(null)
-
-      const assignableAircraft: AssignableAircraft[] = registrations
-        .filter(r => r.status === 'active' || r.status === 'operational')
-        .map(r => ({
-          registration: r.registration,
-          icaoType: r.aircraft_types?.icao_type || 'UNKN',
-          homeBase: r.home_base?.iata_code || null,
-        }))
-
-      const defaultTat = new Map<string, number>()
-      for (const t of aircraftTypes) {
-        defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
-      }
-
-      const regFamilyMap = new Map<string, string>()
-      for (const t of aircraftTypes) {
-        if (t.family) {
-          for (const r of registrations) {
-            if (r.aircraft_types?.icao_type === t.icao_type) {
-              regFamilyMap.set(r.registration, t.family)
-            }
-          }
-        }
-      }
-
-      const icaoFamilyMap = new Map<string, string>()
-      for (const t of aircraftTypes) {
-        if (t.family) icaoFamilyMap.set(t.icao_type, t.family)
-      }
+      setMipProgress({ phase: 'building', message: 'Preparing payload...', elapsedMs: 0 })
 
       const config = MIP_PRESETS[mipPreset || 'normal']
 
+      // Build payload for the remote solver
+      const mipFlights = expandedFlights.map(f => ({
+        id: f.id,
+        depStation: f.depStation,
+        arrStation: f.arrStation,
+        startMs: (f.dayOffset * 1440 + f.stdMinutes) * 60000,
+        endMs: (f.dayOffset * 1440 + f.staMinutes) * 60000,
+        icaoType: f.aircraftTypeIcao || '',
+        pinned: !!f.aircraftReg,
+        pinnedReg: f.aircraftReg || null,
+        routeType: f.routeType || null,
+      }))
+
+      const mipAircraft = registrations
+        .filter(r => r.status === 'active' || r.status === 'operational')
+        .map((r, i) => ({
+          index: i,
+          registration: r.registration,
+          icaoType: r.aircraft_types?.icao_type || 'UNKN',
+          family: aircraftTypes.find(t => t.icao_type === r.aircraft_types?.icao_type)?.family || null,
+        }))
+
+      const tatObj: Record<string, number> = {}
+      for (const t of aircraftTypes) {
+        tatObj[t.icao_type] = t.default_tat_minutes ?? 30
+      }
+
+      const familyObj: Record<string, string> = {}
+      for (const t of aircraftTypes) {
+        if (t.family) familyObj[t.icao_type] = t.family
+      }
+
       try {
-        const result = await runMIPSolver(
-          expandedFlights,
-          assignableAircraft,
-          defaultTat,
-          config,
-          (progress) => setMipProgress(progress),
-          scheduleRules as any[],
-          regFamilyMap,
-          ganttSettings.allowFamilySub ?? false,
-          icaoFamilyMap,
-        )
+        setMipProgress({ phase: 'solving', message: `Solving MIP (limit: ${config.timeLimitSec}s)...`, elapsedMs: 0 })
+
+        const solverResponse = await solveMIP({
+          flights: mipFlights,
+          aircraft: mipAircraft,
+          tatMinutes: tatObj,
+          timeLimitSec: config.timeLimitSec,
+          mipGap: config.mipGap,
+          allowFamilySub: ganttSettings.allowFamilySub ?? false,
+          familyMap: familyObj,
+        })
+
+        setMipProgress({ phase: 'extracting', message: 'Processing result...', elapsedMs: 0 })
+
+        // Convert server response → MIPResult
+        const mipAssignments = new Map<string, string>(Object.entries(solverResponse.assignments))
+        const mipOverflow = expandedFlights.filter(f => solverResponse.overflow.includes(f.id))
+        const mipChainBreaks = (solverResponse.chainBreaks || []).map(cb => ({
+          flightId: cb.flightId,
+          prevArr: cb.prevArr,
+          nextDep: cb.nextDep,
+        }))
+
+        const result: MIPResult = {
+          assignments: mipAssignments,
+          overflow: mipOverflow,
+          chainBreaks: mipChainBreaks,
+          ruleViolations: new Map(),
+          rejections: new Map(),
+          summary: {
+            totalFlights: expandedFlights.length,
+            assigned: mipAssignments.size,
+            overflowed: mipOverflow.length,
+            hardRulesEnforced: 0,
+            softRulesBent: 0,
+            totalPenaltyCost: 0,
+          },
+          mip: {
+            status: solverResponse.status === 'Optimal' ? 'Optimal'
+              : solverResponse.status === 'Feasible' ? 'Feasible'
+              : solverResponse.status === 'Infeasible' ? 'Infeasible'
+              : 'Error',
+            objectiveValue: solverResponse.objectiveValue,
+            totalVariables: solverResponse.totalVariables,
+            totalConstraints: solverResponse.totalConstraints,
+            elapsedMs: solverResponse.elapsedMs,
+            timeLimitSec: config.timeLimitSec,
+            message: solverResponse.message,
+          },
+        }
 
         setMipResult(result)
+        setAiResult(null)
         setAssignmentMethod('optimal')
         setAssignmentsEnabled(true)
+        preMipStateRef.current = null
+        storeSolution(result, `Optimal (${result.mip.status})`, {
+          tatMode: 'scheduled',
+          familySub: ganttSettings.allowFamilySub ?? false,
+          mipPreset: mipPreset || 'normal',
+        })
         setLastOptRun({
           method: `Optimal Solver (${result.mip.status})`,
           time: new Date(),
         })
       } catch (e) {
         console.error('MIP solver failed:', e)
+        const prev = preMipStateRef.current
+        if (prev) {
+          setAssignmentMethod(prev.method)
+          setMipResult(prev.mip)
+          setAiResult(prev.ai)
+          preMipStateRef.current = null
+        }
       } finally {
         setOptimizerRunning(false)
         setMipProgress(null)
@@ -1385,13 +1644,19 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           homeBase: r.home_base?.iata_code || null,
         }))
 
-      const defaultTat = new Map<string, number>()
+      const tatByType = new Map<string, AircraftTypeTAT>()
       for (const t of aircraftTypes) {
-        defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
+        tatByType.set(t.icao_type, {
+          sched_dd: t.tat_dom_dom_minutes, sched_di: t.tat_dom_int_minutes,
+          sched_id: t.tat_int_dom_minutes, sched_ii: t.tat_int_int_minutes,
+          min_dd: t.tat_min_dd_minutes, min_di: t.tat_min_di_minutes,
+          min_id: t.tat_min_id_minutes, min_ii: t.tat_min_ii_minutes,
+          default: t.default_tat_minutes ?? 30,
+        })
       }
 
       const greedyResult = autoAssignFlights(
-        expandedFlights, assignableAircraft, defaultTat, 'minimize',
+        expandedFlights, assignableAircraft, tatByType, 'minimize',
         scheduleRules, aircraftFamilies,
         ganttSettings.allowFamilySub ?? false,
         new Map(aircraftTypes.filter(t => t.family).map(t => [t.icao_type, t.family!]))
@@ -1423,9 +1688,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             aircraftReg: ef.aircraftReg,
             dayOffset: ef.dayOffset,
             serviceType: ef.serviceType,
+            routeType: ef.routeType,
           })),
           assignableAircraft,
-          defaultTat,
+          tatByType,
           config,
           (progress) => setAiProgress(progress),
           abort.signal,
@@ -1436,6 +1702,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         setAiResult(result)
         setAssignmentMethod('ai')
         setAssignmentsEnabled(true)
+        storeSolution(result, `AI ${aiPreset || 'normal'}`, {
+          tatMode: 'minimum',
+          familySub: ganttSettings.allowFamilySub ?? false,
+          saPreset: aiPreset || 'normal',
+        })
         setLastOptRun({
           method: `AI Optimizer (${result.sa.improvement.toFixed(1)}% improvement)`,
           time: new Date(),
@@ -1456,12 +1727,54 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       setAssignmentMethod(method)
       await new Promise(r => setTimeout(r, 300))
       setOptimizerRunning(false)
-      setLastOptRun({ method: method === 'greedy' ? 'Greedy Solution' : 'Good Solution', time: new Date() })
+      const label = method === 'greedy' ? 'Greedy' : 'Good'
+      setLastOptRun({ method: `${label} Solution`, time: new Date() })
+
+      // Compute result inline for comparison slot
+      const greedyAC: AssignableAircraft[] = registrations
+        .filter(r => r.status === 'active' || r.status === 'operational')
+        .map(r => ({ registration: r.registration, icaoType: r.aircraft_types?.icao_type || 'UNKN', homeBase: r.home_base?.iata_code || null }))
+      const greedyTat = new Map<string, AircraftTypeTAT>()
+      for (const t of aircraftTypes) {
+        greedyTat.set(t.icao_type, {
+          sched_dd: t.tat_dom_dom_minutes, sched_di: t.tat_dom_int_minutes,
+          sched_id: t.tat_int_dom_minutes, sched_ii: t.tat_int_int_minutes,
+          min_dd: t.tat_min_dd_minutes, min_di: t.tat_min_di_minutes,
+          min_id: t.tat_min_id_minutes, min_ii: t.tat_min_ii_minutes,
+          default: t.default_tat_minutes ?? 30,
+        })
+      }
+      const greedyFamilyMap = new Map<string, string>()
+      for (const t of aircraftTypes) {
+        if (t.family) greedyFamilyMap.set(t.icao_type, t.family)
+      }
+      const greedyResult = autoAssignFlights(
+        expandedFlights, greedyAC, greedyTat,
+        method === 'good' ? 'balance' : 'minimize',
+        scheduleRules, aircraftFamilies,
+        ganttSettings.allowFamilySub ?? false, greedyFamilyMap
+      )
+      storeSolution(greedyResult, label, {
+        tatMode: 'scheduled',
+        familySub: ganttSettings.allowFamilySub ?? false,
+      })
     }
-  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub])
+  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, storeSolution])
 
   const handleCancelAi = useCallback(() => {
     aiAbortRef.current?.abort()
+  }, [])
+
+  const handleCancelMip = useCallback(() => {
+    const prev = preMipStateRef.current
+    if (prev) {
+      setAssignmentMethod(prev.method)
+      setMipResult(prev.mip)
+      setAiResult(prev.ai)
+      preMipStateRef.current = null
+    }
+    setMipProgress(null)
+    setOptimizerRunning(false)
   }, [])
 
   // ─── Virtual tail assignment engine ──────────────────────────────
@@ -1496,10 +1809,16 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         homeBase: r.home_base?.iata_code || null,
       }))
 
-    // Build default TAT per AC type
-    const defaultTat = new Map<string, number>()
+    // Build directional TAT per AC type
+    const tatByType = new Map<string, AircraftTypeTAT>()
     for (const t of aircraftTypes) {
-      defaultTat.set(t.icao_type, t.default_tat_minutes ?? 30)
+      tatByType.set(t.icao_type, {
+        sched_dd: t.tat_dom_dom_minutes, sched_di: t.tat_dom_int_minutes,
+        sched_id: t.tat_int_dom_minutes, sched_ii: t.tat_int_int_minutes,
+        min_dd: t.tat_min_dd_minutes, min_di: t.tat_min_di_minutes,
+        min_id: t.tat_min_id_minutes, min_ii: t.tat_min_ii_minutes,
+        default: t.default_tat_minutes ?? 30,
+      })
     }
 
     // Build icaoType → family map for family substitution
@@ -1509,20 +1828,96 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     }
 
     return autoAssignFlights(
-      expandedFlights, assignableAircraft, defaultTat,
+      expandedFlights, assignableAircraft, tatByType,
       assignmentMethod === 'good' ? 'balance' : 'minimize',
       scheduleRules, aircraftFamilies,
       ganttSettings.allowFamilySub ?? false, typeFamilyMap
     )
   }, [assignmentsEnabled, expandedFlights, registrations, aircraftTypes, assignmentMethod, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, aiResult, mipResult])
 
+  /** The result currently displayed on the Gantt — either from a selected slot or the live engine. */
+  const activeResult = useMemo<TailAssignmentResult>(() => {
+    if (activeSlotId !== null) {
+      const slot = solutionSlots.find(s => s.id === activeSlotId)
+      if (slot) return slot.result as TailAssignmentResult
+    }
+    return assignmentResult
+  }, [activeSlotId, solutionSlots, assignmentResult])
+
   // Annotate expanded flights with their assigned registration
   const assignedFlights = useMemo(() => {
     return expandedFlights.map(ef => ({
       ...ef,
-      assignedReg: assignmentResult.assignments.get(ef.id) || null,
+      assignedReg: activeResult.assignments.get(ef.id) || null,
     }))
-  }, [expandedFlights, assignmentResult])
+  }, [expandedFlights, activeResult])
+
+  /** Commit all optimizer assignments to the DB. */
+  const handleAssignAll = useCallback(async () => {
+    if (bulkAssigning) return
+    const entries = Array.from(activeResult.assignments.entries())
+    if (entries.length === 0) {
+      toast.warning('No optimizer assignments to commit')
+      return
+    }
+    setBulkAssigning(true)
+    try {
+      const payload = entries.map(([expandedId, reg]) => {
+        const m = expandedId.match(/_(\d{4}-\d{2}-\d{2})$/)
+        const flightDate = m ? m[1] : ''
+        const flightId = m ? expandedId.slice(0, m.index!) : expandedId
+        return { flightId, flightDate, aircraftReg: reg }
+      })
+      const res = await bulkAssignFlightsToAircraft(payload)
+      if (res.error) {
+        toast.error(res.error)
+      } else {
+        toast.success(`Assigned ${res.count ?? payload.length} flights`)
+        await refreshTailAssignments()
+        setSolutionSlots([])
+        setActiveSlotId(null)
+        setCompareOpen(false)
+      }
+    } catch (e: any) {
+      toast.error(friendlyError(e))
+    } finally {
+      setBulkAssigning(false)
+    }
+  }, [bulkAssigning, activeResult, refreshTailAssignments])
+
+  /** Remove all DB tail assignments for every flight in the current view. */
+  const handleDeassignAll = useCallback(async () => {
+    if (bulkAssigning) return
+    const items: FlightDateItem[] = []
+    tailAssignments.forEach((_reg, key) => {
+      const parts = key.split('__')
+      if (parts.length === 2) {
+        items.push({ flightId: parts[0], flightDate: parts[1] })
+      }
+    })
+    if (items.length === 0) {
+      toast.warning('No DB assignments to remove')
+      return
+    }
+    setBulkAssigning(true)
+    try {
+      const res = await bulkUnassignFlightsTail(items)
+      if (res.error) {
+        toast.error(res.error)
+      } else {
+        toast.success(`De-assigned ${res.count ?? items.length} flights`)
+        setAssignmentsEnabled(false)
+        await refreshTailAssignments()
+        setSolutionSlots([])
+        setActiveSlotId(null)
+        setCompareOpen(false)
+      }
+    } catch (e: any) {
+      toast.error(friendlyError(e))
+    } finally {
+      setBulkAssigning(false)
+    }
+  }, [bulkAssigning, tailAssignments, refreshTailAssignments])
 
   // ─── AI Advisor handler ─────────────────────────────────────────────
   const handleAskAdvisor = useCallback(async () => {
@@ -1538,7 +1933,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
 
       const summary = buildAdvisorSummary({
         assignedFlights,
-        overflow: assignmentResult.overflow.map(f => ({
+        overflow: activeResult.overflow.map(f => ({
           id: f.id,
           flightNumber: (f as any).flightNumber || '?',
           depStation: f.depStation,
@@ -1546,7 +1941,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           date: f.date,
           aircraftTypeIcao: f.aircraftTypeIcao,
         })),
-        chainBreaks: assignmentResult.chainBreaks,
+        chainBreaks: activeResult.chainBreaks,
         registrations: registrations as any[],
         aircraftTypes,
         method: assignmentMethod === 'greedy' ? 'Greedy'
@@ -1619,7 +2014,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   // ─── Overflow flights indexed by AC type ────────────────────────
   const overflowByType = useMemo(() => {
     const map = new Map<string, ExpandedFlight[]>()
-    for (const of_ of assignmentResult.overflow) {
+    for (const of_ of activeResult.overflow) {
       const ef = assignedFlights.find(f => f.id === of_.id)
       // DB-assigned flights are pinned to their row — never overflow
       if (!ef || ef.aircraftReg) continue
@@ -1629,7 +2024,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       map.set(key, list)
     }
     return map
-  }, [assignmentResult.overflow, assignedFlights])
+  }, [activeResult.overflow, assignedFlights])
 
   // Keep flightsByType for stats / other lookups
   const flightsByType = useMemo(() => {
@@ -3260,13 +3655,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const handleFromBlur = () => {
     if (fromText === '') { setPeriodFrom(null); return }
     const parsed = parseUserDate(fromText)
-    if (parsed) { setPeriodFrom(parsed); if (periodCommitted) setPeriodCommitted(false) }
+    if (parsed) { setPeriodFrom(parsed) }
     else setFromText(periodFrom ? isoToDisplay(periodFrom) : '')
   }
   const handleToBlur = () => {
     if (toText === '') { setPeriodTo(null); return }
     const parsed = parseUserDate(toText)
-    if (parsed) { setPeriodTo(parsed); if (periodCommitted) setPeriodCommitted(false) }
+    if (parsed) { setPeriodTo(parsed) }
     else setToText(periodTo ? isoToDisplay(periodTo) : '')
   }
   const handleCalendarPick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3274,13 +3669,11 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     if (!iso) return
     if (pickTargetRef.current === 'from') {
       setPeriodFrom(iso)
-      if (periodCommitted) setPeriodCommitted(false)
       pickTargetRef.current = 'to'
       // Re-open for TO pick after short delay
       setTimeout(() => calendarRef.current?.showPicker?.(), 100)
     } else {
       setPeriodTo(iso)
-      if (periodCommitted) setPeriodCommitted(false)
       pickTargetRef.current = 'from'
     }
   }
@@ -3337,7 +3730,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           const last = new Date(y, m + 1, 0).getDate()
           const to = `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`
           setPeriodFrom(from); setPeriodTo(to)
-          if (periodCommitted) setPeriodCommitted(false)
         }}
         className="bg-background border border-border text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
         style={{ height: s(26), padding: `0 ${s(8)}px`, fontSize: s(11), fontWeight: 500, borderRadius: s(6) }}
@@ -3354,7 +3746,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           const last = new Date(y, m + 1, 0).getDate()
           const to = `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`
           setPeriodFrom(from); setPeriodTo(to)
-          if (periodCommitted) setPeriodCommitted(false)
         }}
         className="bg-background border border-border text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
         style={{ height: s(26), padding: `0 ${s(8)}px`, fontSize: s(11), fontWeight: 500, borderRadius: s(6) }}
@@ -3378,6 +3769,58 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           ? <Loader2 className="animate-spin" style={{ width: s(12), height: s(12) }} />
           : (periodDirty ? 'Go ↻' : 'Go')}
       </button>
+      {/* ── Compare button ── */}
+      <button
+        onClick={() => setCompareOpen(!compareOpen)}
+        disabled={solutionSlots.length === 0}
+        className={`flex items-center gap-1 transition-all duration-200 ${
+          compareOpen
+            ? 'bg-primary/10 text-primary border border-primary/30'
+            : solutionSlots.length > 0
+              ? 'text-muted-foreground hover:bg-muted border border-border/60'
+              : 'text-muted-foreground/40 border border-border/30 cursor-not-allowed'
+        }`}
+        style={{ height: s(26), paddingLeft: s(8), paddingRight: s(8), borderRadius: s(7), fontSize: s(11) }}
+        title={solutionSlots.length === 0 ? 'Run optimizer first' : `Compare ${solutionSlots.length} solutions`}
+      >
+        <BarChart3 style={{ width: s(14), height: s(14) }} />
+        {solutionSlots.length > 0 && (
+          <span className="font-mono font-semibold" style={{ fontSize: s(10) }}>
+            {solutionSlots.length}
+          </span>
+        )}
+      </button>
+      {/* ── Assign All / De-assign All toggle buttons ── */}
+      <button
+        onClick={() => { setAssignmentsEnabled(true); handleAssignAll() }}
+        disabled={bulkAssigning}
+        className={`flex items-center justify-center transition-all duration-200 text-emerald-600 dark:text-emerald-400 ${
+          assignmentsEnabled
+            ? 'bg-emerald-500/15 border border-emerald-500/40'
+            : 'bg-emerald-500/10 border border-emerald-500/30 opacity-50 hover:opacity-100'
+        } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
+        style={{ width: s(26), height: s(26), borderRadius: s(7) }}
+        title="Assign All"
+      >
+        {bulkAssigning
+          ? <Loader2 className="animate-spin" style={{ width: s(14), height: s(14) }} />
+          : <PlaneTakeoff style={{ width: s(14), height: s(14) }} />}
+      </button>
+      <button
+        onClick={handleDeassignAll}
+        disabled={bulkAssigning}
+        className={`flex items-center justify-center transition-all duration-200 text-red-600 dark:text-red-400 ${
+          !assignmentsEnabled
+            ? 'bg-red-500/15 border border-red-500/40'
+            : 'bg-red-500/10 border border-red-500/30 opacity-50 hover:opacity-100'
+        } ${bulkAssigning ? 'opacity-50 cursor-not-allowed' : ''}`}
+        style={{ width: s(26), height: s(26), borderRadius: s(7) }}
+        title="De-assign All"
+      >
+        {bulkAssigning
+          ? <Loader2 className="animate-spin" style={{ width: s(14), height: s(14) }} />
+          : <PlaneLanding style={{ width: s(14), height: s(14) }} />}
+      </button>
       <button
         onClick={() => setSettingsPanelOpen(v => !v)}
         className={`rounded-md transition-all duration-200 ${settingsPanelOpen ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
@@ -3385,31 +3828,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         title="Gantt Settings"
       >
         <Settings2 style={{ width: s(14), height: s(14) }} />
-      </button>
-      {/* ── Assign All / De-assign All toggle buttons ── */}
-      <button
-        onClick={() => setAssignmentsEnabled(true)}
-        className={`flex items-center justify-center transition-all duration-200 text-emerald-600 dark:text-emerald-400 ${
-          assignmentsEnabled
-            ? 'bg-emerald-500/15 border border-emerald-500/40'
-            : 'bg-emerald-500/10 border border-emerald-500/30 opacity-50 hover:opacity-100'
-        }`}
-        style={{ width: s(26), height: s(26), borderRadius: s(7) }}
-        title="Assign All"
-      >
-        <PlaneTakeoff style={{ width: s(14), height: s(14) }} />
-      </button>
-      <button
-        onClick={() => setAssignmentsEnabled(false)}
-        className={`flex items-center justify-center transition-all duration-200 text-red-600 dark:text-red-400 ${
-          !assignmentsEnabled
-            ? 'bg-red-500/15 border border-red-500/40'
-            : 'bg-red-500/10 border border-red-500/30 opacity-50 hover:opacity-100'
-        }`}
-        style={{ width: s(26), height: s(26), borderRadius: s(7) }}
-        title="De-assign All"
-      >
-        <PlaneLanding style={{ width: s(14), height: s(14) }} />
       </button>
       <button
         onClick={toggleFullscreen}
@@ -3640,25 +4058,25 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
             >
               ✈ Optimizer
             </button>
-            {scheduleRules.length > 0 && assignmentResult.summary && (
+            {scheduleRules.length > 0 && activeResult.summary && (
               <div
                 className="flex items-center gap-2 px-3 py-1 rounded-full"
                 style={{ fontSize: 10 }}
               >
-                {assignmentResult.summary.hardRulesEnforced > 0 && (
+                {activeResult.summary.hardRulesEnforced > 0 && (
                   <span className="flex items-center gap-1">
                     <span style={{ color: 'hsl(var(--primary))' }}>⚡</span>
-                    {assignmentResult.summary.hardRulesEnforced} blocked
+                    {activeResult.summary.hardRulesEnforced} blocked
                   </span>
                 )}
-                {assignmentResult.summary.softRulesBent > 0 && (
+                {activeResult.summary.softRulesBent > 0 && (
                   <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                    ○ {assignmentResult.summary.softRulesBent} bent
+                    ○ {activeResult.summary.softRulesBent} bent
                   </span>
                 )}
-                {assignmentResult.summary.totalPenaltyCost > 0 && (
+                {activeResult.summary.totalPenaltyCost > 0 && (
                   <span className="text-muted-foreground">
-                    Cost: {assignmentResult.summary.totalPenaltyCost.toLocaleString()}
+                    Cost: {activeResult.summary.totalPenaltyCost.toLocaleString()}
                   </span>
                 )}
               </div>
@@ -3809,6 +4227,28 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           </div>
         </div>
       </div>
+
+      {/* ── COMPARISON PANEL OVERLAY ──────────────────────────────── */}
+      {compareOpen && solutionSlots.length > 0 && (
+        <div className="shrink-0 z-30 border-b" style={{ padding: `${s(4)}px ${s(12)}px` }}>
+          <GanttSolutionCompare
+            slots={solutionSlots}
+            activeSlotId={activeSlotId}
+            onSelectSlot={setActiveSlotId}
+            onDeleteSlot={(id) => {
+              setSolutionSlots(prev => {
+                const next = prev.filter(sl => sl.id !== id)
+                if (activeSlotId === id) setActiveSlotId(next.length > 0 ? next[next.length - 1].id : null)
+                if (next.length === 0) setCompareOpen(false)
+                return next
+              })
+            }}
+            onClose={() => setCompareOpen(false)}
+            s={s}
+            fuelPrice={ganttSettings.costAssumptions?.fuelPricePerKg ?? 0.80}
+          />
+        </div>
+      )}
 
       {/* ── BODY ───────────────────────────────────────────────────── */}
       <div className="flex-1 flex min-h-0 relative" style={{ pointerEvents: (loadingPhase !== 'idle' && loadingPhase !== 'done') ? 'none' : 'auto' }}>
@@ -4764,7 +5204,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                     }
 
                     // Rule violation dot (bottom-right corner)
-                    const barViolations = assignmentResult.ruleViolations.get(ef.id) || []
+                    const barViolations = activeResult.ruleViolations.get(ef.id) || []
                     const hasHardViolation = barViolations.some(v => v.enforcement === 'hard')
                     let violationDot: React.ReactNode = null
                     if (barViolations.length > 0 && w > 25) {
@@ -6032,8 +6472,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
                       {/* Rule violations & rejections */}
                       {(() => {
                         const flightId = flightPanelData.flight.id
-                        const vList = assignmentResult.ruleViolations.get(flightId) || []
-                        const rejectionList = assignmentResult.rejections.get(flightId) || []
+                        const vList = activeResult.ruleViolations.get(flightId) || []
+                        const rejectionList = activeResult.rejections.get(flightId) || []
                         if (vList.length === 0 && rejectionList.length === 0) return null
 
                         return (
@@ -6903,6 +7343,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         onAskAdvisor={handleAskAdvisor}
         mipProgress={mipProgress}
         mipResult={mipResult}
+        onCancelMip={handleCancelMip}
+        accentColor={ganttSettings.colorAssignment?.assigned ?? '#3B82F6'}
       />
 
       {/* ── Fixed-position tooltip (rendered outside scroll containers) ── */}
@@ -6914,7 +7356,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           regCode={hoveredTooltipInfo.regCode}
           cursorRef={tooltipPosRef}
           tooltipSettings={ganttSettings.tooltip}
-          violations={assignmentResult.ruleViolations.get(hoveredFlight.id) || []}
+          violations={activeResult.ruleViolations.get(hoveredFlight.id) || []}
         />
       )}
 

@@ -428,25 +428,31 @@ function DetailPanel({
 // ─── Inline Edit Helpers ─────────────────────────────────────────────────
 
 function InlineField({
-  label, field, value, acId, onSaved, mono, type = 'text', suffix, tatMode,
+  label, field, value, acId, onSaved, mono, type = 'text', suffix, tatMode, compact, validate,
 }: {
-  label: string; field: string; value: string; acId: string; onSaved: () => void; mono?: boolean; type?: string; suffix?: string; tatMode?: boolean
+  label?: string; field: string; value: string; acId: string; onSaved: () => void; mono?: boolean; type?: string; suffix?: string; tatMode?: boolean; compact?: boolean; validate?: (val: number | null) => string | null
 }) {
   const displayValue = tatMode ? minutesToHHMM(Number(value)) || '' : value
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(displayValue)
   const [saving, setSaving] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setEditValue(tatMode ? minutesToHHMM(Number(value)) || '' : value) }, [value, tatMode])
   useEffect(() => { if (editing && inputRef.current) inputRef.current.focus() }, [editing])
 
   const save = useCallback(async () => {
+    setValidationError(null)
     let finalValue: string | number | null
     if (tatMode) {
       const mins = hhmmToMinutes(editValue)
       if (mins === null && editValue.trim()) { setEditValue(displayValue); setEditing(false); return }
       finalValue = mins
+      if (validate) {
+        const err = validate(mins)
+        if (err) { setValidationError(err); return }
+      }
     } else if (type === 'number') {
       finalValue = editValue ? parseFloat(editValue) : null
     } else {
@@ -467,11 +473,11 @@ function InlineField({
       onSaved()
     }
     setEditing(false)
-  }, [acId, field, editValue, value, displayValue, onSaved, type, tatMode])
+  }, [acId, field, editValue, value, displayValue, onSaved, type, tatMode, validate])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') save()
-    if (e.key === 'Escape') { setEditValue(displayValue); setEditing(false) }
+    if (e.key === 'Escape') { setEditValue(displayValue); setEditing(false); setValidationError(null) }
   }
 
   // Auto-format on blur for TAT: raw number → HH:MM
@@ -483,9 +489,40 @@ function InlineField({
     save()
   }
 
+  if (compact) {
+    return (
+      <div>
+        {editing ? (
+          <Input
+            ref={inputRef}
+            value={editValue}
+            onChange={e => setEditValue(e.target.value)}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            disabled={saving}
+            type="text"
+            placeholder="H:MM"
+            className="font-mono text-xs h-8 text-center"
+          />
+        ) : (
+          <button
+            onClick={() => setEditing(true)}
+            className={cn(
+              'font-mono text-xs w-full text-center px-1 py-1.5 rounded-md hover:bg-white/50 dark:hover:bg-white/10 transition-colors min-h-[32px]',
+              !displayValue && 'text-muted-foreground italic'
+            )}
+          >
+            {displayValue || '—'}
+          </button>
+        )}
+        {validationError && <p className="text-[10px] text-destructive mt-0.5 text-center">{validationError}</p>}
+      </div>
+    )
+  }
+
   return (
     <div className={cn('py-2.5 border-b border-white/5')}>
-      <div className="text-xs text-muted-foreground mb-1">{label}</div>
+      {label && <div className="text-xs text-muted-foreground mb-1">{label}</div>}
       {editing ? (
         <div className="flex items-center gap-2">
           <Input
@@ -515,6 +552,7 @@ function InlineField({
           {suffix && displayValue && <span className="text-xs text-muted-foreground">{suffix}</span>}
         </button>
       )}
+      {validationError && <p className="text-[10px] text-destructive mt-1">{validationError}</p>}
     </div>
   )
 }
@@ -771,22 +809,67 @@ function PerformanceTab({ ac, onSaved }: { ac: AircraftType; onSaved: () => void
 // ─── TAB 3: Turn Around Times ───────────────────────────────────────────
 
 function TATTab({ ac, onSaved }: { ac: AircraftType; onSaved: () => void }) {
+  // Validation: minimum TAT cannot exceed corresponding scheduled TAT
+  const makeMinValidator = (scheduledField: 'tat_dom_dom_minutes' | 'tat_dom_int_minutes' | 'tat_int_dom_minutes' | 'tat_int_int_minutes') => {
+    return (minValue: number | null) => {
+      const scheduledValue = ac[scheduledField]
+      if (minValue != null && scheduledValue != null && minValue > scheduledValue) {
+        return 'Minimum TAT cannot exceed Scheduled TAT'
+      }
+      return null
+    }
+  }
+
   return (
     <div className="space-y-4">
-      <Section title="Default Turn Around Time">
-        <InlineField label="Commercial Turn Around Time" field="default_tat_minutes" value={ac.default_tat_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
-        <div className="mt-2 flex items-start gap-2 p-2 rounded-lg bg-muted/30">
-          <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-          <span className="text-[11px] text-muted-foreground">Turn Around Time (TAT) is the minimum ground time between arrival and next departure. Airport-specific overrides take precedence over this default.</span>
-        </div>
-      </Section>
+      <Section title="Turn Around Time">
+        <p className="text-[12px] text-muted-foreground mb-3">
+          Scheduled TAT is used for network planning. Minimum TAT is the operational floor — the shortest safe turnaround.
+        </p>
 
-      <Section title="Operational Turn Around Time by Route Type">
-        <div className="grid grid-cols-2 gap-x-6">
-          <InlineField label="DOM → DOM" field="tat_dom_dom_minutes" value={ac.tat_dom_dom_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
-          <InlineField label="DOM → INT" field="tat_dom_int_minutes" value={ac.tat_dom_int_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
-          <InlineField label="INT → DOM" field="tat_int_dom_minutes" value={ac.tat_int_dom_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
-          <InlineField label="INT → INT" field="tat_int_int_minutes" value={ac.tat_int_int_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
+        <div className="space-y-3">
+          {/* Header row */}
+          <div className="grid grid-cols-5 gap-2 items-end">
+            <div />
+            <div className="text-[11px] font-medium text-center text-muted-foreground">DOM → DOM</div>
+            <div className="text-[11px] font-medium text-center text-muted-foreground">DOM → INT</div>
+            <div className="text-[11px] font-medium text-center text-muted-foreground">INT → DOM</div>
+            <div className="text-[11px] font-medium text-center text-muted-foreground">INT → INT</div>
+          </div>
+
+          {/* Scheduled row */}
+          <div className="grid grid-cols-5 gap-2 items-center">
+            <div className="text-[12px] font-medium">Scheduled</div>
+            <InlineField field="tat_dom_dom_minutes" value={ac.tat_dom_dom_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode compact />
+            <InlineField field="tat_dom_int_minutes" value={ac.tat_dom_int_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode compact />
+            <InlineField field="tat_int_dom_minutes" value={ac.tat_int_dom_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode compact />
+            <InlineField field="tat_int_int_minutes" value={ac.tat_int_int_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode compact />
+          </div>
+
+          {/* Minimum row */}
+          <div className="grid grid-cols-5 gap-2 items-center">
+            <div className="text-[12px] font-medium">Minimum</div>
+            <InlineField field="tat_min_dd_minutes" value={ac.tat_min_dd_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode compact validate={makeMinValidator('tat_dom_dom_minutes')} />
+            <InlineField field="tat_min_di_minutes" value={ac.tat_min_di_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode compact validate={makeMinValidator('tat_dom_int_minutes')} />
+            <InlineField field="tat_min_id_minutes" value={ac.tat_min_id_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode compact validate={makeMinValidator('tat_int_dom_minutes')} />
+            <InlineField field="tat_min_ii_minutes" value={ac.tat_min_ii_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode compact validate={makeMinValidator('tat_int_int_minutes')} />
+          </div>
+        </div>
+
+        {/* Legacy flat TAT */}
+        <div className="mt-4 pt-3 border-t border-white/5">
+          <InlineField label="Legacy Commercial TAT" field="default_tat_minutes" value={ac.default_tat_minutes?.toString() || ''} acId={ac.id} onSaved={onSaved} tatMode />
+          <p className="text-[10px] text-muted-foreground mt-1">
+            Fallback value when directional TAT is not configured. Prefer using the scheduled values above.
+          </p>
+        </div>
+
+        {/* Info box */}
+        <div className="mt-3 flex items-start gap-2 p-2 rounded-lg bg-muted/30">
+          <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+          <span className="text-[11px] text-muted-foreground">
+            <strong>Scheduled TAT</strong> is used by the Greedy and Good assignment methods for safe network planning. <strong>Minimum TAT</strong> is the operational floor — the AI Optimizer may use it to find tighter solutions. Airport-specific TAT overrides take precedence over these defaults.
+          </span>
         </div>
       </Section>
     </div>

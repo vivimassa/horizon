@@ -1,12 +1,28 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { X, SlidersHorizontal, Loader2, ChevronRight, Sparkles, Check } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
 import type { SAProgress, SAResult } from '@/lib/utils/tail-assignment-sa'
-import type { MIPProgress, MIPResult } from '@/lib/utils/tail-assignment-mip'
+
+// MIP types (Cloud Run solver — no longer from tail-assignment-mip.ts)
+interface MIPProgress { phase: 'building' | 'solving' | 'extracting'; message: string; elapsedMs: number }
+interface MIPResult {
+  assignments: Map<string, string>
+  overflow: any[]
+  chainBreaks: any[]
+  ruleViolations: Map<string, any[]>
+  rejections: Map<string, any[]>
+  summary: any
+  mip: {
+    status: 'Optimal' | 'Feasible' | 'Infeasible' | 'TimeLimitReached' | 'Error'
+    objectiveValue: number; totalVariables: number; totalConstraints: number
+    elapsedMs: number; timeLimitSec: number; gap?: number; message?: string
+  }
+}
+export type { MIPProgress, MIPResult }
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -28,6 +44,8 @@ export interface GanttOptimizerDialogProps {
   onAskAdvisor?: () => void
   mipProgress?: MIPProgress | null
   mipResult?: MIPResult | null
+  onCancelMip?: () => void
+  accentColor?: string
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -148,11 +166,28 @@ export function GanttOptimizerDialog({
   onAskAdvisor,
   mipProgress,
   mipResult,
+  onCancelMip,
+  accentColor = '#3B82F6',
 }: GanttOptimizerDialogProps) {
   const router = useRouter()
   const [selectedMethod, setSelectedMethod] = useState<OptimizerMethod>(currentMethod)
   const [aiPreset, setAiPreset] = useState<'quick' | 'normal' | 'deep'>('normal')
   const [mipPreset, setMipPreset] = useState<'quick' | 'normal' | 'deep'>('normal')
+
+  // Live elapsed timer for MIP overlay
+  const mipStartRef = useRef<number>(0)
+  const [mipElapsed, setMipElapsed] = useState(0)
+  useEffect(() => {
+    if (mipProgress) {
+      if (!mipStartRef.current) mipStartRef.current = Date.now()
+      const id = setInterval(() => {
+        setMipElapsed(Math.floor((Date.now() - mipStartRef.current) / 1000))
+      }, 1000)
+      return () => clearInterval(id)
+    }
+    mipStartRef.current = 0
+    setMipElapsed(0)
+  }, [mipProgress])
 
   // Sync with parent when dialog opens
   useEffect(() => {
@@ -262,28 +297,53 @@ export function GanttOptimizerDialog({
             className="absolute inset-0 z-10 flex flex-col items-center justify-center px-8"
             style={{ background: 'hsl(var(--background) / 0.95)', borderRadius: 16 }}
           >
-            {/* Phase indicator */}
-            <div className="mb-4">
-              {mipProgress.phase === 'building' && (
-                <Loader2 className="h-10 w-10 animate-spin text-primary" />
-              )}
-              {mipProgress.phase === 'solving' && (
-                <div className="relative">
-                  <div className="h-10 w-10 rounded-full border-4 border-primary animate-pulse" />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span style={{ fontSize: 10, fontWeight: 700 }} className="text-primary">MIP</span>
-                  </div>
-                </div>
-              )}
-              {mipProgress.phase === 'extracting' && (
-                <Check className="h-10 w-10 text-green-500" />
-              )}
+            {/* Pulsing logo */}
+            <div className="relative mb-6" style={{ width: 200 }}>
+              {/* Glow behind logo */}
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: -20,
+                  borderRadius: '50%',
+                  background: `radial-gradient(circle, ${accentColor}20 0%, transparent 70%)`,
+                  animation: 'mip-logo-glow 3s ease-in-out infinite',
+                }}
+              />
+              {/* Logo tinted with accent color via CSS mask */}
+              <img
+                src="/horizon-watermark.png"
+                alt=""
+                style={{
+                  width: '100%',
+                  height: 'auto',
+                  WebkitMaskImage: 'url(/horizon-watermark.png)',
+                  WebkitMaskSize: 'contain',
+                  WebkitMaskRepeat: 'no-repeat',
+                  WebkitMaskPosition: 'center',
+                  maskImage: 'url(/horizon-watermark.png)',
+                  maskSize: 'contain',
+                  maskRepeat: 'no-repeat',
+                  maskPosition: 'center',
+                  background: accentColor,
+                  animation: 'mip-logo-pulse 3s ease-in-out infinite',
+                }}
+              />
+              <style>{`
+                @keyframes mip-logo-pulse {
+                  0%, 100% { opacity: 0.45; transform: scale(1); }
+                  50% { opacity: 1; transform: scale(1.04); }
+                }
+                @keyframes mip-logo-glow {
+                  0%, 100% { opacity: 0.3; transform: scale(0.9); }
+                  50% { opacity: 0.7; transform: scale(1.1); }
+                }
+              `}</style>
             </div>
 
             <div className="font-medium" style={{ fontSize: 14 }}>
-              {mipProgress.phase === 'building' ? 'Building model...'
+              {mipProgress.phase === 'building' ? 'Sending to solver...'
                 : mipProgress.phase === 'solving' ? 'Solving optimization...'
-                : 'Extracting solution...'}
+                : 'Processing result...'}
             </div>
 
             <p className="text-muted-foreground mt-1" style={{ fontSize: 11 }}>
@@ -291,8 +351,21 @@ export function GanttOptimizerDialog({
             </p>
 
             <div className="text-muted-foreground mt-3" style={{ fontSize: 10 }}>
-              {(mipProgress.elapsedMs / 1000).toFixed(1)}s elapsed
+              {mipElapsed < 60
+                ? `${mipElapsed}s elapsed`
+                : `${Math.floor(mipElapsed / 60)}m ${mipElapsed % 60}s elapsed`}
             </div>
+
+            {onCancelMip && (
+              <button
+                type="button"
+                onClick={onCancelMip}
+                className="mt-4 text-muted-foreground hover:text-foreground transition-colors"
+                style={{ fontSize: 11, padding: '6px 14px', borderRadius: 6 }}
+              >
+                Cancel
+              </button>
+            )}
           </div>
         )}
 
@@ -603,7 +676,7 @@ export function GanttOptimizerDialog({
                       : 'hsl(var(--primary))',
                   }}>
                     {mipResult.mip.status === 'Optimal' ? '\u2713 Optimal Solution Found'
-                      : mipResult.mip.status === 'Feasible' ? '\u25C9 Good Solution Found'
+                      : mipResult.mip.status === 'Feasible' ? '\u25C9 Near-optimal Solution (time limit reached)'
                       : mipResult.mip.status === 'Infeasible' ? '\u2717 No Feasible Solution'
                       : '\u26A0 Solver Error'}
                   </div>

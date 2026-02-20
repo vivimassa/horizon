@@ -59,6 +59,8 @@ function mergeWithDefaults(partial: Record<string, unknown>): GanttSettingsData 
 
     allowFamilySub: typeof partial.allowFamilySub === 'boolean' ? partial.allowFamilySub : d.allowFamilySub,
 
+    costAssumptions: { ...d.costAssumptions, ...(partial.costAssumptions as object | undefined) },
+
     tatOverrides: (partial.tatOverrides as GanttSettingsData['tatOverrides'] | undefined) ?? { ...d.tatOverrides },
     utilizationTargets: (partial.utilizationTargets as Record<string, number> | undefined) ?? { ...d.utilizationTargets },
   }

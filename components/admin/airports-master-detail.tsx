@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import dynamic from 'next/dynamic'
-import { type AirportWithCountry, updateAirportField, updateAirportFields, fixAirportCountries } from '@/app/actions/airports'
+import { type AirportWithCountry, updateAirportField, updateAirportFields, fixAirportCountries, getAirportWithCountryById } from '@/app/actions/airports'
 import { getRunways, createRunway, updateRunway, deleteRunway } from '@/app/actions/airport-subtables'
 import { getTerminals, createTerminal, updateTerminal, deleteTerminal } from '@/app/actions/airport-subtables'
 import { getCurfews, createCurfew, updateCurfew, deleteCurfew } from '@/app/actions/airport-subtables'
@@ -25,8 +25,10 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import {
-  Plus, Trash2, Search, Plane, ChevronRight, Info, Clock, Radio, Cloud, Timer, Users, AlertTriangle, Satellite, CheckCircle2, Loader2,
+  Plus, Trash2, Search, Plane, ChevronRight, Info, Clock, Radio, Cloud, Timer, Users, AlertTriangle, Satellite, CheckCircle2, Loader2, ChevronsUpDown, Check,
 } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 import { toast } from '@/components/ui/visionos-toast'
@@ -62,8 +64,29 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
   const [fixingCountries, setFixingCountries] = useState(false)
   const router = useRouter()
 
-  const missingCountryCount = useMemo(
-    () => airports.filter(a => !a.country_id).length,
+  // Sync selectedAirport when the server prop refreshes
+  useEffect(() => {
+    if (selectedAirport) {
+      const updated = airports.find(a => a.id === selectedAirport.id)
+      if (updated) setSelectedAirport(updated)
+    }
+  }, [airports]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Immediately re-fetch the selected airport after an edit, then background-refresh the list
+  const handleFieldUpdated = useCallback(async () => {
+    if (selectedAirport) {
+      const fresh = await getAirportWithCountryById(selectedAirport.id)
+      if (fresh) setSelectedAirport(fresh)
+    }
+    router.refresh()
+  }, [selectedAirport, router])
+
+  const incompleteCount = useMemo(
+    () => airports.filter(a =>
+      !a.country_id ||
+      (a.iata_code && a.icao_code === `Z${a.iata_code}`) ||
+      a.timezone === 'UTC'
+    ).length,
     [airports]
   )
 
@@ -72,13 +95,13 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
     try {
       const result = await fixAirportCountries()
       if (result.fixed > 0) {
-        toast.success(`Fixed ${result.fixed} airport${result.fixed > 1 ? 's' : ''} with missing country data`)
+        toast.success(`Fixed ${result.fixed} airport${result.fixed > 1 ? 's' : ''}: ICAO codes, countries, timezones`)
         router.refresh()
       } else {
-        toast.info('No airports could be auto-fixed. Please assign countries manually.')
+        toast.info('No airports could be auto-fixed. Please assign data manually.')
       }
     } catch {
-      toast.error('Failed to fix airport countries')
+      toast.error('Failed to fix airports')
     }
     setFixingCountries(false)
   }
@@ -162,11 +185,11 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
               className="pl-9"
             />
           </div>
-          {missingCountryCount > 0 && (
+          {incompleteCount > 0 && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
               <span className="text-xs text-amber-800 flex-1">
-                {missingCountryCount} airport{missingCountryCount > 1 ? 's' : ''} missing country — DOM/INT classification may be wrong
+                {incompleteCount} airport{incompleteCount > 1 ? 's' : ''} incomplete — missing country, ICAO, or timezone
               </span>
               <Button size="sm" variant="outline" className="h-6 text-xs px-2 shrink-0" onClick={handleFixCountries} disabled={fixingCountries}>
                 {fixingCountries ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Auto-fix'}
@@ -233,7 +256,7 @@ export function AirportsMasterDetail({ airports, countries, timezoneZones, aircr
           aircraftTypes={aircraftTypes}
           activeTab={activeTab}
           onTabChange={setActiveTab}
-          onFieldUpdated={() => router.refresh()}
+          onFieldUpdated={handleFieldUpdated}
         />
       )}
       renderEmptyDetail={() => (
@@ -485,6 +508,8 @@ function InlineField({
   useEffect(() => { setEditValue(value) }, [value])
   useEffect(() => { if (editing && inputRef.current) inputRef.current.focus() }, [editing])
 
+  const uppercaseFields = ['iata_code', 'icao_code']
+
   const save = useCallback(async () => {
     if (editValue === value) { setEditing(false); return }
     setSaving(true)
@@ -493,7 +518,8 @@ function InlineField({
       'slot_arrival_tolerance_early', 'slot_arrival_tolerance_late',
       'crew_reporting_time_minutes', 'crew_debrief_time_minutes',
       'crew_positioning_reporting_minutes', 'etops_diversion_minutes']
-    const val = numericFields.includes(field) ? (editValue === '' ? null : Number(editValue)) : editValue
+    let val: string | number | null = numericFields.includes(field) ? (editValue === '' ? null : Number(editValue)) : editValue
+    if (uppercaseFields.includes(field) && typeof val === 'string') val = val.toUpperCase()
     const result = await updateAirportField(airportId, field, val as string | number | boolean | null)
     setSaving(false)
     if (result?.error) { alert(result.error); setEditValue(value) }
@@ -512,9 +538,9 @@ function InlineField({
     <div className={cn('py-2.5 border-b border-white/5')}>
       <div className="text-xs text-muted-foreground mb-1">{label}</div>
       {editing ? (
-        <Input ref={inputRef} value={editValue} onChange={(e) => setEditValue(e.target.value)}
+        <Input ref={inputRef} value={editValue} onChange={(e) => setEditValue(uppercaseFields.includes(field) ? e.target.value.toUpperCase() : e.target.value)}
           onBlur={save} onKeyDown={handleKeyDown} disabled={saving} type={type}
-          className={cn('h-8 text-sm', mono && 'font-mono')} />
+          className={cn('h-8 text-sm', mono && 'font-mono', uppercaseFields.includes(field) && 'uppercase')} />
       ) : (
         <button onClick={() => setEditing(true)}
           className={cn('text-sm text-left w-full px-2 py-1 -mx-2 rounded-md hover:bg-white/50 dark:hover:bg-white/10 transition-colors min-h-[28px]',
@@ -552,6 +578,54 @@ function InlineSelectField({
           ))}
         </SelectContent>
       </Select>
+    </div>
+  )
+}
+
+function InlineSearchableSelectField({
+  label, field, value, airportId, options, onSaved, placeholder = 'Search...',
+}: {
+  label: string; field: string; value: string; airportId: string
+  options: { value: string; label: string }[]; onSaved: () => void; placeholder?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const selectedLabel = options.find((o) => o.value === value)?.label || ''
+
+  const handleSelect = async (newValue: string) => {
+    setOpen(false)
+    if (newValue === value) return
+    const result = await updateAirportField(airportId, field, newValue)
+    if (result?.error) alert(result.error)
+    else onSaved()
+  }
+
+  return (
+    <div className={cn('py-2.5 border-b border-white/5')}>
+      <div className="text-xs text-muted-foreground mb-1">{label}</div>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button variant="outline" role="combobox" aria-expanded={open} className="w-full h-8 justify-between text-sm font-normal px-3">
+            <span className="truncate">{selectedLabel || <span className="text-muted-foreground">Select...</span>}</span>
+            <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 opacity-50 ml-2" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+          <Command>
+            <CommandInput placeholder={placeholder} className="h-8 text-sm" />
+            <CommandList>
+              <CommandEmpty>No results found.</CommandEmpty>
+              <CommandGroup>
+                {options.map((opt) => (
+                  <CommandItem key={opt.value} value={opt.label} onSelect={() => handleSelect(opt.value)} className="text-sm">
+                    <Check className={cn('mr-2 h-3.5 w-3.5', value === opt.value ? 'opacity-100' : 'opacity-0')} />
+                    {opt.label}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   )
 }
@@ -621,7 +695,7 @@ function BasicInfoTab({
         <InlineField label="ICAO Code" field="icao_code" value={airport.icao_code} airportId={airport.id} onSaved={onFieldUpdated} mono />
         <InlineField label="Airport Name" field="name" value={airport.name} airportId={airport.id} onSaved={onFieldUpdated} />
         <InlineField label="City" field="city" value={airport.city || ''} airportId={airport.id} onSaved={onFieldUpdated} />
-        <InlineSelectField label="Country" field="country_id" value={airport.country_id || ''} airportId={airport.id} options={countryOptions} onSaved={onFieldUpdated} />
+        <InlineSearchableSelectField label="Country" field="country_id" value={airport.country_id || ''} airportId={airport.id} options={countryOptions} onSaved={onFieldUpdated} placeholder="Search country..." />
         {filteredZones.length > 0 && (
           <InlineSelectField label="Timezone Zone" field="timezone_zone_id" value={airport.timezone_zone_id || ''} airportId={airport.id} options={filteredZones} onSaved={onFieldUpdated} />
         )}
@@ -1261,10 +1335,17 @@ function TatTab({ airport, aircraftTypes }: { airport: AirportWithCountry; aircr
         <div>
           <h3 className="text-sm font-semibold">Turn Around Times</h3>
           <p className="text-[11px] text-muted-foreground mt-0.5">
-            Airport Turn Around Time overrides Aircraft Type defaults. Leave blank to use aircraft type defaults.
+            Airport TAT overrides Aircraft Type defaults. Leave blank to use aircraft type defaults.
           </p>
         </div>
         <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4 mr-1" /> Add Rule</Button>
+      </div>
+
+      <div className="flex items-start gap-2 p-2 rounded-lg bg-muted/30">
+        <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+        <span className="text-[11px] text-muted-foreground">
+          Airport TAT is a <strong>regulatory requirement</strong> set by the airport authority. These values act as a hard floor — even the AI Optimizer cannot schedule turnarounds shorter than the airport minimum. When both airport and aircraft type TAT exist, the higher value applies. Airport TAT overrides apply to Scheduled TAT only. Minimum TAT is configured per aircraft type.
+        </span>
       </div>
 
       {loading ? (

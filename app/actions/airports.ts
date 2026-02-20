@@ -4,6 +4,7 @@ import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { Airport, Country } from '@/types/database'
 import { AIRPORT_COUNTRY } from '@/lib/data/airport-countries'
+import { lookupAirportByIATA } from '@/app/actions/airport-inquiry'
 
 export interface AirportWithCountry extends Airport {
   countries: { name: string; iso_code_2: string; flag_emoji: string | null } | null
@@ -22,6 +23,18 @@ export async function getAirportsWithCountry(): Promise<AirportWithCountry[]> {
     return []
   }
   return (data as unknown as AirportWithCountry[]) || []
+}
+
+export async function getAirportWithCountryById(id: string): Promise<AirportWithCountry | null> {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('airports')
+    .select('*, countries(name, iso_code_2, flag_emoji), timezone_zones(iana_timezone, zone_name)')
+    .eq('id', id)
+    .single()
+
+  if (error) return null
+  return data as unknown as AirportWithCountry
 }
 
 export async function getAirports(): Promise<Airport[]> {
@@ -62,10 +75,16 @@ export async function updateAirportField(
     return { error: 'Invalid field' }
   }
 
+  // Enforce uppercase for code fields
+  let sanitized = value
+  if ((field === 'iata_code' || field === 'icao_code') && typeof value === 'string') {
+    sanitized = value.toUpperCase()
+  }
+
   const supabase = createAdminClient()
   const { error } = await supabase
     .from('airports')
-    .update({ [field]: value })
+    .update({ [field]: sanitized })
     .eq('id', id)
 
   if (error) {
@@ -145,37 +164,103 @@ export async function fixAirportCountries(): Promise<{
 }> {
   const supabase = createAdminClient()
 
-  // Fetch airports missing country_id
-  const { data: airports } = await supabase
+  // Fetch airports that are incomplete: missing country OR have placeholder ICAO (Z+IATA)
+  const { data: allAirports } = await supabase
     .from('airports')
-    .select('id, iata_code, country_id')
-    .is('country_id', null)
+    .select('id, iata_code, icao_code, name, country_id, timezone, latitude, longitude, elevation_ft, city')
 
-  if (!airports || airports.length === 0) return { fixed: 0, details: [] }
+  if (!allAirports || allAirports.length === 0) return { fixed: 0, details: [] }
 
-  // Build ISO → country UUID map
-  const { data: countries } = await supabase.from('countries').select('id, iso_code_2')
+  const needsFix = allAirports.filter(a =>
+    !a.country_id ||
+    (a.iata_code && a.icao_code === `Z${a.iata_code}`) ||
+    (a.iata_code && a.name === a.iata_code) ||
+    a.timezone === 'UTC'
+  )
+
+  if (needsFix.length === 0) return { fixed: 0, details: [] }
+
+  // Build ISO → country UUID map and ICAO prefix → country map
+  const { data: countries } = await supabase.from('countries').select('id, iso_code_2, icao_prefix')
   const isoToCountryId = new Map<string, string>()
-  countries?.forEach(c => isoToCountryId.set(c.iso_code_2, c.id))
+  const prefixToCountry = new Map<string, { id: string; iso: string }>()
+  countries?.forEach(c => {
+    isoToCountryId.set(c.iso_code_2, c.id)
+    if (c.icao_prefix) prefixToCountry.set(c.icao_prefix, { id: c.id, iso: c.iso_code_2 })
+  })
 
   let fixed = 0
   const details: string[] = []
 
-  for (const airport of airports) {
-    if (!airport.iata_code) continue
-    const isoCode = AIRPORT_COUNTRY[airport.iata_code]
-    if (!isoCode) continue
-    const countryId = isoToCountryId.get(isoCode)
-    if (!countryId) continue
+  for (const airport of needsFix) {
+    const updates: Record<string, string | number | boolean | null> = {}
+    const hasPlaceholderIcao = airport.iata_code && airport.icao_code === `Z${airport.iata_code}`
+
+    // If has IATA and (missing data or placeholder ICAO), look up from OurAirports
+    if (airport.iata_code && (hasPlaceholderIcao || !airport.country_id || airport.timezone === 'UTC')) {
+      const info = await lookupAirportByIATA(airport.iata_code)
+      if (info) {
+        if (hasPlaceholderIcao && info.icao_code) updates.icao_code = info.icao_code
+        if (airport.name === airport.iata_code && info.name) updates.name = info.name
+        if (!airport.city && info.city) updates.city = info.city
+        if (!airport.latitude && info.latitude) updates.latitude = info.latitude
+        if (!airport.longitude && info.longitude) updates.longitude = info.longitude
+        if (!airport.elevation_ft && info.elevation_ft) updates.elevation_ft = info.elevation_ft
+
+        // Resolve country from lookup result
+        if (!airport.country_id && info.iso_country) {
+          const countryId = isoToCountryId.get(info.iso_country)
+          if (countryId) {
+            updates.country_id = countryId
+            updates.country = info.iso_country
+          }
+        }
+
+        // Resolve timezone from country's timezone zones
+        const resolvedCountryId = (updates.country_id as string) || airport.country_id
+        if (airport.timezone === 'UTC' && resolvedCountryId) {
+          const { data: zones } = await supabase
+            .from('timezone_zones')
+            .select('iana_timezone')
+            .eq('country_id', resolvedCountryId)
+            .limit(1)
+          if (zones?.[0]) updates.timezone = zones[0].iana_timezone
+        }
+      }
+    }
+
+    // If still no country, try ICAO prefix matching
+    if (!airport.country_id && !updates.country_id) {
+      const icao = (updates.icao_code as string) || airport.icao_code
+      if (icao) {
+        const match = prefixToCountry.get(icao.slice(0, 2)) || prefixToCountry.get(icao.slice(0, 1))
+        if (match) {
+          updates.country_id = match.id
+          updates.country = match.iso
+        }
+      }
+      // IATA lookup table as last resort
+      if (!updates.country_id && airport.iata_code) {
+        const iso = AIRPORT_COUNTRY[airport.iata_code]
+        if (iso) {
+          const cid = isoToCountryId.get(iso)
+          if (cid) { updates.country_id = cid; updates.country = iso }
+        }
+      }
+    }
+
+    if (Object.keys(updates).length === 0) continue
 
     const { error } = await supabase
       .from('airports')
-      .update({ country_id: countryId, country: isoCode })
+      .update(updates)
       .eq('id', airport.id)
 
     if (!error) {
       fixed++
-      details.push(`${airport.iata_code}: set country_id (${isoCode})`)
+      const label = airport.iata_code || airport.icao_code
+      const changes = Object.keys(updates).join(', ')
+      details.push(`${label}: ${changes}`)
     }
   }
 

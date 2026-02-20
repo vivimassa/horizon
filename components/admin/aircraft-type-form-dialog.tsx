@@ -156,10 +156,38 @@ export function AircraftTypeFormDialog({ open, onOpenChange, aircraftType }: Air
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="default_tat_minutes">Default Turn Around Time (HH:MM)</Label>
-            <Input id="default_tat_minutes" name="default_tat_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.default_tat_minutes) || ''} placeholder="00:45" disabled={loading} className="font-mono" />
-            <p className="text-xs text-muted-foreground">e.g. 00:45 for 45 minutes, 01:10 for 70 minutes</p>
+          <div className="space-y-3">
+            <Label className="text-[13px] font-medium">Turn Around Time (HH:MM)</Label>
+
+            {/* Column headers */}
+            <div className="grid grid-cols-5 gap-2">
+              <div />
+              <span className="text-[10px] text-center text-muted-foreground">DOM→DOM</span>
+              <span className="text-[10px] text-center text-muted-foreground">DOM→INT</span>
+              <span className="text-[10px] text-center text-muted-foreground">INT→DOM</span>
+              <span className="text-[10px] text-center text-muted-foreground">INT→INT</span>
+            </div>
+
+            {/* Scheduled row */}
+            <div className="grid grid-cols-5 gap-2 items-center">
+              <span className="text-[11px] font-medium">Scheduled</span>
+              <Input name="tat_dom_dom_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.tat_dom_dom_minutes) || ''} placeholder="0:30" className="font-mono text-xs h-8 text-center" disabled={loading} />
+              <Input name="tat_dom_int_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.tat_dom_int_minutes) || ''} placeholder="0:40" className="font-mono text-xs h-8 text-center" disabled={loading} />
+              <Input name="tat_int_dom_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.tat_int_dom_minutes) || ''} placeholder="0:45" className="font-mono text-xs h-8 text-center" disabled={loading} />
+              <Input name="tat_int_int_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.tat_int_int_minutes) || ''} placeholder="0:50" className="font-mono text-xs h-8 text-center" disabled={loading} />
+            </div>
+
+            {/* Minimum row */}
+            <div className="grid grid-cols-5 gap-2 items-center">
+              <span className="text-[11px] font-medium">Minimum</span>
+              <Input name="tat_min_dd_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.tat_min_dd_minutes) || ''} placeholder="0:25" className="font-mono text-xs h-8 text-center" disabled={loading} />
+              <Input name="tat_min_di_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.tat_min_di_minutes) || ''} placeholder="0:35" className="font-mono text-xs h-8 text-center" disabled={loading} />
+              <Input name="tat_min_id_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.tat_min_id_minutes) || ''} placeholder="0:40" className="font-mono text-xs h-8 text-center" disabled={loading} />
+              <Input name="tat_min_ii_minutes" type="text" defaultValue={minutesToHHMM(aircraftType?.tat_min_ii_minutes) || ''} placeholder="0:45" className="font-mono text-xs h-8 text-center" disabled={loading} />
+            </div>
+
+            <p className="text-[10px] text-muted-foreground">e.g. 0:45 for 45 minutes, 1:10 for 70 minutes</p>
+            <input type="hidden" name="default_tat_minutes" value="" />
           </div>
 
           <div className="space-y-3">

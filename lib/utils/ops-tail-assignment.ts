@@ -42,6 +42,8 @@ export interface AssignableFlight {
   /** Departure day offset within route (0 = first leg day, 1 = next day, etc.) */
   dayOffset: number
   serviceType: string
+  /** 'DOM' or 'INT' — used for directional TAT resolution */
+  routeType: string | null
 }
 
 export interface AssignableAircraft {
@@ -99,6 +101,8 @@ interface TimeWindow {
   endMs: number
   depStation: string
   arrStation: string
+  depRouteType: string | null
+  arrRouteType: string | null
 }
 
 // ─── Aircraft state tracker ───────────────────────────────────
@@ -123,6 +127,67 @@ interface RuleStats {
   totalPenaltyCost: number
 }
 
+// ─── Directional TAT types & helpers ─────────────────────────
+
+/** Per-aircraft-type TAT data with scheduled + minimum directional values */
+export interface AircraftTypeTAT {
+  sched_dd: number | null
+  sched_di: number | null
+  sched_id: number | null
+  sched_ii: number | null
+  min_dd: number | null
+  min_di: number | null
+  min_id: number | null
+  min_ii: number | null
+  /** Fallback flat TAT in minutes (legacy default_tat_minutes) */
+  default: number
+}
+
+/** True when the flight's route type is domestic (handles 'DOM', 'domestic', etc.) */
+export function isFlightDomestic(routeType: string | null): boolean {
+  if (!routeType) return true // assume domestic if unknown
+  const rt = routeType.toLowerCase()
+  return rt === 'dom' || rt === 'domestic'
+}
+
+/**
+ * Resolve the correct TAT in milliseconds for a transition between
+ * an arriving flight and a departing flight, given their route types.
+ *
+ * Resolution order:
+ *   1. If useMinimum → try minimum directional value
+ *   2. Fallback to scheduled directional value
+ *   3. Fallback to flat default
+ */
+export function resolveTatMs(
+  tat: AircraftTypeTAT,
+  arrivingDomestic: boolean,
+  departingDomestic: boolean,
+  useMinimum: boolean = false
+): number {
+  let minutes: number | null = null
+
+  if (useMinimum) {
+    if (arrivingDomestic && departingDomestic) minutes = tat.min_dd
+    else if (arrivingDomestic && !departingDomestic) minutes = tat.min_di
+    else if (!arrivingDomestic && departingDomestic) minutes = tat.min_id
+    else minutes = tat.min_ii
+  }
+
+  // Fallback to scheduled if minimum is null or not requested
+  if (minutes == null) {
+    if (arrivingDomestic && departingDomestic) minutes = tat.sched_dd
+    else if (arrivingDomestic && !departingDomestic) minutes = tat.sched_di
+    else if (!arrivingDomestic && departingDomestic) minutes = tat.sched_id
+    else minutes = tat.sched_ii
+  }
+
+  // Final fallback to flat default
+  if (minutes == null) minutes = tat.default
+
+  return minutes * 60000
+}
+
 // ─── Helpers ──────────────────────────────────────────────────
 
 /** Convert date + minutes-from-midnight to absolute milliseconds. */
@@ -141,10 +206,28 @@ function canFitBlock(
   state: AircraftState,
   blockStartMs: number,
   blockEndMs: number,
-  minTatMs: number
+  blockDepRouteType: string | null,
+  blockArrRouteType: string | null,
+  tatData: AircraftTypeTAT,
+  useMinimum: boolean
 ): boolean {
   for (const w of state.windows) {
-    if (blockStartMs < w.endMs + minTatMs && w.startMs < blockEndMs + minTatMs) {
+    // TAT needed after existing window → before new block
+    const tatAfterExisting = resolveTatMs(
+      tatData,
+      isFlightDomestic(w.arrRouteType),
+      isFlightDomestic(blockDepRouteType),
+      useMinimum
+    )
+    // TAT needed after new block → before existing window
+    const tatAfterBlock = resolveTatMs(
+      tatData,
+      isFlightDomestic(blockArrRouteType),
+      isFlightDomestic(w.depRouteType),
+      useMinimum
+    )
+
+    if (blockStartMs < w.endMs + tatAfterExisting && w.startMs < blockEndMs + tatAfterBlock) {
       return false
     }
   }
@@ -281,18 +364,20 @@ function buildBlocks(flights: AssignableFlight[]): AssignmentBlock[] {
  *
  * @param flights - All expanded (date-instanced) flights in the current view
  * @param aircraft - All aircraft registrations (with type + home base)
- * @param defaultTatMinutes - Default turnaround time per AC type (ICAO → minutes)
+ * @param tatByType - Directional TAT data per AC type (ICAO → AircraftTypeTAT)
+ * @param useMinimumTat - If true, use minimum TAT values (SA mode); false = scheduled (Greedy/MIP)
  * @returns Assignment mapping, overflow list, and chain break info
  */
 export function autoAssignFlights(
   flights: AssignableFlight[],
   aircraft: AssignableAircraft[],
-  defaultTatMinutes: Map<string, number>,
+  tatByType: Map<string, AircraftTypeTAT>,
   method: 'minimize' | 'balance' = 'minimize',
   rules: ScheduleRule[] = [],
   aircraftFamilies: Map<string, string> = new Map(),
   allowFamilySub: boolean = false,
-  typeFamilyMap: Map<string, string> = new Map()
+  typeFamilyMap: Map<string, string> = new Map(),
+  useMinimumTat: boolean = false
 ): TailAssignmentResult {
   const assignments = new Map<string, string>()
   const overflow: AssignableFlight[] = []
@@ -346,6 +431,8 @@ export function autoAssignFlights(
         endMs: block.endMs,
         depStation: firstFl.depStation,
         arrStation: lastFlight.arrStation,
+        depRouteType: firstFl.routeType,
+        arrRouteType: lastFlight.routeType,
       })
       const currentLastEndMs = st.lastSTA !== null && st.lastSTADate !== null
         ? st.lastSTADate + st.lastSTA * 60000
@@ -368,8 +455,7 @@ export function autoAssignFlights(
       return
     }
 
-    const minTat = defaultTatMinutes.get(icaoType) ?? 30
-    const minTatMs = minTat * 60000
+    const tatData = tatByType.get(icaoType) ?? { sched_dd: null, sched_di: null, sched_id: null, sched_ii: null, min_dd: null, min_di: null, min_id: null, min_ii: null, default: 30 }
 
     // Use global states (shared across type groups for family substitution)
     const states = globalStates
@@ -458,13 +544,13 @@ export function autoAssignFlights(
 
       if (method === 'balance') {
         bestReg = findBalancedAircraft(
-          firstFlight, block, states, regs, minTatMs, chainBreaks,
+          firstFlight, block, states, regs, tatData, useMinimumTat, chainBreaks,
           rules, aircraftFamilies, ruleViolations, rejections, stats
         )
       } else {
         bestReg = findBestAircraft(
           firstFlight, block,
-          states, regs, minTat, minTatMs, chainBreaks,
+          states, regs, tatData, useMinimumTat, chainBreaks,
           rules, aircraftFamilies, ruleViolations, rejections, stats
         )
       }
@@ -523,23 +609,24 @@ export function autoAssignFlights(
         continue
       }
 
-      // Use the min TAT from any sibling type (or fallback 30)
-      const minTat = Math.min(
-        ...siblingTypes.map(t => defaultTatMinutes.get(t) ?? 30)
-      )
-      const minTatMs = minTat * 60000
+      // Use TAT data from the first available sibling type (or fallback)
+      let sibTatData: AircraftTypeTAT = { sched_dd: null, sched_di: null, sched_id: null, sched_ii: null, min_dd: null, min_di: null, min_id: null, min_ii: null, default: 30 }
+      for (const sibType of siblingTypes) {
+        const td = tatByType.get(sibType)
+        if (td) { sibTatData = td; break }
+      }
 
       const firstFlight = block.flights[0]
       let bestReg: string | null
 
       if (method === 'balance') {
         bestReg = findBalancedAircraft(
-          firstFlight, block, globalStates, siblingRegs, minTatMs, chainBreaks,
+          firstFlight, block, globalStates, siblingRegs, sibTatData, useMinimumTat, chainBreaks,
           rules, aircraftFamilies, ruleViolations, rejections, stats
         )
       } else {
         bestReg = findBestAircraft(
-          firstFlight, block, globalStates, siblingRegs, minTat, minTatMs, chainBreaks,
+          firstFlight, block, globalStates, siblingRegs, sibTatData, useMinimumTat, chainBreaks,
           rules, aircraftFamilies, ruleViolations, rejections, stats
         )
       }
@@ -572,8 +659,8 @@ function findBestAircraft(
   block: AssignmentBlock,
   states: Map<string, AircraftState>,
   regs: AssignableAircraft[],
-  minTat: number,
-  minTatMs: number,
+  tatData: AircraftTypeTAT,
+  useMinimum: boolean,
   chainBreaks: ChainBreak[],
   rules: ScheduleRule[],
   aircraftFamilies: Map<string, string>,
@@ -596,8 +683,11 @@ function findBestAircraft(
   for (const ac of regs) {
     const st = states.get(ac.registration)!
 
+    const blockDepRouteType = block.flights[0].routeType
+    const blockArrRouteType = block.flights[block.flights.length - 1].routeType
+
     // Full overlap check against ALL existing assignments
-    if (!canFitBlock(st, block.startMs, block.endMs, minTatMs)) {
+    if (!canFitBlock(st, block.startMs, block.endMs, blockDepRouteType, blockArrRouteType, tatData, useMinimum)) {
       for (const f of block.flights) {
         const flightRejections = rejections.get(f.id) || []
         flightRejections.push({
@@ -757,7 +847,8 @@ function findBalancedAircraft(
   block: AssignmentBlock,
   states: Map<string, AircraftState>,
   regs: AssignableAircraft[],
-  minTatMs: number,
+  tatData: AircraftTypeTAT,
+  useMinimum: boolean,
   chainBreaks: ChainBreak[],
   rules: ScheduleRule[],
   aircraftFamilies: Map<string, string>,
@@ -774,12 +865,14 @@ function findBalancedAircraft(
 
   const candidates: Candidate[] = []
   const blockFirstDep = firstFlight.depStation
+  const blockDepRouteType = block.flights[0].routeType
+  const blockArrRouteType = block.flights[block.flights.length - 1].routeType
 
   for (const ac of regs) {
     const st = states.get(ac.registration)!
 
     // Full overlap check against ALL existing assignments
-    if (!canFitBlock(st, block.startMs, block.endMs, minTatMs)) {
+    if (!canFitBlock(st, block.startMs, block.endMs, blockDepRouteType, blockArrRouteType, tatData, useMinimum)) {
       for (const f of block.flights) {
         const flightRejections = rejections.get(f.id) || []
         flightRejections.push({

@@ -133,6 +133,44 @@ export interface InquiryResult {
   error?: string
 }
 
+// ─── Lightweight IATA → basic info lookup (no runways/freqs) ────────────
+
+export async function lookupAirportByIATA(iata: string): Promise<InquiryBasicInfo | null> {
+  try {
+    const upper = iata.toUpperCase().trim()
+    if (upper.length !== 3) return null
+    const csv = await getCSV(AIRPORTS_URL, 'airports.csv')
+    const lines = csv.split('\n')
+    const headers = parseCSVLine(lines[0])
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim()
+      if (!line || !line.includes(upper)) continue
+      const values = parseCSVLine(line)
+      const row: Record<string, string> = {}
+      headers.forEach((h, idx) => { row[h] = values[idx] || '' })
+      if (row.iata_code === upper) {
+        const lat = parseFloat(row.latitude_deg)
+        const lon = parseFloat(row.longitude_deg)
+        const elev = row.elevation_ft ? parseInt(row.elevation_ft) : null
+        return {
+          latitude: !isNaN(lat) ? lat : null,
+          longitude: !isNaN(lon) ? lon : null,
+          elevation_ft: elev && !isNaN(elev) ? elev : null,
+          name: row.name || null,
+          icao_code: row.ident || null,
+          iata_code: row.iata_code || null,
+          city: row.municipality || null,
+          iso_country: row.iso_country || null,
+          type: row.type || null,
+        }
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 // ─── Inquiry action ─────────────────────────────────────────────────────
 
 export async function inquireAirport(code: string): Promise<InquiryResult> {

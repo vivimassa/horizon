@@ -408,6 +408,10 @@ export interface Database {
           tat_dom_int_minutes: number | null
           tat_int_dom_minutes: number | null
           tat_int_int_minutes: number | null
+          tat_min_dd_minutes: number | null
+          tat_min_di_minutes: number | null
+          tat_min_id_minutes: number | null
+          tat_min_ii_minutes: number | null
           max_cargo_weight_kg: number | null
           cargo_positions: number | null
           uld_types_accepted: Json | null
@@ -462,6 +466,10 @@ export interface Database {
           tat_dom_int_minutes?: number | null
           tat_int_dom_minutes?: number | null
           tat_int_int_minutes?: number | null
+          tat_min_dd_minutes?: number | null
+          tat_min_di_minutes?: number | null
+          tat_min_id_minutes?: number | null
+          tat_min_ii_minutes?: number | null
           max_cargo_weight_kg?: number | null
           cargo_positions?: number | null
           uld_types_accepted?: Json | null
@@ -516,6 +524,10 @@ export interface Database {
           tat_dom_int_minutes?: number | null
           tat_int_dom_minutes?: number | null
           tat_int_int_minutes?: number | null
+          tat_min_dd_minutes?: number | null
+          tat_min_di_minutes?: number | null
+          tat_min_id_minutes?: number | null
+          tat_min_ii_minutes?: number | null
           max_cargo_weight_kg?: number | null
           cargo_positions?: number | null
           uld_types_accepted?: Json | null
