@@ -435,6 +435,50 @@ export function GanttOptimizerDialog({
           </div>
         )}
 
+        {/* ── Generic Running Overlay (greedy/good) ────────── */}
+        {running && !aiProgress && !mipProgress && (
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center px-8"
+            style={{ background: 'hsl(var(--background) / 0.95)', borderRadius: 16 }}
+          >
+            <div className="relative mb-6" style={{ width: 200 }}>
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: -20,
+                  borderRadius: '50%',
+                  background: `radial-gradient(circle, ${accentColor}20 0%, transparent 70%)`,
+                  animation: 'mip-logo-glow 3s ease-in-out infinite',
+                }}
+              />
+              <img
+                src="/horizon-watermark.png"
+                alt=""
+                style={{
+                  width: '100%',
+                  height: 'auto',
+                  WebkitMaskImage: 'url(/horizon-watermark.png)',
+                  WebkitMaskSize: 'contain',
+                  WebkitMaskRepeat: 'no-repeat',
+                  WebkitMaskPosition: 'center',
+                  maskImage: 'url(/horizon-watermark.png)',
+                  maskSize: 'contain',
+                  maskRepeat: 'no-repeat',
+                  maskPosition: 'center',
+                  background: accentColor,
+                  animation: 'mip-logo-pulse 3s ease-in-out infinite',
+                }}
+              />
+            </div>
+            <div className="font-medium" style={{ fontSize: 14 }}>
+              Running assignment...
+            </div>
+            <div className="text-muted-foreground mt-2" style={{ fontSize: 11 }}>
+              Building tail routes from schedule
+            </div>
+          </div>
+        )}
+
         {/* ── Header ──────────────────────────────────────── */}
         <div style={{ padding: '20px 20px 12px 20px' }}>
           <div className="flex items-start justify-between">
@@ -480,10 +524,10 @@ export function GanttOptimizerDialog({
             >
               <div className="flex-1 min-w-0 mr-3">
                 <div style={{ fontSize: 13, fontWeight: 500 }}>
-                  Allow same-family substitution
+                  Allow Up/Downgrade Aircraft Types
                 </div>
                 <p style={{ fontSize: 11 }} className="text-muted-foreground mt-0.5">
-                  When exact type unavailable, assign to another type in the same family (e.g. A320 ↔ A321)
+                  Allow the system to upgrade or downgrade Aircraft Type within the same family for a more flexible solution
                 </p>
               </div>
               <Switch
@@ -509,43 +553,6 @@ export function GanttOptimizerDialog({
               />
             </label>
 
-            {/* Chain Continuity toggle — only for CG solver */}
-            {selectedMethod === 'optimal' && (
-              <div className="mt-3">
-                <span
-                  className="text-muted-foreground block mb-2"
-                  style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}
-                >
-                  Chain Continuity
-                </span>
-                <div className="flex gap-1.5">
-                  {([
-                    { key: 'flexible' as const, label: 'Flexible', desc: 'Maximize coverage. Ferry positioning allowed to reduce unassigned flights.' },
-                    { key: 'strict' as const, label: 'Strict', desc: 'Enforce DEP/ARR continuity. No ferry flights. Higher risk of unassigned flights.' },
-                  ]).map(opt => (
-                    <button
-                      key={opt.key}
-                      type="button"
-                      onClick={() => onChainContinuityChange?.(opt.key)}
-                      className="flex-1 py-2 px-3 rounded-lg border text-left transition-colors"
-                      style={{
-                        borderColor: (chainContinuity ?? 'flexible') === opt.key ? 'hsl(var(--primary))' : 'var(--border)',
-                        background: (chainContinuity ?? 'flexible') === opt.key ? 'hsl(var(--primary) / 0.05)' : 'transparent',
-                      }}
-                      onMouseEnter={(e) => {
-                        if ((chainContinuity ?? 'flexible') !== opt.key) e.currentTarget.style.borderColor = 'var(--muted-foreground)'
-                      }}
-                      onMouseLeave={(e) => {
-                        if ((chainContinuity ?? 'flexible') !== opt.key) e.currentTarget.style.borderColor = 'var(--border)'
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 500 }}>{opt.label}</div>
-                      <div style={{ fontSize: 9, lineHeight: 1.4, marginTop: 2 }} className="text-muted-foreground">{opt.desc}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Divider */}
@@ -640,6 +647,42 @@ export function GanttOptimizerDialog({
                 </div>
               </div>
             )}
+
+            {/* Scheduling Logic toggle — only for CG solver */}
+            {selectedMethod === 'optimal' && <div className="mt-4">
+              <span
+                className="text-muted-foreground block mb-2"
+                style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}
+              >
+                Scheduling Logic
+              </span>
+              <div className="flex gap-1.5">
+                {([
+                  { key: 'flexible' as const, label: 'Flexible', desc: 'Maximize coverage. Ferry positioning allowed to reduce unassigned flights.' },
+                  { key: 'strict' as const, label: 'Strict', desc: 'Enforce DEP/ARR continuity. No ferry flights. Higher risk of unassigned flights.' },
+                ]).map(opt => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => onChainContinuityChange?.(opt.key)}
+                    className="flex-1 py-2 px-3 rounded-lg border text-left transition-colors"
+                    style={{
+                      borderColor: (chainContinuity ?? 'flexible') === opt.key ? 'hsl(var(--primary))' : 'var(--border)',
+                      background: (chainContinuity ?? 'flexible') === opt.key ? 'hsl(var(--primary) / 0.05)' : 'transparent',
+                    }}
+                    onMouseEnter={(e) => {
+                      if ((chainContinuity ?? 'flexible') !== opt.key) e.currentTarget.style.borderColor = 'var(--muted-foreground)'
+                    }}
+                    onMouseLeave={(e) => {
+                      if ((chainContinuity ?? 'flexible') !== opt.key) e.currentTarget.style.borderColor = 'var(--border)'
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 500 }}>{opt.label}</div>
+                    <div style={{ fontSize: 11, lineHeight: 1.4, marginTop: 2 }} className="text-muted-foreground">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>}
 
           </div>
 

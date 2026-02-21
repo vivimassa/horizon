@@ -707,17 +707,27 @@ function BlockHoursTab({
 
       {/* Table */}
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
+          <colgroup>
+            <col className="w-[100px]" />
+            <col className="w-[64px]" />
+            <col className="w-[80px]" />
+            <col className="w-[90px]" />
+            <col className="w-[32px]" />
+            <col className="w-[90px]" />
+            <col />
+            <col className="w-[32px]" />
+          </colgroup>
           <thead>
             <tr className="border-b border-border/50 text-xs text-muted-foreground">
               <th className="text-left py-2 px-2 font-medium">Season</th>
               <th className="text-left py-2 px-2 font-medium">Month</th>
               <th className="text-left py-2 px-2 font-medium">A/C Type</th>
               <th className="text-right py-2 px-2 font-medium">{dir1Label}</th>
-              <th className="text-center py-2 px-1 font-medium w-8"></th>
+              <th className="py-2 px-1"></th>
               <th className="text-right py-2 px-2 font-medium">{dir2Label}</th>
               <th className="text-left py-2 px-2 font-medium">Notes</th>
-              <th className="py-2 px-1 w-8"></th>
+              <th className="py-2 px-1"></th>
             </tr>
           </thead>
           <tbody>
@@ -743,9 +753,9 @@ function BlockHoursTab({
       {/* Add row form */}
       {addingRow ? (
         <div className="border border-border/50 rounded-lg p-3 space-y-2 bg-muted/20">
-          <div className="grid grid-cols-5 gap-2">
+          <div className="flex items-center gap-2">
             <Select value={newRow.season_type} onValueChange={(v) => setNewRow(p => ({ ...p, season_type: v }))}>
-              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-8 text-xs w-[100px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="annual">Annual</SelectItem>
                 <SelectItem value="summer">Summer</SelectItem>
@@ -753,7 +763,7 @@ function BlockHoursTab({
               </SelectContent>
             </Select>
             <Select value={newRow.month_applicable?.toString() || 'all'} onValueChange={(v) => setNewRow(p => ({ ...p, month_applicable: v === 'all' ? null : parseInt(v) }))}>
-              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-8 text-xs w-[64px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 {Array.from({ length: 12 }, (_, i) => (
@@ -762,7 +772,7 @@ function BlockHoursTab({
               </SelectContent>
             </Select>
             <Select value={newRow.aircraft_type_id} onValueChange={(v) => setNewRow(p => ({ ...p, aircraft_type_id: v }))}>
-              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="A/C" /></SelectTrigger>
+              <SelectTrigger className="h-8 text-xs w-[80px]"><SelectValue placeholder="A/C" /></SelectTrigger>
               <SelectContent>
                 {aircraftTypes.map(ac => (
                   <SelectItem key={ac.id} value={ac.id}>{ac.icao_type}</SelectItem>
@@ -773,13 +783,13 @@ function BlockHoursTab({
               value={newRow.dir1}
               onChange={(e) => setNewRow(p => ({ ...p, dir1: e.target.value }))}
               placeholder={mode === 'fuel' ? 'kg' : 'HH:MM'}
-              className="h-8 text-xs text-right font-mono"
+              className="h-8 text-xs text-right font-mono w-[90px]"
             />
             <Input
               value={newRow.dir2}
               onChange={(e) => setNewRow(p => ({ ...p, dir2: e.target.value }))}
               placeholder={mode === 'fuel' ? 'kg' : 'HH:MM'}
-              className="h-8 text-xs text-right font-mono"
+              className="h-8 text-xs text-right font-mono w-[90px]"
             />
           </div>
           <div className="flex items-center gap-2">

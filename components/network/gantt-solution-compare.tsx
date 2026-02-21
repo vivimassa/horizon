@@ -1,6 +1,6 @@
 'use client'
 
-import { X, Trash2, Shuffle } from 'lucide-react'
+import { X, Trash2, Plane } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -220,15 +220,15 @@ export function GanttSolutionCompare({
                     style={{
                       fontSize: s(9),
                       fontWeight: 600,
-                      color: '#F59E0B',
-                      background: 'rgba(245,158,11,0.1)',
+                      color: '#3B82F6',
+                      background: 'rgba(59,130,246,0.1)',
                       padding: `${s(2)}px ${s(7)}px`,
                       borderRadius: s(4),
                       gap: s(3),
                     }}
                   >
-                    <Shuffle style={{ width: s(10), height: s(10) }} />
-                    Family Sub
+                    <Plane style={{ width: s(10), height: s(10) }} />
+                    A/C Type Flexible
                   </span>
                 )}
               </div>
@@ -240,12 +240,12 @@ export function GanttSolutionCompare({
               </div>
 
               {/* ── ASSIGNMENT ── */}
-              <SectionLabel s={s}>Assignment</SectionLabel>
+              <SectionLabel s={s}>Optimization Results</SectionLabel>
               <div className="grid grid-cols-2" style={{ gap: s(6), marginBottom: s(12) }}>
-                <Kpi s={s} label="Assigned" value={`${m.assigned}/${m.totalFlights}`} big />
+                <Kpi s={s} label="Assigned" value={`${m.assigned.toLocaleString()}/${m.totalFlights.toLocaleString()}`} big />
                 <Kpi
                   s={s}
-                  label="Overflow"
+                  label="Uncovered Flights"
                   value={String(m.overflow)}
                   bad={m.overflow > 0}
                   good={m.overflow === best.overflow && m.overflow === 0}
@@ -253,12 +253,12 @@ export function GanttSolutionCompare({
                 />
                 <Kpi
                   s={s}
-                  label="Chain Breaks"
+                  label="DEP/ARR Incompatibility"
                   value={String(m.chainBreaks)}
                   bad={m.chainBreaks > 0}
                   good={m.chainBreaks === best.chainBreaks && m.chainBreaks === 0}
                 />
-                <Kpi s={s} label="Rules Bent" value={String(m.rulesBent)} />
+                <Kpi s={s} label="Rule Violations" value={String(m.rulesBent)} />
               </div>
 
               {/* ── FLEET (daily averages) ── */}
@@ -309,25 +309,25 @@ export function GanttSolutionCompare({
                 <div className="grid grid-cols-2" style={{ gap: s(6), marginTop: s(8) }}>
                   <Kpi
                     s={s}
-                    label="Peak AC/day"
+                    label="Max Aircraft Required"
                     value={String(m.peakDailyAC)}
                     good={m.peakDailyAC === best.peakDailyAC && slots.length > 1}
                   />
                   <Kpi
                     s={s}
-                    label="Avg AC/day"
+                    label="AVG Aircraft used/day"
                     value={String(m.avgDailyAC)}
                     good={m.avgDailyAC === best.avgDailyAC && slots.length > 1}
                   />
                   <Kpi
                     s={s}
-                    label="Avg Spare/day"
+                    label="AVG Standby Aircraft/day"
                     value={`${m.avgDailySpare} (${m.bufferPct}%)`}
                     bad={m.bufferPct < 10}
                   />
                   <Kpi
                     s={s}
-                    label="Avg Util/AC"
+                    label="AVG Utilization/day"
                     value={`${m.avgUtilPerAC}h`}
                     good={m.avgUtilPerAC === best.avgUtilPerAC && slots.length > 1}
                   />
@@ -372,13 +372,13 @@ export function GanttSolutionCompare({
               {/* ── EST. DAILY COST ── */}
               <SectionLabel s={s}>Est. Daily Cost</SectionLabel>
               <div className="grid grid-cols-2" style={{ gap: s(6) }}>
-                <Kpi s={s} label={`Fuel (${m.fuelTons}t)`} value={fmt$(m.fuelCost)} />
-                <Kpi s={s} label="Operations" value={fmt$(m.opsCost)} />
+                <Kpi s={s} label={`Fuel (${m.fuelTons.toLocaleString()}t)`} value={fmt$(m.fuelCost)} />
+                <Kpi s={s} label="Operating Costs" value={fmt$(m.opsCost)} />
                 {m.overflowRevenueLoss > 0 && (
                   <Kpi s={s} label="Revenue at Risk" value={fmt$(m.overflowRevenueLoss)} bad />
                 )}
                 {m.chainBreakCosts > 0 && (
-                  <Kpi s={s} label="Repositioning" value={fmt$(m.chainBreakCosts)} bad />
+                  <Kpi s={s} label="Ferry Costs" value={fmt$(m.chainBreakCosts)} bad />
                 )}
               </div>
               <div

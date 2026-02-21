@@ -347,7 +347,7 @@ export function SsimImportWorkflow({ seasons }: Props) {
 
         const blockTimeResult = await seedCityPairBlockTimes(selectedSeason)
         cityPairBlockTimesUpdated = blockTimeResult.updated
-        completedSteps.push({ label: 'Block times seeded', detail: `${blockTimeResult.updated} city pairs updated` })
+        completedSteps.push({ label: 'Block hours seeded', detail: `${blockTimeResult.updated} city pair block hour rows inserted` })
       }
 
       // Done
@@ -1500,7 +1500,7 @@ function ResultsStep({
           <ResultStat label="Errors" value={result.errors} color={result.errors > 0 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'} />
           <ResultStat label="Airports Created" value={result.airportsCreated} color="text-blue-600 dark:text-blue-400" />
           <ResultStat label="City Pairs Created" value={result.cityPairsCreated} color="text-blue-600 dark:text-blue-400" />
-          <ResultStat label="Block Times Seeded" value={result.cityPairBlockTimesUpdated} color="text-violet-600 dark:text-violet-400" />
+          <ResultStat label="Block Hours Seeded" value={result.cityPairBlockTimesUpdated} color="text-violet-600 dark:text-violet-400" />
         </div>
       </div>
 

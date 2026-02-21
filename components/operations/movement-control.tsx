@@ -1472,13 +1472,13 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         aiAbortRef.current = null
       }
     } else {
-      // ── Greedy / Good flow (existing) ──
+      // ── Greedy / Good flow ──
       setOptimizerRunning(true)
       setAiResult(null)
       setMipResult(null)
       setAssignmentsEnabled(true)
       setAssignmentMethod(method)
-      await new Promise(r => setTimeout(r, 300))
+      await new Promise(r => setTimeout(r, 1200))
       setOptimizerRunning(false)
       setLastOptRun({ method: method === 'greedy' ? 'Automation: Greed Solution' : 'Automation: Good Solution', time: new Date() })
     }

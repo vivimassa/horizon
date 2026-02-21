@@ -1784,16 +1784,17 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         aiAbortRef.current = null
       }
     } else {
-      // ── Greedy / Good flow (existing) ──
+      // ── Greedy / Good flow ──
       setOptimizerRunning(true)
       setAiResult(null)
       setMipResult(null)
       setAssignmentsEnabled(true)
       setAssignmentMethod(method)
-      await new Promise(r => setTimeout(r, 300))
-      setOptimizerRunning(false)
+
+      // Show loading overlay briefly, then compute
+      await new Promise(r => setTimeout(r, 800))
+
       const label = method === 'greedy' ? 'Automation: Greed' : 'Automation: Good'
-      setLastOptRun({ method: `${label} Solution`, time: new Date() })
 
       // Compute result inline for comparison slot
       const greedyAC: AssignableAircraft[] = registrations
@@ -1824,6 +1825,10 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
         familySub: ganttSettings.allowFamilySub ?? false,
       })
+
+      await new Promise(r => setTimeout(r, 400))
+      setOptimizerRunning(false)
+      setLastOptRun({ method: `${label} Solution`, time: new Date() })
     }
   }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat, storeSolution])
 

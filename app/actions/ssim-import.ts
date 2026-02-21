@@ -649,49 +649,199 @@ export async function purgeAllFlights(): Promise<{ deleted: number }> {
   return { deleted: result.rowCount || 0 }
 }
 
-// ─── ACTION 8: Seed City Pair Block Times ────────────────────────
+// ─── ACTION 8: Seed City Pair Block Hours ─────────────────────────
+// Computes median block_minutes per (city_pair, aircraft_type, month, direction)
+// from scheduled_flights, rounds up to nearest 5 min, and inserts into
+// city_pair_block_hours detail table. Monthly scoping allows re-uploading
+// a single month without wiping other months' data.
+
+/** Round up to nearest 5 minutes: 312 → 315, 310 → 310 */
+function roundUpTo5(minutes: number): number {
+  return Math.ceil(minutes / 5) * 5
+}
 
 export async function seedCityPairBlockTimes(
   seasonId: string
 ): Promise<{ updated: number }> {
   const operatorId = await getCurrentOperatorId()
-  console.log('SSIM Import: Seeding city pair block times from season', seasonId)
+  console.log('SSIM Import: Seeding city pair block hours from season', seasonId)
 
-  // Compute median block_minutes per directional city pair
-  const result = await pool.query(`
+  // 1. Determine season_type from the schedule_season code (W25→winter, S25→summer)
+  const seasonResult = await pool.query(
+    'SELECT code FROM schedule_seasons WHERE id = $1 AND operator_id = $2',
+    [seasonId, operatorId]
+  )
+  const seasonCode = seasonResult.rows[0]?.code || ''
+  const seasonType = seasonCode.startsWith('W') ? 'winter'
+    : seasonCode.startsWith('S') ? 'summer'
+    : 'annual'
+  console.log('SSIM Import: Season code', seasonCode, '→ season_type', seasonType)
+
+  // 2. Compute median block_minutes per (dep, arr, aircraft_type, month)
+  //    We extract the month from period_start to group by calendar month.
+  const mediansResult = await pool.query(`
     WITH flight_blocks AS (
       SELECT
         dep_station,
         arr_station,
+        aircraft_type_id,
+        EXTRACT(MONTH FROM period_start)::int AS flight_month,
         block_minutes,
-        ROW_NUMBER() OVER (PARTITION BY dep_station, arr_station ORDER BY block_minutes) AS rn,
-        COUNT(*) OVER (PARTITION BY dep_station, arr_station) AS cnt
+        ROW_NUMBER() OVER (
+          PARTITION BY dep_station, arr_station, aircraft_type_id, EXTRACT(MONTH FROM period_start)
+          ORDER BY block_minutes
+        ) AS rn,
+        COUNT(*) OVER (
+          PARTITION BY dep_station, arr_station, aircraft_type_id, EXTRACT(MONTH FROM period_start)
+        ) AS cnt
       FROM scheduled_flights
       WHERE operator_id = $1
         AND season_id = $2
         AND block_minutes > 0
-    ),
-    medians AS (
+        AND aircraft_type_id IS NOT NULL
+    )
+    SELECT
+      dep_station,
+      arr_station,
+      aircraft_type_id,
+      flight_month,
+      ROUND(AVG(block_minutes))::int AS median_block
+    FROM flight_blocks
+    WHERE rn IN (FLOOR((cnt + 1) / 2.0)::int, CEIL((cnt + 1) / 2.0)::int)
+    GROUP BY dep_station, arr_station, aircraft_type_id, flight_month
+  `, [operatorId, seasonId])
+
+  if (mediansResult.rows.length === 0) {
+    console.log('SSIM Import: No block time data found')
+    return { updated: 0 }
+  }
+
+  // 3. Build a lookup: "DEP-ARR-acTypeId-month" → median_block (rounded up to 5 min)
+  //    Also track which months are covered by this SSIM upload
+  const blockMap = new Map<string, number>()
+  const coveredMonthSet = new Set<number>()
+  for (const r of mediansResult.rows) {
+    const key = `${r.dep_station}-${r.arr_station}-${r.aircraft_type_id}-${r.flight_month}`
+    blockMap.set(key, roundUpTo5(r.median_block))
+    coveredMonthSet.add(r.flight_month)
+  }
+  const coveredMonths = Array.from(coveredMonthSet).sort((a, b) => a - b)
+  console.log('SSIM Import: Computed', blockMap.size, 'directional block time medians across months:', coveredMonths.join(', '))
+
+  // 4. Get all city_pairs with their IDs
+  const cpResult = await pool.query(
+    'SELECT id, departure_airport, arrival_airport FROM city_pairs'
+  )
+  const cpMap = new Map<string, { id: string; dep: string; arr: string }>()
+  for (const cp of cpResult.rows) {
+    cpMap.set(`${cp.departure_airport}-${cp.arrival_airport}`, {
+      id: cp.id, dep: cp.departure_airport, arr: cp.arrival_airport,
+    })
+  }
+
+  // 5. Collect all unique aircraft type IDs from the medians
+  const acTypeIdSet = new Set<string>()
+  for (const r of mediansResult.rows) {
+    acTypeIdSet.add(r.aircraft_type_id)
+  }
+  const acTypeIds = Array.from(acTypeIdSet)
+
+  // 6. For each (city_pair, aircraft_type, month), build direction1 (dep→arr)
+  //    and direction2 (arr→dep) block times
+  type BlockRow = {
+    city_pair_id: string
+    aircraft_type_id: string
+    month: number
+    direction1: number
+    direction2: number
+  }
+  const rows: BlockRow[] = []
+
+  for (const cp of Array.from(cpMap.values())) {
+    for (const acTypeId of acTypeIds) {
+      for (const month of coveredMonths) {
+        const d1 = blockMap.get(`${cp.dep}-${cp.arr}-${acTypeId}-${month}`) || 0
+        const d2 = blockMap.get(`${cp.arr}-${cp.dep}-${acTypeId}-${month}`) || 0
+        if (d1 > 0 || d2 > 0) {
+          rows.push({
+            city_pair_id: cp.id,
+            aircraft_type_id: acTypeId,
+            month,
+            direction1: d1,
+            direction2: d2,
+          })
+        }
+      }
+    }
+  }
+
+  if (rows.length === 0) {
+    console.log('SSIM Import: No city pair block hour rows to seed')
+    return { updated: 0 }
+  }
+
+  console.log('SSIM Import: Inserting', rows.length, 'city_pair_block_hours rows (season_type:', seasonType, ', months:', coveredMonths.join(','), ')')
+
+  // 7. Delete existing block_hours ONLY for the covered months + season_type
+  //    This preserves data from other months (e.g. uploading Jan won't wipe Feb)
+  const cpIds = Array.from(new Set(rows.map(r => r.city_pair_id)))
+  await pool.query(
+    `DELETE FROM city_pair_block_hours
+     WHERE city_pair_id = ANY($1::uuid[])
+       AND season_type = $2
+       AND (month_applicable = ANY($3::int[]) OR month_applicable IS NULL)`,
+    [cpIds, seasonType, coveredMonths]
+  )
+
+  // 8. Batch INSERT into city_pair_block_hours
+  const BATCH = 50
+  let inserted = 0
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH)
+    const values: unknown[] = []
+    const placeholders: string[] = []
+    for (let j = 0; j < batch.length; j++) {
+      const r = batch[j]
+      const off = j * 6
+      placeholders.push(
+        `($${off + 1},$${off + 2},$${off + 3},$${off + 4},$${off + 5},$${off + 6})`
+      )
+      values.push(
+        r.city_pair_id, r.aircraft_type_id, seasonType,
+        r.direction1, r.direction2, r.month
+      )
+    }
+    const res = await pool.query(
+      `INSERT INTO city_pair_block_hours (
+        city_pair_id, aircraft_type_id, season_type,
+        direction1_block_minutes, direction2_block_minutes, month_applicable
+      ) VALUES ${placeholders.join(',')}`,
+      values
+    )
+    inserted += res.rowCount || 0
+  }
+
+  // 9. Also update summary columns on city_pairs for quick reference
+  await pool.query(`
+    WITH overall AS (
       SELECT
         dep_station,
         arr_station,
-        ROUND(AVG(block_minutes))::int AS median_block,
-        MAX(cnt) AS sample_count
-      FROM flight_blocks
-      WHERE rn IN (FLOOR((cnt + 1) / 2.0)::int, CEIL((cnt + 1) / 2.0)::int)
+        ROUND(AVG(block_minutes))::int AS avg_block
+      FROM scheduled_flights
+      WHERE operator_id = $1 AND season_id = $2 AND block_minutes > 0
       GROUP BY dep_station, arr_station
     )
     UPDATE city_pairs cp
-    SET block_time = m.median_block,
-        standard_block_minutes = m.median_block,
+    SET block_time = o.avg_block,
+        standard_block_minutes = o.avg_block,
         updated_at = NOW()
-    FROM medians m
-    WHERE cp.departure_airport = m.dep_station
-      AND cp.arrival_airport = m.arr_station
-      AND m.median_block > 0
+    FROM overall o
+    WHERE cp.departure_airport = o.dep_station
+      AND cp.arrival_airport = o.arr_station
   `, [operatorId, seasonId])
 
-  const updated = result.rowCount || 0
-  console.log('SSIM Import: Updated', updated, 'city pair block times')
-  return { updated }
+  console.log('SSIM Import: Inserted', inserted, 'city_pair_block_hours rows')
+  revalidatePath('/admin/master-database/city-pairs')
+  return { updated: inserted }
 }
