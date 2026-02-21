@@ -126,32 +126,27 @@ function parseSeatConfig(raw: string): { config: Record<string, number>; total: 
 // ─── Block Time Calculation ────────────────────────────────────────
 
 /**
- * Calculate block time in minutes from local times + UTC offsets.
- * Handles overnight flights (arrival next day).
+ * Calculate block time in minutes from SSIM STD/STA.
+ * SSIM positions 39-42 (STD) and 57-60 (STA) are already in UTC.
+ * The +HH:MM offset is metadata for display, not for conversion.
  */
 function calcBlockMinutes(
-  stdUtc: string,
-  depOffset: string,
-  staUtc: string,
-  arrOffset: string
+  std: string,          // HHMM in UTC
+  _depOffset: string,   // unused — kept for signature compat
+  sta: string,          // HHMM in UTC
+  _arrOffset: string    // unused
 ): number {
-  if (!stdUtc || !staUtc || stdUtc.length < 4 || staUtc.length < 4) return 0
+  if (!std || !sta || std.length < 4 || sta.length < 4) return 0
 
-  const depMinLocal = parseInt(stdUtc.slice(0, 2), 10) * 60 + parseInt(stdUtc.slice(2, 4), 10)
-  const arrMinLocal = parseInt(staUtc.slice(0, 2), 10) * 60 + parseInt(staUtc.slice(2, 4), 10)
-
-  const depOffsetMin = parseUtcOffset(depOffset)
-  const arrOffsetMin = parseUtcOffset(arrOffset)
-
-  const depUtc = depMinLocal - depOffsetMin
-  let arrUtc = arrMinLocal - arrOffsetMin
+  const depMin = parseInt(std.slice(0, 2), 10) * 60 + parseInt(std.slice(2, 4), 10)
+  let arrMin = parseInt(sta.slice(0, 2), 10) * 60 + parseInt(sta.slice(2, 4), 10)
 
   // Handle overnight: if arrival UTC < departure UTC, add 24h
-  if (arrUtc <= depUtc) {
-    arrUtc += 1440
+  if (arrMin <= depMin) {
+    arrMin += 1440
   }
 
-  return arrUtc - depUtc
+  return arrMin - depMin
 }
 
 /** Parse UTC offset "+0700" → minutes (420) */
@@ -164,16 +159,16 @@ function parseUtcOffset(offset: string): number {
   return sign * (hours * 60 + mins)
 }
 
-/** Convert local time HHMM + offset → UTC HHMM string */
-function toUtcTime(localTime: string, utcOffset: string): string {
-  if (!localTime || localTime.length < 4) return ''
-  const localMin = parseInt(localTime.slice(0, 2), 10) * 60 + parseInt(localTime.slice(2, 4), 10)
+/** Convert UTC time HHMM + offset → local HHMM string */
+function utcToLocal(utcTime: string, utcOffset: string): string {
+  if (!utcTime || utcTime.length < 4) return ''
+  const utcMin = parseInt(utcTime.slice(0, 2), 10) * 60 + parseInt(utcTime.slice(2, 4), 10)
   const offsetMin = parseUtcOffset(utcOffset)
-  let utcMin = localMin - offsetMin
-  if (utcMin < 0) utcMin += 1440
-  if (utcMin >= 1440) utcMin -= 1440
-  const h = Math.floor(utcMin / 60)
-  const m = utcMin % 60
+  let localMin = utcMin + offsetMin
+  if (localMin < 0) localMin += 1440
+  if (localMin >= 1440) localMin -= 1440
+  const h = Math.floor(localMin / 60)
+  const m = localMin % 60
   return `${String(h).padStart(2, '0')}${String(m).padStart(2, '0')}`
 }
 
@@ -562,8 +557,7 @@ export function getServiceTypeColor(code: string): string {
   return '#6b7280'
 }
 
-/** Get UTC time string from local + offset */
-export { toUtcTime }
+/** parseUtcOffset is used internally by calcBlockMinutes */
 
 /** IATA → ICAO aircraft type mapping (common narrow/wide-body) */
 export const IATA_TO_ICAO_AIRCRAFT: Record<string, string> = {

@@ -1773,7 +1773,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
           saPreset: aiPreset || 'normal',
         })
         setLastOptRun({
-          method: `AI Optimizer (${result.sa.improvement.toFixed(1)}% improvement)`,
+          method: `AI Iteration (${result.sa.improvement.toFixed(1)}% improvement)`,
           time: new Date(),
         })
       } catch (e) {
@@ -1792,7 +1792,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       setAssignmentMethod(method)
       await new Promise(r => setTimeout(r, 300))
       setOptimizerRunning(false)
-      const label = method === 'greedy' ? 'Greedy' : 'Good'
+      const label = method === 'greedy' ? 'Automation: Greed' : 'Automation: Good'
       setLastOptRun({ method: `${label} Solution`, time: new Date() })
 
       // Compute result inline for comparison slot
@@ -2011,9 +2011,9 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         chainBreaks: activeResult.chainBreaks,
         registrations: registrations as any[],
         aircraftTypes,
-        method: assignmentMethod === 'greedy' ? 'Greedy'
+        method: assignmentMethod === 'greedy' ? 'Greed'
           : assignmentMethod === 'good' ? 'Balanced'
-          : 'AI Optimizer',
+          : 'AI Iteration',
         rules: scheduleRules as any[],
       })
 

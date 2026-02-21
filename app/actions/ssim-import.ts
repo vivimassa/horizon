@@ -4,7 +4,7 @@ import { Pool } from 'pg'
 import { getCurrentOperatorId } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
-import { parseSSIM, toUtcTime } from '@/lib/utils/ssim-parser'
+import { parseSSIM } from '@/lib/utils/ssim-parser'
 import type { SSIMFlightLeg, SSIMParseResult } from '@/lib/utils/ssim-parser'
 import { AIRPORT_COUNTRY, classifyRoute } from '@/lib/data/airport-countries'
 import { lookupAirportByIATA } from '@/app/actions/airport-inquiry'
@@ -61,6 +61,22 @@ function getRouteType(dep: string, arr: string, dbCountryMap: Map<string, string
   const result = classifyRoute(dep, arr, dbCountryMap)
   if (result === 'unknown') return 'international' // safe default for SSIM import
   return result
+}
+
+/** Convert UTC HHMM time to local HH:MM using a UTC offset string like +0700 or -0500 */
+function utcToLocal(utcHHMM: string, offset: string): string | null {
+  if (!utcHHMM || utcHHMM.length < 4 || !offset) return null
+  const utcMin = parseInt(utcHHMM.slice(0, 2), 10) * 60 + parseInt(utcHHMM.slice(2, 4), 10)
+  const sign = offset.startsWith('-') ? -1 : 1
+  const offH = parseInt(offset.slice(1, 3), 10)
+  const offM = parseInt(offset.slice(3, 5), 10)
+  const offsetMin = sign * (offH * 60 + offM)
+  let localMin = utcMin + offsetMin
+  if (localMin < 0) localMin += 1440
+  if (localMin >= 1440) localMin -= 1440
+  const h = Math.floor(localMin / 60)
+  const m = localMin % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
 // ─── ACTION 1: Parse SSIM File ────────────────────────────────────
@@ -264,22 +280,25 @@ export async function createMissingCityPairs(
   for (const { dep, arr } of pairs) {
     const depId = airportIdMap.get(dep)
     const arrId = airportIdMap.get(arr)
-    if (depId && arrId) {
-      const routeType = getRouteType(dep, arr, dbCountryMap)
-      const { error } = await supabase.from('city_pairs').insert({
-        departure_airport: dep,
-        arrival_airport: arr,
-        departure_airport_id: depId,
-        arrival_airport_id: arrId,
-        route_type: routeType,
-        status: 'active',
-        is_active: true,
-      })
-      if (!error) {
-        created++
-      } else {
-        console.log('SSIM Import: Failed to create city pair', dep, '->', arr, ':', error.message)
-      }
+    if (!depId || !arrId) {
+      const missing = [!depId ? dep : null, !arrId ? arr : null].filter(Boolean).join(', ')
+      console.log('SSIM Import: Skipping city pair', dep, '->', arr, '— airport(s) not in DB:', missing)
+      continue
+    }
+    const routeType = getRouteType(dep, arr, dbCountryMap)
+    const { error } = await supabase.from('city_pairs').insert({
+      departure_airport: dep,
+      arrival_airport: arr,
+      departure_airport_id: depId,
+      arrival_airport_id: arrId,
+      route_type: routeType,
+      status: 'active',
+      is_active: true,
+    })
+    if (!error) {
+      created++
+    } else {
+      console.error('SSIM Import: INSERT FAILED for city pair', dep, '->', arr, ':', error.message, error.details, error.hint)
     }
   }
 
@@ -344,12 +363,12 @@ export async function importFlightBatch(
     const f = flights[j]
     const offset = j * 24
     const acResolved = resolveAircraftTypeId(f.aircraftType)
-    const stdUtc = toUtcTime(f.stdUtc, f.depUtcOffset)
-    const staUtc = toUtcTime(f.staUtc, f.arrUtcOffset)
-    const stdTime = f.stdUtc.slice(0, 2) + ':' + f.stdUtc.slice(2, 4)
-    const staTime = f.staUtc.slice(0, 2) + ':' + f.staUtc.slice(2, 4)
-    const stdUtcTime = stdUtc ? stdUtc.slice(0, 2) + ':' + stdUtc.slice(2, 4) : null
-    const staUtcTime = staUtc ? staUtc.slice(0, 2) + ':' + staUtc.slice(2, 4) : null
+    // SSIM times are already UTC — no conversion needed for std_utc/sta_utc
+    const stdUtcTime = f.stdUtc.slice(0, 2) + ':' + f.stdUtc.slice(2, 4)
+    const staUtcTime = f.staUtc.slice(0, 2) + ':' + f.staUtc.slice(2, 4)
+    // Compute local times from UTC + offset for std_local/sta_local display columns
+    const stdTime = utcToLocal(f.stdUtc, f.depUtcOffset) || stdUtcTime
+    const staTime = utcToLocal(f.staUtc, f.arrUtcOffset) || staUtcTime
 
     placeholders.push(
       `($${offset + 1},$${offset + 2},$${offset + 3},$${offset + 4},$${offset + 5},$${offset + 6},$${offset + 7},$${offset + 8},$${offset + 9},$${offset + 10},$${offset + 11},$${offset + 12},$${offset + 13},$${offset + 14},$${offset + 15},$${offset + 16},$${offset + 17},$${offset + 18},$${offset + 19},$${offset + 20},$${offset + 21},$${offset + 22},$${offset + 23},$${offset + 24})`
@@ -563,4 +582,116 @@ export async function getSeasons(): Promise<{ id: string; code: string; name: st
     .eq('operator_id', operatorId)
     .order('start_date', { ascending: false })
   return data || []
+}
+
+// ─── ACTION 7: Purge All Flights (All Seasons) ──────────────────
+
+export async function purgeAllFlights(): Promise<{ deleted: number }> {
+  const operatorId = await getCurrentOperatorId()
+  console.log('SSIM Import: PURGE ALL FLIGHTS for operator', operatorId)
+
+  // 1. Collect ALL flight IDs for this operator
+  const idsResult = await pool.query(
+    'SELECT id FROM scheduled_flights WHERE operator_id = $1',
+    [operatorId]
+  )
+  const flightIds: string[] = idsResult.rows.map((r: { id: string }) => r.id)
+
+  if (flightIds.length === 0) {
+    console.log('SSIM Import: No flights to purge')
+    return { deleted: 0 }
+  }
+
+  console.log('SSIM Import: Purging', flightIds.length, 'flights + all child records')
+
+  // 2. Clear self-referential replaces_flight_id pointers
+  await pool.query(
+    'UPDATE scheduled_flights SET replaces_flight_id = NULL WHERE operator_id = $1 AND replaces_flight_id IS NOT NULL',
+    [operatorId]
+  )
+
+  // 3. Delete child: flight_tail_assignments
+  await pool.query(
+    'DELETE FROM flight_tail_assignments WHERE scheduled_flight_id = ANY($1::uuid[])',
+    [flightIds]
+  )
+
+  // 4. Delete child: aircraft_route_legs
+  await pool.query(
+    'DELETE FROM aircraft_route_legs WHERE flight_id = ANY($1::uuid[])',
+    [flightIds]
+  )
+
+  // 5. Clean up orphaned aircraft_routes
+  await pool.query(
+    `DELETE FROM aircraft_routes WHERE id IN (
+      SELECT ar.id FROM aircraft_routes ar
+      LEFT JOIN aircraft_route_legs arl ON arl.route_id = ar.id
+      WHERE arl.id IS NULL AND ar.operator_id = $1
+    )`,
+    [operatorId]
+  )
+
+  // 6. Delete all scheduled_flights
+  const result = await pool.query(
+    'DELETE FROM scheduled_flights WHERE operator_id = $1',
+    [operatorId]
+  )
+
+  // 7. Reset city_pairs block_time and standard_block_minutes to NULL
+  await pool.query(
+    'UPDATE city_pairs SET block_time = NULL, standard_block_minutes = NULL'
+  )
+
+  console.log('SSIM Import: Purged', result.rowCount, 'flights')
+  revalidatePath('/network/control/ssim')
+  revalidatePath('/network/control/schedule-builder')
+  return { deleted: result.rowCount || 0 }
+}
+
+// ─── ACTION 8: Seed City Pair Block Times ────────────────────────
+
+export async function seedCityPairBlockTimes(
+  seasonId: string
+): Promise<{ updated: number }> {
+  const operatorId = await getCurrentOperatorId()
+  console.log('SSIM Import: Seeding city pair block times from season', seasonId)
+
+  // Compute median block_minutes per directional city pair
+  const result = await pool.query(`
+    WITH flight_blocks AS (
+      SELECT
+        dep_station,
+        arr_station,
+        block_minutes,
+        ROW_NUMBER() OVER (PARTITION BY dep_station, arr_station ORDER BY block_minutes) AS rn,
+        COUNT(*) OVER (PARTITION BY dep_station, arr_station) AS cnt
+      FROM scheduled_flights
+      WHERE operator_id = $1
+        AND season_id = $2
+        AND block_minutes > 0
+    ),
+    medians AS (
+      SELECT
+        dep_station,
+        arr_station,
+        ROUND(AVG(block_minutes))::int AS median_block,
+        MAX(cnt) AS sample_count
+      FROM flight_blocks
+      WHERE rn IN (FLOOR((cnt + 1) / 2.0)::int, CEIL((cnt + 1) / 2.0)::int)
+      GROUP BY dep_station, arr_station
+    )
+    UPDATE city_pairs cp
+    SET block_time = m.median_block,
+        standard_block_minutes = m.median_block,
+        updated_at = NOW()
+    FROM medians m
+    WHERE cp.departure_airport = m.dep_station
+      AND cp.arrival_airport = m.arr_station
+      AND m.median_block > 0
+  `, [operatorId, seasonId])
+
+  const updated = result.rowCount || 0
+  console.log('SSIM Import: Updated', updated, 'city pair block times')
+  return { updated }
 }

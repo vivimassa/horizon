@@ -29,6 +29,7 @@ import {
   ChevronLeft,
   RotateCcw,
   CalendarDays,
+  Trash2,
 } from 'lucide-react'
 import {
   SERVICE_TYPE_LABELS,
@@ -41,6 +42,8 @@ import {
   importFlightBatch,
   clearSeasonFlights,
   finalizeImport,
+  purgeAllFlights,
+  seedCityPairBlockTimes,
   type ValidationResult,
   type ParsedFlightData,
   type ParseSSIMResult,
@@ -78,6 +81,7 @@ interface ImportResults {
   errors: number
   airportsCreated: number
   cityPairsCreated: number
+  cityPairBlockTimesUpdated: number
   errorDetails: { line: number; message: string }[]
 }
 
@@ -115,6 +119,11 @@ export function SsimImportWorkflow({ seasons }: Props) {
     completedSteps: [],
   })
   const [importResults, setImportResults] = useState<ImportResults | null>(null)
+
+  // Purge state
+  const [showPurgeConfirm, setShowPurgeConfirm] = useState(false)
+  const [purging, setPurging] = useState(false)
+  const [purgeConfirmText, setPurgeConfirmText] = useState('')
 
   // Abort controller for cancellation
   const abortRef = useRef(false)
@@ -180,6 +189,7 @@ export function SsimImportWorkflow({ seasons }: Props) {
     const allErrorDetails: { line: number; message: string }[] = []
     let airportsCreated = 0
     let cityPairsCreated = 0
+    let cityPairBlockTimesUpdated = 0
 
     try {
       // Filter flights by date range (always apply when dates are set)
@@ -326,6 +336,18 @@ export function SsimImportWorkflow({ seasons }: Props) {
 
         const finalResult = await finalizeImport(selectedSeason)
         completedSteps.push({ label: 'References updated', detail: `${finalResult.synced} flight numbers synced` })
+
+        // STEP 6: Seed city pair block times from imported flights
+        setImportProgress({
+          phase: 'Seeding block times...',
+          percent: 96,
+          completedSteps: [...completedSteps],
+          currentStep: 'Computing median block times per city pair...',
+        })
+
+        const blockTimeResult = await seedCityPairBlockTimes(selectedSeason)
+        cityPairBlockTimesUpdated = blockTimeResult.updated
+        completedSteps.push({ label: 'Block times seeded', detail: `${blockTimeResult.updated} city pairs updated` })
       }
 
       // Done
@@ -340,6 +362,7 @@ export function SsimImportWorkflow({ seasons }: Props) {
         errors: totalErrors,
         airportsCreated,
         cityPairsCreated,
+        cityPairBlockTimesUpdated,
         errorDetails: allErrorDetails,
       })
       setStep('results')
@@ -351,6 +374,7 @@ export function SsimImportWorkflow({ seasons }: Props) {
         errors: totalErrors + 1,
         airportsCreated,
         cityPairsCreated,
+        cityPairBlockTimesUpdated,
         errorDetails: [
           ...allErrorDetails,
           { line: 0, message: err instanceof Error ? err.message : 'Import failed unexpectedly' },
@@ -377,22 +401,103 @@ export function SsimImportWorkflow({ seasons }: Props) {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  const handlePurge = async () => {
+    if (purgeConfirmText !== 'PURGE') return
+    setPurging(true)
+    try {
+      const result = await purgeAllFlights()
+      setShowPurgeConfirm(false)
+      setPurgeConfirmText('')
+      alert(`Purged ${result.deleted} flights and all related records.`)
+      router.refresh()
+    } catch (err) {
+      console.error('Purge failed:', err)
+      alert('Purge failed: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setPurging(false)
+    }
+  }
+
   // ─── Render ────────────────────────────────────────────────────
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-            <FileText className="h-5 w-5 text-primary" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+              <FileText className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold tracking-tight">1.1.10.1. SSIM Import</h2>
+              <p className="text-sm text-muted-foreground">Import schedules from SSIM Chapter 7 files</p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-xl font-semibold tracking-tight">1.1.10.1. SSIM Import</h2>
-            <p className="text-sm text-muted-foreground">Import schedules from SSIM Chapter 7 files</p>
-          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-red-500 hover:text-red-600 hover:bg-red-500/10"
+            onClick={() => setShowPurgeConfirm(true)}
+            disabled={importing || purging}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Purge All Flights
+          </Button>
         </div>
       </div>
+
+      {/* Purge confirmation dialog */}
+      {showPurgeConfirm && (
+        <div className="rounded-2xl glass p-4 border-l-4 border-l-red-500">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <h4 className="font-medium text-red-600 dark:text-red-400">Purge All Flights?</h4>
+              <p className="text-sm text-muted-foreground mt-1">
+                This will permanently delete <strong>ALL</strong> scheduled flights across <strong>all seasons</strong>,
+                including tail assignments, aircraft route legs, and reset all city pair block times to null.
+                This action cannot be undone.
+              </p>
+              <div className="mt-3">
+                <Label className="text-xs text-muted-foreground">Type <strong>PURGE</strong> to confirm</Label>
+                <Input
+                  className="mt-1 max-w-[200px] text-sm"
+                  placeholder="PURGE"
+                  value={purgeConfirmText}
+                  onChange={(e) => setPurgeConfirmText(e.target.value)}
+                  disabled={purging}
+                />
+              </div>
+              <div className="flex items-center gap-2 mt-3">
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handlePurge}
+                  disabled={purging || purgeConfirmText !== 'PURGE'}
+                >
+                  {purging ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Purging...
+                    </>
+                  ) : (
+                    'Yes, Purge Everything'
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setShowPurgeConfirm(false); setPurgeConfirmText('') }}
+                  disabled={purging}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Step indicator */}
       <div>
@@ -1390,11 +1495,12 @@ function ResultsStep({
           </h3>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <ResultStat label={isPreview ? 'Would Create' : 'Created'} value={result.created} color="text-emerald-600 dark:text-emerald-400" />
           <ResultStat label="Errors" value={result.errors} color={result.errors > 0 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'} />
           <ResultStat label="Airports Created" value={result.airportsCreated} color="text-blue-600 dark:text-blue-400" />
           <ResultStat label="City Pairs Created" value={result.cityPairsCreated} color="text-blue-600 dark:text-blue-400" />
+          <ResultStat label="Block Times Seeded" value={result.cityPairBlockTimesUpdated} color="text-violet-600 dark:text-violet-400" />
         </div>
       </div>
 

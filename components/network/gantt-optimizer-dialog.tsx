@@ -573,29 +573,29 @@ export function GanttOptimizerDialog({
             </span>
             <div className="flex flex-col" style={{ gap: 6 }}>
               <MethodCard
-                value="greedy"
-                title="Greedy Solution"
-                subtitle="Minimize aircraft used"
-                selected={selectedMethod === 'greedy'}
-                onSelect={() => setSelectedMethod('greedy')}
-              />
-              <MethodCard
                 value="good"
-                title="Good Solution"
+                title="Automation: Good Solution"
                 subtitle="Balance hours across fleet"
                 selected={selectedMethod === 'good'}
                 onSelect={() => setSelectedMethod('good')}
               />
               <MethodCard
+                value="greedy"
+                title="Automation: Greed Solution"
+                subtitle="Minimize aircraft used"
+                selected={selectedMethod === 'greedy'}
+                onSelect={() => setSelectedMethod('greedy')}
+              />
+              <MethodCard
                 value="ai"
-                title="AI Optimizer"
+                title="Optimize using AI Iteration"
                 subtitle="Iteratively improves greedy via simulated annealing"
                 selected={selectedMethod === 'ai'}
                 onSelect={() => setSelectedMethod('ai')}
               />
               <MethodCard
                 value="optimal"
-                title="Column Generation Solver"
+                title="Optimize using Column Generation"
                 subtitle="Best possible assignment using column generation"
                 selected={selectedMethod === 'optimal'}
                 onSelect={() => setSelectedMethod('optimal')}

@@ -1461,7 +1461,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         setAssignmentMethod('ai')
         setAssignmentsEnabled(true)
         setLastOptRun({
-          method: `AI Optimizer (${result.sa.improvement.toFixed(1)}% improvement)`,
+          method: `AI Iteration (${result.sa.improvement.toFixed(1)}% improvement)`,
           time: new Date(),
         })
       } catch (e) {
@@ -1480,7 +1480,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       setAssignmentMethod(method)
       await new Promise(r => setTimeout(r, 300))
       setOptimizerRunning(false)
-      setLastOptRun({ method: method === 'greedy' ? 'Greedy Solution' : 'Good Solution', time: new Date() })
+      setLastOptRun({ method: method === 'greedy' ? 'Automation: Greed Solution' : 'Automation: Good Solution', time: new Date() })
     }
   }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, movementSettings.allowFamilySub])
 
@@ -1652,9 +1652,9 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         chainBreaks: assignmentResult.chainBreaks,
         registrations: registrations as any[],
         aircraftTypes,
-        method: assignmentMethod === 'greedy' ? 'Greedy'
+        method: assignmentMethod === 'greedy' ? 'Greed'
           : assignmentMethod === 'good' ? 'Balanced'
-          : 'AI Optimizer',
+          : 'AI Iteration',
         rules: scheduleRules as any[],
       })
 
