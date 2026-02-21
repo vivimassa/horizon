@@ -1700,12 +1700,12 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         setAssignmentsEnabled(true)
         preMipStateRef.current = null
         const cgMode = (ganttSettings.chainContinuity ?? 'flexible') === 'strict' ? 'Strict' : 'Flex'
-        storeSolution(result, `Column Generation (${cgMode})`, {
+        storeSolution(result, `ColGen (${cgMode})`, {
           tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
           familySub: ganttSettings.allowFamilySub ?? false,
         })
         setLastOptRun({
-          method: `Column Generation (${cgMode})`,
+          method: `ColGen (${cgMode})`,
           time: new Date(),
         })
       } catch (e) {
@@ -1858,7 +1858,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       setOptimizerRunning(false)
       setLastOptRun({ method: `${label} Solution`, time: new Date() })
     }
-  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat, storeSolution])
+  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat, ganttSettings.chainContinuity, storeSolution])
 
   const handleCancelAi = useCallback(() => {
     aiAbortRef.current?.abort()
