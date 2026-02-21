@@ -9,8 +9,8 @@ export interface GanttFlight {
   flightNumber: string
   depStation: string
   arrStation: string
-  stdLocal: string
-  staLocal: string
+  stdUtc: string
+  staUtc: string
   blockMinutes: number
   daysOfOperation: string
   status: string
@@ -40,8 +40,8 @@ export async function getGanttFlights(
        sf.airline_code || sf.flight_number::text AS flight_number,
        sf.dep_station,
        sf.arr_station,
-       to_char(sf.std_local, 'HH24:MI') AS std_local,
-       to_char(sf.sta_local, 'HH24:MI') AS sta_local,
+       to_char(sf.std_utc::time, 'HH24:MI') AS std_utc,
+       to_char(sf.sta_utc::time, 'HH24:MI') AS sta_utc,
        COALESCE(sf.block_minutes, 0) AS block_minutes,
        sf.days_of_operation,
        COALESCE(sf.status, 'draft') AS status,
@@ -79,8 +79,8 @@ export async function getGanttFlights(
     flightNumber: r.flight_number as string,
     depStation: r.dep_station as string,
     arrStation: r.arr_station as string,
-    stdLocal: r.std_local as string,
-    staLocal: r.sta_local as string,
+    stdUtc: r.std_utc as string,
+    staUtc: r.sta_utc as string,
     blockMinutes: Number(r.block_minutes),
     daysOfOperation: r.days_of_operation as string,
     status: r.status as string,
@@ -134,8 +134,8 @@ export interface GanttRouteLeg {
   flightNumber: number | null
   depStation: string
   arrStation: string
-  stdLocal: string
-  staLocal: string
+  stdUtc: string
+  staUtc: string
   blockMinutes: number | null
   dayOffset: number
   arrivesNextDay: boolean
@@ -162,8 +162,8 @@ export async function getRouteWithLegs(routeId: string): Promise<GanttRouteData 
       id, leg_sequence, flight_id,
       airline_code, flight_number,
       dep_station, arr_station,
-      to_char(std_local, 'HH24:MI') AS std_local,
-      to_char(sta_local, 'HH24:MI') AS sta_local,
+      to_char(std_utc, 'HH24:MI') AS std_utc,
+      to_char(sta_utc, 'HH24:MI') AS sta_utc,
       block_minutes, day_offset, arrives_next_day, service_type
     FROM aircraft_route_legs
     WHERE route_id = $1
@@ -191,8 +191,8 @@ export async function getRouteWithLegs(routeId: string): Promise<GanttRouteData 
       flightNumber: l.flight_number != null ? Number(l.flight_number) : null,
       depStation: l.dep_station as string,
       arrStation: l.arr_station as string,
-      stdLocal: l.std_local as string,
-      staLocal: l.sta_local as string,
+      stdUtc: l.std_utc as string,
+      staUtc: l.sta_utc as string,
       blockMinutes: l.block_minutes != null ? Number(l.block_minutes) : null,
       dayOffset: Number(l.day_offset ?? 0),
       arrivesNextDay: Boolean(l.arrives_next_day),

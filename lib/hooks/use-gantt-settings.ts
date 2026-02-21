@@ -59,6 +59,7 @@ function mergeWithDefaults(partial: Record<string, unknown>): GanttSettingsData 
 
     allowFamilySub: typeof partial.allowFamilySub === 'boolean' ? partial.allowFamilySub : d.allowFamilySub,
     useMinimumTat: typeof partial.useMinimumTat === 'boolean' ? partial.useMinimumTat : d.useMinimumTat,
+    chainContinuity: (partial.chainContinuity === 'strict' || partial.chainContinuity === 'flexible') ? partial.chainContinuity : d.chainContinuity,
 
     costAssumptions: { ...d.costAssumptions, ...(partial.costAssumptions as object | undefined) },
 

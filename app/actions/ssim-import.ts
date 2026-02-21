@@ -35,8 +35,8 @@ export interface ParsedFlightData {
   daysOfOperation: string
   depStation: string
   arrStation: string
-  stdLocal: string
-  staLocal: string
+  stdUtc: string
+  staUtc: string
   depUtcOffset: string
   arrUtcOffset: string
   aircraftType: string
@@ -87,8 +87,8 @@ export async function parseSSIMFile(fileContent: string): Promise<ParseSSIMResul
     daysOfOperation: f.daysOfOperation,
     depStation: f.depStation,
     arrStation: f.arrStation,
-    stdLocal: f.stdLocal,
-    staLocal: f.staLocal,
+    stdUtc: f.stdUtc,
+    staUtc: f.staUtc,
     depUtcOffset: f.depUtcOffset,
     arrUtcOffset: f.arrUtcOffset,
     aircraftType: f.aircraftType,
@@ -344,10 +344,10 @@ export async function importFlightBatch(
     const f = flights[j]
     const offset = j * 24
     const acResolved = resolveAircraftTypeId(f.aircraftType)
-    const stdUtc = toUtcTime(f.stdLocal, f.depUtcOffset)
-    const staUtc = toUtcTime(f.staLocal, f.arrUtcOffset)
-    const stdTime = f.stdLocal.slice(0, 2) + ':' + f.stdLocal.slice(2, 4)
-    const staTime = f.staLocal.slice(0, 2) + ':' + f.staLocal.slice(2, 4)
+    const stdUtc = toUtcTime(f.stdUtc, f.depUtcOffset)
+    const staUtc = toUtcTime(f.staUtc, f.arrUtcOffset)
+    const stdTime = f.stdUtc.slice(0, 2) + ':' + f.stdUtc.slice(2, 4)
+    const staTime = f.staUtc.slice(0, 2) + ':' + f.staUtc.slice(2, 4)
     const stdUtcTime = stdUtc ? stdUtc.slice(0, 2) + ':' + stdUtc.slice(2, 4) : null
     const staUtcTime = staUtc ? staUtc.slice(0, 2) + ':' + staUtc.slice(2, 4) : null
 

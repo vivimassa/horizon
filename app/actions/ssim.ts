@@ -39,8 +39,8 @@ export async function importSsimRecords(input: {
   const existing = await pool.query(
     `SELECT id, airline_code || flight_number::text AS flight_number,
             dep_station, arr_station,
-            to_char(std_local, 'HH24MI') AS std,
-            to_char(sta_local, 'HH24MI') AS sta,
+            to_char(std_utc::time, 'HH24MI') AS std,
+            to_char(sta_utc::time, 'HH24MI') AS sta,
             days_of_operation, aircraft_type_id, service_type
      FROM scheduled_flights
      WHERE season_id = $1 AND operator_id = $2`,
@@ -133,7 +133,7 @@ export async function importSsimRecords(input: {
           await pool.query(
             `UPDATE scheduled_flights SET
                dep_station = $1, arr_station = $2,
-               std_local = $3::time, sta_local = $4::time,
+               std_utc = $3::time, sta_utc = $4::time,
                block_minutes = $5, days_of_operation = $6,
                aircraft_type_id = $7, service_type = $8,
                period_start = $9, period_end = $10,
@@ -163,7 +163,7 @@ export async function importSsimRecords(input: {
         await pool.query(
           `INSERT INTO scheduled_flights (
              operator_id, season_id, airline_code, flight_number,
-             dep_station, arr_station, std_local, sta_local,
+             dep_station, arr_station, std_utc, sta_utc,
              block_minutes, days_of_operation, aircraft_type_id, service_type,
              period_start, period_end, arrival_day_offset, source
            ) VALUES ($1,$2,$3,$4,$5,$6,$7::time,$8::time,$9,$10,$11,$12,$13,$14,$15,'ssim')`,
@@ -217,8 +217,8 @@ export async function generateSsimExport(input: {
       sf.airline_code || sf.flight_number::text AS flight_number,
       sf.dep_station AS departure_iata,
       sf.arr_station AS arrival_iata,
-      to_char(sf.std_local, 'HH24MI') AS std,
-      to_char(sf.sta_local, 'HH24MI') AS sta,
+      to_char(sf.std_utc::time, 'HH24MI') AS std,
+      to_char(sf.sta_utc::time, 'HH24MI') AS sta,
       sf.days_of_operation AS days_of_week,
       sf.service_type,
       sf.period_start AS effective_from,

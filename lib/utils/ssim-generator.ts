@@ -30,10 +30,10 @@ export interface SSIMFlightRecord {
   periodEnd: string          // ISO date YYYY-MM-DD
   daysOfOperation: string    // "1234567" format, 7 chars
   depStation: string         // 3-char IATA
-  stdLocal: string           // HH:MM or HHMM
+  stdUtc: string           // HH:MM or HHMM
   depUtcOffset: string       // +HHMM or -HHMM (5 chars)
   arrStation: string         // 3-char IATA
-  staLocal: string           // HH:MM or HHMM
+  staUtc: string           // HH:MM or HHMM
   arrUtcOffset: string       // +HHMM or -HHMM (5 chars)
   aircraftTypeIata: string   // 3-char IATA aircraft type
   seatConfig?: Record<string, number>  // e.g. { C: 12, Y: 365 }
@@ -171,13 +171,13 @@ function generateType3(flight: SSIMFlightRecord, serialNumber: number): string {
   const days = padRight(flight.daysOfOperation, 7)
 
   const depStation = padRight(flight.depStation, 3)
-  const stdLocal = normalizeTime(flight.stdLocal)
-  const stdPassenger = stdLocal
+  const stdUtc = normalizeTime(flight.stdUtc)
+  const stdPassenger = stdUtc
   const depOffset = padRight(flight.depUtcOffset, 5)
 
   const arrStation = padRight(flight.arrStation, 3)
-  const staLocal = normalizeTime(flight.staLocal)
-  const staPassenger = staLocal
+  const staUtc = normalizeTime(flight.staUtc)
+  const staPassenger = staUtc
   const arrOffset = padRight(flight.arrUtcOffset, 5)
 
   const acType = padRight(flight.aircraftTypeIata, 3)
@@ -196,11 +196,11 @@ function generateType3(flight: SSIMFlightRecord, serialNumber: number): string {
     { pos: 21, value: periodEndSsim },
     { pos: 28, value: days },
     { pos: 36, value: depStation },
-    { pos: 39, value: stdLocal },
+    { pos: 39, value: stdUtc },
     { pos: 43, value: stdPassenger },
     { pos: 47, value: depOffset },
     { pos: 54, value: arrStation },
-    { pos: 57, value: staLocal },
+    { pos: 57, value: staUtc },
     { pos: 61, value: staPassenger },
     { pos: 65, value: arrOffset },
     { pos: 72, value: acType },

@@ -38,11 +38,11 @@ export interface SSIMFlightLeg {
   periodEnd: string     // ISO date YYYY-MM-DD
   daysOfOperation: string  // "1234567" format with spaces for non-operating days
   depStation: string
-  stdLocal: string      // HHMM
+  stdUtc: string      // HHMM
   stdPassenger: string  // HHMM
   depUtcOffset: string  // +HHMM or -HHMM
   arrStation: string
-  staLocal: string      // HHMM
+  staUtc: string      // HHMM
   staPassenger: string  // HHMM
   arrUtcOffset: string  // +HHMM or -HHMM
   aircraftType: string  // IATA 3-letter code
@@ -130,15 +130,15 @@ function parseSeatConfig(raw: string): { config: Record<string, number>; total: 
  * Handles overnight flights (arrival next day).
  */
 function calcBlockMinutes(
-  stdLocal: string,
+  stdUtc: string,
   depOffset: string,
-  staLocal: string,
+  staUtc: string,
   arrOffset: string
 ): number {
-  if (!stdLocal || !staLocal || stdLocal.length < 4 || staLocal.length < 4) return 0
+  if (!stdUtc || !staUtc || stdUtc.length < 4 || staUtc.length < 4) return 0
 
-  const depMinLocal = parseInt(stdLocal.slice(0, 2), 10) * 60 + parseInt(stdLocal.slice(2, 4), 10)
-  const arrMinLocal = parseInt(staLocal.slice(0, 2), 10) * 60 + parseInt(staLocal.slice(2, 4), 10)
+  const depMinLocal = parseInt(stdUtc.slice(0, 2), 10) * 60 + parseInt(stdUtc.slice(2, 4), 10)
+  const arrMinLocal = parseInt(staUtc.slice(0, 2), 10) * 60 + parseInt(staUtc.slice(2, 4), 10)
 
   const depOffsetMin = parseUtcOffset(depOffset)
   const arrOffsetMin = parseUtcOffset(arrOffset)
@@ -323,12 +323,12 @@ function parseType3(line: string, lineNum: number): SSIMFlightLeg | null {
   const daysOfOperation = line.substring(28, 35)
 
   const depStation = line.substring(36, 39).trim()
-  const stdLocal = line.substring(39, 43).trim()
+  const stdUtc = line.substring(39, 43).trim()
   const stdPassenger = line.substring(43, 47).trim()
   const depUtcOffset = line.substring(47, 52).trim()
 
   const arrStation = line.substring(54, 57).trim()
-  const staLocal = line.substring(57, 61).trim()
+  const staUtc = line.substring(57, 61).trim()
   const staPassenger = line.substring(61, 65).trim()
   const arrUtcOffset = line.substring(65, 70).trim()
 
@@ -352,7 +352,7 @@ function parseType3(line: string, lineNum: number): SSIMFlightLeg | null {
   }
 
   // Calculate block time
-  const blockMinutes = calcBlockMinutes(stdLocal, depUtcOffset, staLocal, arrUtcOffset)
+  const blockMinutes = calcBlockMinutes(stdUtc, depUtcOffset, staUtc, arrUtcOffset)
 
   return {
     recordType: 3,
@@ -366,11 +366,11 @@ function parseType3(line: string, lineNum: number): SSIMFlightLeg | null {
     periodEnd,
     daysOfOperation,
     depStation,
-    stdLocal,
+    stdUtc,
     stdPassenger,
     depUtcOffset,
     arrStation,
-    staLocal,
+    staUtc,
     staPassenger,
     arrUtcOffset,
     aircraftType,

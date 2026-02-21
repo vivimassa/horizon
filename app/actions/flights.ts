@@ -97,15 +97,15 @@ export async function publishFlights(input: {
     flight_number: sf.airline_code + sf.flight_number,
     departure_iata: sf.dep_station,
     arrival_iata: sf.arr_station,
-    std: sf.std_local ? String(sf.std_local).replace(':', '').slice(0, 4) : '',
-    sta: sf.sta_local ? String(sf.sta_local).replace(':', '').slice(0, 4) : '',
+    std: sf.std_utc ? String(sf.std_utc).replace(':', '').slice(0, 4) : '',
+    sta: sf.sta_utc ? String(sf.sta_utc).replace(':', '').slice(0, 4) : '',
     block_minutes: sf.block_minutes || 0,
     days_of_week: sf.days_of_operation,
     aircraft_type_id: sf.aircraft_type_id,
     service_type: sf.service_type,
     effective_from: sf.period_start,
     effective_until: sf.period_end,
-    arrival_day_offset: sf.arrival_day_offset || (sf.sta_local < sf.std_local ? 1 : 0),
+    arrival_day_offset: sf.arrival_day_offset || (sf.sta_utc < sf.std_utc ? 1 : 0),
   }))
 
   // 2. Build timezone lookup from airports
@@ -144,8 +144,8 @@ export async function publishFlights(input: {
     arrival_iata: string
     std_utc: string
     sta_utc: string
-    std_local: string
-    sta_local: string
+    std_local: string  // kept for backward compat
+    sta_local: string  // kept for backward compat
     block_minutes: number
     aircraft_type_id: string | null
     service_type: string

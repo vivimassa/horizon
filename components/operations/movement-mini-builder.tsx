@@ -16,8 +16,8 @@ interface ExpandedFlight {
   flightNumber: string
   depStation: string
   arrStation: string
-  stdLocal: string
-  staLocal: string
+  stdUtc: string
+  staUtc: string
   blockMinutes: number
   status: string
   aircraftTypeIcao: string | null
@@ -42,8 +42,8 @@ interface MiniLeg {
   flightNumber: number | null
   depStation: string
   arrStation: string
-  stdLocal: string
-  staLocal: string
+  stdUtc: string
+  staUtc: string
   blockMinutes: number | null
   arrivesNextDay: boolean
   serviceType: string
@@ -101,7 +101,7 @@ function generateId(): string {
 
 // ─── Column definitions ────────────────────────────────────────
 
-const COLS = ['dayOffset', 'flightNumber', 'depStation', 'arrStation', 'stdLocal', 'staLocal', 'blockMinutes', 'serviceType', 'acReg'] as const
+const COLS = ['dayOffset', 'flightNumber', 'depStation', 'arrStation', 'stdUtc', 'staUtc', 'blockMinutes', 'serviceType', 'acReg'] as const
 type ColKey = typeof COLS[number]
 
 const COL_LABELS: Record<ColKey, string> = {
@@ -109,8 +109,8 @@ const COL_LABELS: Record<ColKey, string> = {
   flightNumber: 'FLT NO',
   depStation: 'DEP',
   arrStation: 'ARR',
-  stdLocal: 'STD',
-  staLocal: 'STA',
+  stdUtc: 'STD',
+  staUtc: 'STA',
   blockMinutes: 'BLOCK',
   serviceType: 'SVC',
   acReg: 'AC REG',
@@ -121,14 +121,14 @@ const COL_WIDTHS: Record<ColKey, string> = {
   flightNumber: 'w-[70px]',
   depStation: 'w-[55px]',
   arrStation: 'w-[55px]',
-  stdLocal: 'w-[60px]',
-  staLocal: 'w-[60px]',
+  stdUtc: 'w-[60px]',
+  staUtc: 'w-[60px]',
   blockMinutes: 'w-[60px]',
   serviceType: 'w-[42px]',
   acReg: 'w-[80px]',
 }
 
-const EDITABLE_COLS: ColKey[] = ['dayOffset', 'flightNumber', 'depStation', 'arrStation', 'stdLocal', 'staLocal', 'serviceType']
+const EDITABLE_COLS: ColKey[] = ['dayOffset', 'flightNumber', 'depStation', 'arrStation', 'stdUtc', 'staUtc', 'serviceType']
 
 // ─── DOW helper ───────────────────────────────────────────────
 
@@ -167,8 +167,8 @@ export function MiniBuilderModal({ open, onClose, flight, route, loading, onSave
         flightNumber: l.flightNumber,
         depStation: l.depStation,
         arrStation: l.arrStation,
-        stdLocal: l.stdLocal,
-        staLocal: l.staLocal,
+        stdUtc: l.stdUtc,
+        staUtc: l.staUtc,
         blockMinutes: l.blockMinutes,
         arrivesNextDay: l.arrivesNextDay,
         serviceType: l.serviceType,
@@ -187,8 +187,8 @@ export function MiniBuilderModal({ open, onClose, flight, route, loading, onSave
         flightNumber: parts ? parseInt(parts[2], 10) : null,
         depStation: flight.depStation,
         arrStation: flight.arrStation,
-        stdLocal: flight.stdLocal,
-        staLocal: flight.staLocal,
+        stdUtc: flight.stdUtc,
+        staUtc: flight.staUtc,
         blockMinutes: flight.blockMinutes,
         arrivesNextDay: false,
         serviceType: 'J',
@@ -217,8 +217,8 @@ export function MiniBuilderModal({ open, onClose, flight, route, loading, onSave
       case 'flightNumber': return leg.flightNumber != null ? String(leg.flightNumber) : ''
       case 'depStation': return leg.depStation
       case 'arrStation': return leg.arrStation
-      case 'stdLocal': return leg.stdLocal
-      case 'staLocal': return leg.staLocal
+      case 'stdUtc': return leg.stdUtc
+      case 'staUtc': return leg.staUtc
       case 'blockMinutes': return formatBlock(leg.blockMinutes)
       case 'serviceType': return leg.serviceType
       case 'acReg': return flight.aircraftReg || flight.assignedReg || flight.aircraftTypeIcao || ''
@@ -249,20 +249,20 @@ export function MiniBuilderModal({ open, onClose, flight, route, loading, onSave
         case 'arrStation':
           leg.arrStation = editValue.toUpperCase().slice(0, 3)
           break
-        case 'stdLocal': {
+        case 'stdUtc': {
           const t = normalizeTime(editValue)
           if (t && isValidTime(t)) {
-            leg.stdLocal = t
-            if (leg.staLocal) leg.blockMinutes = computeBlockMinutes(t, leg.staLocal)
+            leg.stdUtc = t
+            if (leg.staUtc) leg.blockMinutes = computeBlockMinutes(t, leg.staUtc)
           }
           break
         }
-        case 'staLocal': {
+        case 'staUtc': {
           const t = normalizeTime(editValue)
           if (t && isValidTime(t)) {
-            leg.staLocal = t
-            if (leg.stdLocal) leg.blockMinutes = computeBlockMinutes(leg.stdLocal, t)
-            leg.arrivesNextDay = leg.stdLocal ? timeToMinutes(t) < timeToMinutes(leg.stdLocal) : false
+            leg.staUtc = t
+            if (leg.stdUtc) leg.blockMinutes = computeBlockMinutes(leg.stdUtc, t)
+            leg.arrivesNextDay = leg.stdUtc ? timeToMinutes(t) < timeToMinutes(leg.stdUtc) : false
           }
           break
         }
@@ -361,8 +361,8 @@ export function MiniBuilderModal({ open, onClose, flight, route, loading, onSave
       flightNumber: null,
       depStation: lastLeg?.arrStation || '',
       arrStation: '',
-      stdLocal: '',
-      staLocal: '',
+      stdUtc: '',
+      staUtc: '',
       blockMinutes: null,
       arrivesNextDay: false,
       serviceType: lastLeg?.serviceType || 'J',
@@ -398,7 +398,7 @@ export function MiniBuilderModal({ open, onClose, flight, route, loading, onSave
     for (let i = 0; i < legs.length; i++) {
       const l = legs[i]
       if (!l.depStation || !l.arrStation) { toast.error(`Leg ${i + 1}: DEP and ARR are required`); return }
-      if (!l.stdLocal || !l.staLocal) { toast.error(`Leg ${i + 1}: STD and STA are required`); return }
+      if (!l.stdUtc || !l.staUtc) { toast.error(`Leg ${i + 1}: STD and STA are required`); return }
     }
 
     setSaving(true)
@@ -422,8 +422,8 @@ export function MiniBuilderModal({ open, onClose, flight, route, loading, onSave
           flight_number: l.flightNumber,
           dep_station: l.depStation,
           arr_station: l.arrStation,
-          std_local: l.stdLocal,
-          sta_local: l.staLocal,
+          std_utc: l.stdUtc,
+          sta_utc: l.staUtc,
           block_minutes: l.blockMinutes,
           day_offset: l.dayOffset,
           arrives_next_day: l.arrivesNextDay,

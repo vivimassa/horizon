@@ -108,8 +108,8 @@ export async function applyAsmMessage(input: {
   } else if (input.action_code === 'TIM' && input.flight_date) {
     // Time change on specific flight
     const update: Record<string, string> = {}
-    if (input.changes['std']) update.std_local = input.changes['std'].to
-    if (input.changes['sta']) update.sta_local = input.changes['sta'].to
+    if (input.changes['std']) update.std_utc = input.changes['std'].to
+    if (input.changes['sta']) update.sta_utc = input.changes['sta'].to
 
     if (Object.keys(update).length > 0) {
       const { error } = await supabase

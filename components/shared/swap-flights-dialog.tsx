@@ -13,8 +13,8 @@ export interface SwapExpandedFlight {
   flightNumber: string
   depStation: string
   arrStation: string
-  stdLocal: string
-  staLocal: string
+  stdUtc: string
+  staUtc: string
   blockMinutes: number
   stdMinutes: number
   staMinutes: number
@@ -160,7 +160,7 @@ export function SwapFlightsDialog({
               {sideA.map(f => (
                 <div key={f.id} className="flex items-center justify-between text-[11px]">
                   <span className="font-medium">{f.flightNumber}</span>
-                  <span className="text-muted-foreground">{f.depStation}-{f.arrStation} {f.stdLocal}</span>
+                  <span className="text-muted-foreground">{f.depStation}-{f.arrStation} {f.stdUtc}</span>
                 </div>
               ))}
             </div>
@@ -185,7 +185,7 @@ export function SwapFlightsDialog({
               {sideB.map(f => (
                 <div key={f.id} className="flex items-center justify-between text-[11px]">
                   <span className="font-medium">{f.flightNumber}</span>
-                  <span className="text-muted-foreground">{f.depStation}-{f.arrStation} {f.stdLocal}</span>
+                  <span className="text-muted-foreground">{f.depStation}-{f.arrStation} {f.stdUtc}</span>
                 </div>
               ))}
             </div>

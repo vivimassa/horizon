@@ -21,13 +21,13 @@ export async function getFlightNumbers(seasonId: string): Promise<FlightNumber[]
        sf.arr_airport_id AS arrival_airport_id,
        sf.dep_station AS departure_iata,
        sf.arr_station AS arrival_iata,
-       sf.std_local::text, sf.sta_local::text,
-       to_char(sf.std_local, 'HH24MI') AS std,
-       to_char(sf.sta_local, 'HH24MI') AS sta,
-       to_char(sf.std_utc, 'HH24MI') AS std_utc,
-       to_char(sf.sta_utc, 'HH24MI') AS sta_utc,
+       sf.std_utc::text, sf.sta_utc::text,
+       to_char(sf.std_utc::time, 'HH24MI') AS std,
+       to_char(sf.sta_utc::time, 'HH24MI') AS sta,
+       to_char(sf.std_utc::time, 'HH24MI') AS std_utc,
+       to_char(sf.sta_utc::time, 'HH24MI') AS sta_utc,
        COALESCE(sf.block_minutes, 0) AS block_minutes,
-       COALESCE(sf.arrival_day_offset, CASE WHEN sf.sta_local < sf.std_local THEN 1 ELSE 0 END) AS arrival_day_offset,
+       COALESCE(sf.arrival_day_offset, CASE WHEN sf.sta_utc < sf.std_utc THEN 1 ELSE 0 END) AS arrival_day_offset,
        sf.days_of_operation,
        sf.days_of_operation AS days_of_week,
        sf.aircraft_type_id,
@@ -72,13 +72,13 @@ export async function getFlightsByDateRange(dateFrom: string, dateTo: string): P
        sf.arr_airport_id AS arrival_airport_id,
        sf.dep_station AS departure_iata,
        sf.arr_station AS arrival_iata,
-       sf.std_local::text, sf.sta_local::text,
-       to_char(sf.std_local, 'HH24MI') AS std,
-       to_char(sf.sta_local, 'HH24MI') AS sta,
-       to_char(sf.std_utc, 'HH24MI') AS std_utc,
-       to_char(sf.sta_utc, 'HH24MI') AS sta_utc,
+       sf.std_utc::text, sf.sta_utc::text,
+       to_char(sf.std_utc::time, 'HH24MI') AS std,
+       to_char(sf.sta_utc::time, 'HH24MI') AS sta,
+       to_char(sf.std_utc::time, 'HH24MI') AS std_utc,
+       to_char(sf.sta_utc::time, 'HH24MI') AS sta_utc,
        COALESCE(sf.block_minutes, 0) AS block_minutes,
-       COALESCE(sf.arrival_day_offset, CASE WHEN sf.sta_local < sf.std_local THEN 1 ELSE 0 END) AS arrival_day_offset,
+       COALESCE(sf.arrival_day_offset, CASE WHEN sf.sta_utc < sf.std_utc THEN 1 ELSE 0 END) AS arrival_day_offset,
        sf.days_of_operation,
        sf.days_of_operation AS days_of_week,
        sf.aircraft_type_id,
@@ -169,7 +169,7 @@ export async function saveFlightNumber(input: {
         `UPDATE scheduled_flights SET
            airline_code = $1, flight_number = $2,
            dep_station = $3, arr_station = $4,
-           std_local = $5::time, sta_local = $6::time,
+           std_utc = $5::time, sta_utc = $6::time,
            block_minutes = $7, days_of_operation = $8,
            aircraft_type_id = $9, service_type = $10,
            period_start = $11, period_end = $12,
@@ -195,7 +195,7 @@ export async function saveFlightNumber(input: {
       const result = await pool.query(
         `INSERT INTO scheduled_flights (
            operator_id, season_id, airline_code, flight_number,
-           dep_station, arr_station, std_local, sta_local,
+           dep_station, arr_station, std_utc, sta_utc,
            block_minutes, days_of_operation, aircraft_type_id, service_type,
            period_start, period_end, arrival_day_offset,
            dep_airport_id, arr_airport_id, source, status
@@ -327,8 +327,8 @@ export async function updateFlightInline(
     arrival_iata: 'arr_station',
     effective_from: 'period_start',
     effective_until: 'period_end',
-    std: 'std_local',
-    sta: 'sta_local',
+    std: 'std_utc',
+    sta: 'sta_utc',
   }
 
   const setClauses: string[] = []
@@ -338,7 +338,7 @@ export async function updateFlightInline(
   for (const [key, val] of Object.entries(changes)) {
     const col = colMap[key] || key
     // Convert HHMM → HH:MM for time columns
-    if ((col === 'std_local' || col === 'sta_local') && typeof val === 'string' && val.length === 4) {
+    if ((col === 'std_utc' || col === 'sta_utc') && typeof val === 'string' && val.length === 4) {
       setClauses.push(`${col} = $${idx}::time`)
       values.push(val.slice(0, 2) + ':' + val.slice(2))
     } else {

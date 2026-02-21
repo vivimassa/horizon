@@ -92,8 +92,8 @@ interface ExpandedFlight {
   flightNumber: string
   depStation: string
   arrStation: string
-  stdLocal: string
-  staLocal: string
+  stdUtc: string
+  staUtc: string
   blockMinutes: number
   status: string
   aircraftTypeIcao: string | null
@@ -1189,8 +1189,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
       const pStart = new Date(f.periodStart + 'T00:00:00')
       const pEnd = new Date(f.periodEnd + 'T00:00:00')
-      const stdMin = timeToMinutes(f.stdLocal)
-      const staMin = timeToMinutes(f.staLocal)
+      const stdMin = timeToMinutes(f.stdUtc)
+      const staMin = timeToMinutes(f.staUtc)
 
       for (let d = 0; d < totalDaysToRender; d++) {
         const date = addDays(startDate, d)
@@ -1213,8 +1213,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           flightNumber: f.flightNumber,
           depStation: f.depStation,
           arrStation: f.arrStation,
-          stdLocal: f.stdLocal,
-          staLocal: f.staLocal,
+          stdUtc: f.stdUtc,
+          staUtc: f.staUtc,
           blockMinutes: f.blockMinutes,
           status: f.status,
           aircraftTypeIcao: f.aircraftTypeIcao,
@@ -2174,8 +2174,8 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       totalGroundMinutes,
       mismatchCount,
       elapsedMinutes,
-      firstStdLocal: flights[0].stdLocal,
-      lastStaLocal: flights[flights.length - 1].staLocal,
+      firstStdLocal: flights[0].stdUtc,
+      lastStaLocal: flights[flights.length - 1].staUtc,
       firstDate: formatISO(firstDate),
       lastDate: formatISO(lastDate),
       legs: flights.length,
@@ -2262,7 +2262,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       const bothDbAssigned = !!curr.aircraftReg && !!next.aircraftReg
       if (!bothDbAssigned) continue
       if (next.stdMinutes < curr.staMinutes) {
-        conflicts.push({ type: 'overlap', flightA: curr, flightB: next, detail: `${stripFlightPrefix(curr.flightNumber)} (STA ${curr.staLocal}) overlaps with ${stripFlightPrefix(next.flightNumber)} (STD ${next.stdLocal})` })
+        conflicts.push({ type: 'overlap', flightA: curr, flightB: next, detail: `${stripFlightPrefix(curr.flightNumber)} (STA ${curr.staUtc}) overlaps with ${stripFlightPrefix(next.flightNumber)} (STD ${next.stdUtc})` })
       } else if (!sameRoute) {
         if (curr.arrStation !== next.depStation) {
           conflicts.push({ type: 'station_mismatch', flightA: curr, flightB: next, detail: `${curr.arrStation} ≠ ${next.depStation}: ${stripFlightPrefix(curr.flightNumber)} arrives ${curr.arrStation} but ${stripFlightPrefix(next.flightNumber)} departs ${next.depStation}` })
@@ -4172,7 +4172,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                     const buildParts = (): string[] => {
                       const parts = [num]
                       if (bl.sector) parts.push(`${ef.depStation}-${ef.arrStation}`)
-                      if (bl.times) parts.push(`${ef.stdLocal}-${ef.staLocal}`)
+                      if (bl.times) parts.push(`${ef.stdUtc}-${ef.staUtc}`)
                       if (bl.blockTime) parts.push(formatBlockTimeBH(ef.blockMinutes))
                       return parts
                     }
@@ -4248,7 +4248,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                             className="absolute flex items-start justify-end"
                             style={{ right: totalWidth - x + FLANK_GAP, top: BAR_TOP, ...flankStyle }}
                           >
-                            {ef.stdLocal}
+                            {ef.stdUtc}
                           </div>
                         )
                       }
@@ -4262,7 +4262,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                             className="absolute flex items-end"
                             style={{ left: x + w + FLANK_GAP, top: BAR_TOP, height: BAR_HEIGHT, ...flankStyle }}
                           >
-                            {ef.staLocal}
+                            {ef.staUtc}
                           </div>
                         )
                       }
@@ -5148,7 +5148,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                                 <span style={{ fontSize: 11, fontWeight: 700 }}>{stripFlightPrefix(f.flightNumber)}</span>
                                 <span style={{ fontSize: 11 }} className="text-foreground">{f.depStation} → {f.arrStation}</span>
                               </div>
-                              <span style={{ fontSize: 10 }} className="text-muted-foreground shrink-0">{f.stdLocal} – {f.staLocal}</span>
+                              <span style={{ fontSize: 10 }} className="text-muted-foreground shrink-0">{f.stdUtc} – {f.staUtc}</span>
                             </div>
                             <div className="text-right" style={{ fontSize: 10 }}>
                               <span className="text-muted-foreground">{formatBlockTime(f.blockMinutes)}</span>
@@ -5288,7 +5288,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                         <div className="flex items-center justify-between">
                           <div className="text-center">
                             <div className="text-sm font-bold">{flightPanelData.flight.depStation}</div>
-                            <div className="text-[9px] text-muted-foreground">{flightPanelData.flight.stdLocal}</div>
+                            <div className="text-[9px] text-muted-foreground">{flightPanelData.flight.stdUtc}</div>
                           </div>
                           <div className="flex-1 flex items-center justify-center px-2">
                             <div className="flex-1 h-px bg-border" />
@@ -5297,7 +5297,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                           </div>
                           <div className="text-center">
                             <div className="text-sm font-bold">{flightPanelData.flight.arrStation}</div>
-                            <div className="text-[9px] text-muted-foreground">{flightPanelData.flight.staLocal}</div>
+                            <div className="text-[9px] text-muted-foreground">{flightPanelData.flight.staUtc}</div>
                           </div>
                         </div>
                         <div className="text-center text-[9px] text-muted-foreground mt-1">
@@ -5656,7 +5656,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                                 </div>
                                 <div className="flex items-center gap-1.5 shrink-0">
                                   <span className="text-[9px] text-muted-foreground">
-                                    {rf.stdLocal}-{rf.staLocal}
+                                    {rf.stdUtc}-{rf.staUtc}
                                   </span>
                                   <span
                                     className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold"
@@ -5925,7 +5925,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
                 <div className="space-y-1 -mt-1">
                   {displayFlights.map(ef => (
                     <div key={ef.id} className="text-[12px] text-foreground">
-                      {ef.flightNumber} {ef.depStation} → {ef.arrStation} · {ef.stdLocal} - {ef.staLocal}
+                      {ef.flightNumber} {ef.depStation} → {ef.arrStation} · {ef.stdUtc} - {ef.staUtc}
                     </div>
                   ))}
                   {overflow > 0 && (
@@ -6083,7 +6083,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           getFlightDetails={(eid) => {
             const ef = assignedFlights.find(f => f.id === eid)
             if (!ef) return null
-            return { flightNumber: ef.flightNumber, depStation: ef.depStation, arrStation: ef.arrStation, date: ef.date, stdLocal: ef.stdLocal }
+            return { flightNumber: ef.flightNumber, depStation: ef.depStation, arrStation: ef.arrStation, date: ef.date, stdUtc: ef.stdUtc }
           }}
           getTypeName={(icao) => acTypeByIcao.get(icao)?.name || icao}
         />
@@ -6407,7 +6407,7 @@ function FlightTooltip({
               </div>
               {tooltipSettings.times && (
                 <div className="text-[9px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
-                  {flight.stdLocal}
+                  {flight.stdUtc}
                 </div>
               )}
             </div>
@@ -6422,7 +6422,7 @@ function FlightTooltip({
               </div>
               {tooltipSettings.times && (
                 <div className="text-[9px]" style={{ color: 'var(--gantt-tooltip-body)' }}>
-                  {flight.staLocal}
+                  {flight.staUtc}
                 </div>
               )}
             </div>
@@ -6985,7 +6985,7 @@ function DropConfirmDialog({
   onClose: () => void
   onConfirm: () => void
   pendingDrop: PendingDrop
-  getFlightDetails: (expandedId: string) => { flightNumber: string; depStation: string; arrStation: string; date: Date; stdLocal: string } | null
+  getFlightDetails: (expandedId: string) => { flightNumber: string; depStation: string; arrStation: string; date: Date; stdUtc: string } | null
   getTypeName: (icao: string) => string
   container?: HTMLElement | null
 }) {
@@ -7030,7 +7030,7 @@ function DropConfirmDialog({
                   {details.depStation}→{details.arrStation}
                 </span>
                 <span className="text-muted-foreground">
-                  {formatDate(details.date)} {details.stdLocal}
+                  {formatDate(details.date)} {details.stdUtc}
                 </span>
               </div>
             )

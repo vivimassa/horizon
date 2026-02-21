@@ -218,7 +218,7 @@ export async function copyFlights(
       const res = await client.query(`
         INSERT INTO scheduled_flights (
           operator_id, season_id, airline_code, flight_number,
-          dep_station, arr_station, std_local, sta_local,
+          dep_station, arr_station, std_utc, sta_utc,
           block_minutes, days_of_operation, period_start, period_end,
           aircraft_type_icao, aircraft_type_id, service_type,
           arrival_day_offset, source, status, aircraft_reg,
@@ -226,7 +226,7 @@ export async function copyFlights(
         )
         SELECT
           operator_id, season_id, airline_code, flight_number,
-          dep_station, arr_station, std_local, sta_local,
+          dep_station, arr_station, std_utc, sta_utc,
           block_minutes, days_of_operation, period_start, period_end,
           aircraft_type_icao, aircraft_type_id, service_type,
           arrival_day_offset, 'builder', 'draft', $2,
@@ -276,14 +276,14 @@ export async function copyFlights(
           await client.query(`
             INSERT INTO aircraft_route_legs (
               route_id, leg_sequence, flight_id, airline_code, flight_number,
-              dep_station, arr_station, std_local, sta_local,
+              dep_station, arr_station, std_utc, sta_utc,
               block_minutes, day_offset, arrives_next_day, service_type
             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
           `, [
             newRouteId, leg.leg_sequence, mappedFlightId,
             leg.airline_code, leg.flight_number,
             leg.dep_station, leg.arr_station,
-            leg.std_local, leg.sta_local,
+            leg.std_utc, leg.sta_utc,
             leg.block_minutes, leg.day_offset,
             leg.arrives_next_day, leg.service_type,
           ])

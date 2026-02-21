@@ -271,15 +271,15 @@ function calculateDayOffsets(legs: LegWithOffsets[]): void {
   if (!legs[0]._dayOffsetManual) {
     legs[0]._dayOffset = 0
   }
-  legs[0]._arrivesNextDay = timeToMinutes(legs[0].sta_local) < timeToMinutes(legs[0].std_local)
+  legs[0]._arrivesNextDay = timeToMinutes(legs[0].sta_utc) < timeToMinutes(legs[0].std_utc)
 
   for (let i = 1; i < legs.length; i++) {
     const prev = legs[i - 1]
     const curr = legs[i]
 
     if (!curr._dayOffsetManual) {
-      const prevStaMin = timeToMinutes(prev.sta_local)
-      const currStdMin = timeToMinutes(curr.std_local)
+      const prevStaMin = timeToMinutes(prev.sta_utc)
+      const currStdMin = timeToMinutes(curr.std_utc)
       const arrivalDay = prev._dayOffset + (prev._arrivesNextDay ? 1 : 0)
 
       if (currStdMin <= prevStaMin && prev._arrivesNextDay) {
@@ -290,7 +290,7 @@ function calculateDayOffsets(legs: LegWithOffsets[]): void {
         curr._dayOffset = arrivalDay
       }
     }
-    curr._arrivesNextDay = timeToMinutes(curr.sta_local) < timeToMinutes(curr.std_local)
+    curr._arrivesNextDay = timeToMinutes(curr.sta_utc) < timeToMinutes(curr.std_utc)
   }
 }
 
@@ -307,8 +307,8 @@ function durationLabel(days: number): string {
 // ─── TAT Helpers ──────────────────────────────────────────────
 
 function computeTat(prevLeg: LegWithOffsets, nextLeg: LegWithOffsets): number {
-  const prevStaAbs = (prevLeg._dayOffset + (prevLeg._arrivesNextDay ? 1 : 0)) * 1440 + timeToMinutes(prevLeg.sta_local)
-  const nextStdAbs = nextLeg._dayOffset * 1440 + timeToMinutes(nextLeg.std_local)
+  const prevStaAbs = (prevLeg._dayOffset + (prevLeg._arrivesNextDay ? 1 : 0)) * 1440 + timeToMinutes(prevLeg.sta_utc)
+  const nextStdAbs = nextLeg._dayOffset * 1440 + timeToMinutes(nextLeg.std_utc)
   return nextStdAbs - prevStaAbs
 }
 
@@ -483,8 +483,8 @@ interface NewLegDraft {
   flightNumber: string
   depStation: string
   arrStation: string
-  stdLocal: string
-  staLocal: string
+  stdUtc: string
+  staUtc: string
   serviceType: string
   _autoFilledDep: boolean
   _autoFilledStd: boolean
@@ -495,7 +495,7 @@ interface NewLegDraft {
 }
 
 function emptyDraft(): NewLegDraft {
-  return { flightNumber: '', depStation: '', arrStation: '', stdLocal: '', staLocal: '', serviceType: 'J', _autoFilledDep: false, _autoFilledStd: false, _autoFilledSta: false, _errors: {}, _duplicateError: null, _checking: false }
+  return { flightNumber: '', depStation: '', arrStation: '', stdUtc: '', staUtc: '', serviceType: 'J', _autoFilledDep: false, _autoFilledStd: false, _autoFilledSta: false, _errors: {}, _duplicateError: null, _checking: false }
 }
 
 function makeLegId(): string {
@@ -865,8 +865,8 @@ export function AircraftRoutesBuilder({
 
     const dep = draft.depStation.toUpperCase()
     const arr = draft.arrStation.toUpperCase()
-    const stdRawV = normalizeTime(draft.stdLocal)
-    const staRawV = normalizeTime(draft.staLocal)
+    const stdRawV = normalizeTime(draft.stdUtc)
+    const staRawV = normalizeTime(draft.staUtc)
     // Reverse-convert from display mode to UTC for validation
     const stdNorm = reverseConvertTime(stdRawV, dep, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
     const staNorm = reverseConvertTime(staRawV, arr, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
@@ -914,7 +914,7 @@ export function AircraftRoutesBuilder({
           id: 'draft', route_id: '', leg_sequence: legs.length + 1,
           flight_id: null, airline_code: null, flight_number: null,
           dep_station: dep || prev.arr_station, arr_station: 'XXX',
-          std_local: stdNorm, sta_local: hasSta ? staNorm : stdNorm,
+          std_utc: stdNorm, sta_utc: hasSta ? staNorm : stdNorm,
           dep_utc_offset: null, arr_utc_offset: null,
           block_minutes: 0, day_offset: 0, arrives_next_day: false,
           service_type: 'J', _dayOffset: 0, _arrivesNextDay: false, _dayOffsetManual: false,
@@ -1104,8 +1104,8 @@ export function AircraftRoutesBuilder({
         flight_number: tl.flight_number,
         dep_station: tl.dep_station,
         arr_station: tl.arr_station,
-        std_local: tl.std_local,
-        sta_local: tl.sta_local,
+        std_utc: tl.std_utc,
+        sta_utc: tl.sta_utc,
         dep_utc_offset: null,
         arr_utc_offset: null,
         block_minutes: tl.block_minutes,
@@ -1319,8 +1319,8 @@ export function AircraftRoutesBuilder({
     if (!draft.flightNumber) errs.flightNumber = true
     if (!draft.depStation || draft.depStation.length < 3) errs.depStation = true
     if (!draft.arrStation || draft.arrStation.length < 3) errs.arrStation = true
-    if (!draft.stdLocal) errs.stdLocal = true
-    if (!draft.staLocal) errs.staLocal = true
+    if (!draft.stdUtc) errs.stdUtc = true
+    if (!draft.staUtc) errs.staUtc = true
 
     if (Object.keys(errs).length) {
       setDraft(d => ({ ...d, _errors: errs, _duplicateError: null }))
@@ -1387,8 +1387,8 @@ export function AircraftRoutesBuilder({
     }
 
     // Add the leg — reverse-convert entered time from display mode to UTC for storage
-    const stdRaw = normalizeTime(draft.stdLocal)
-    const staRaw = normalizeTime(draft.staLocal)
+    const stdRaw = normalizeTime(draft.stdUtc)
+    const staRaw = normalizeTime(draft.staUtc)
     const std = reverseConvertTime(stdRaw, dep, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
     const sta = reverseConvertTime(staRaw, arr, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
     const block = computeBlockMinutes(std, sta)
@@ -1402,8 +1402,8 @@ export function AircraftRoutesBuilder({
       flight_number: flightNum || null,
       dep_station: dep,
       arr_station: arr,
-      std_local: std,
-      sta_local: sta,
+      std_utc: std,
+      sta_utc: sta,
       dep_utc_offset: null,
       arr_utc_offset: null,
       block_minutes: block,
@@ -1427,12 +1427,12 @@ export function AircraftRoutesBuilder({
     const nextDraft = emptyDraft()
     nextDraft.depStation = arr
     nextDraft._autoFilledDep = true
-    if (normalizeTime(draft.staLocal)) {
+    if (normalizeTime(draft.staUtc)) {
       const acType = form?.aircraftTypeId ? acTypeMap.get(form.aircraftTypeId) : undefined
       const rType = getRouteType(dep, arr, airportCountryMap, operatorCountry)
       const minTat = getMinTat(acType, rType)
-      const staMin = timeToMinutes(normalizeTime(draft.staLocal))
-      nextDraft.stdLocal = minutesToTimeStr((staMin + minTat) % 1440)
+      const staMin = timeToMinutes(normalizeTime(draft.staUtc))
+      nextDraft.stdUtc = minutesToTimeStr((staMin + minTat) % 1440)
       nextDraft._autoFilledStd = true
     }
     setDraft(nextDraft)
@@ -1452,14 +1452,14 @@ export function AircraftRoutesBuilder({
       d.depStation = lastLeg.arr_station
       d._autoFilledDep = true
 
-      if (lastLeg.sta_local) {
+      if (lastLeg.sta_utc) {
         const acType = form?.aircraftTypeId ? acTypeMap.get(form.aircraftTypeId) : undefined
         const rType = getRouteType(lastLeg.dep_station, lastLeg.arr_station, airportCountryMap, operatorCountry)
         const minTat = getMinTat(acType, rType)
-        const prevStaMin = timeToMinutes(lastLeg.sta_local)
+        const prevStaMin = timeToMinutes(lastLeg.sta_utc)
         const absStaMin = (lastLeg._dayOffset + (lastLeg._arrivesNextDay ? 1 : 0)) * 1440 + prevStaMin
         const stdAbsMin = absStaMin + minTat
-        d.stdLocal = minutesToTimeStr(stdAbsMin % 1440)
+        d.stdUtc = minutesToTimeStr(stdAbsMin % 1440)
         d._autoFilledStd = true
       }
     }
@@ -1500,19 +1500,19 @@ export function AircraftRoutesBuilder({
         }
         case 'dep_station': leg.dep_station = editValue.toUpperCase().slice(0, 3); break
         case 'arr_station': leg.arr_station = editValue.toUpperCase().slice(0, 3); break
-        case 'std_local': {
+        case 'std_utc': {
           const t = normalizeTime(editValue)
           if (isValidTime(t)) {
             const utcT = reverseConvertTime(t, leg.dep_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
-            leg.std_local = utcT; leg.block_minutes = computeBlockMinutes(utcT, leg.sta_local)
+            leg.std_utc = utcT; leg.block_minutes = computeBlockMinutes(utcT, leg.sta_utc)
           }
           break
         }
-        case 'sta_local': {
+        case 'sta_utc': {
           const t = normalizeTime(editValue)
           if (isValidTime(t)) {
             const utcT = reverseConvertTime(t, leg.arr_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset)
-            leg.sta_local = utcT; leg.block_minutes = computeBlockMinutes(leg.std_local, utcT)
+            leg.sta_utc = utcT; leg.block_minutes = computeBlockMinutes(leg.std_utc, utcT)
           }
           break
         }
@@ -1549,8 +1549,8 @@ export function AircraftRoutesBuilder({
       case 1: return 'flight_number'
       case 2: return 'dep_station'
       case 3: return 'arr_station'
-      case 4: return 'std_local'
-      case 5: return 'sta_local'
+      case 4: return 'std_utc'
+      case 5: return 'sta_utc'
       case 7: return 'service_type'
       default: return null
     }
@@ -1585,8 +1585,8 @@ export function AircraftRoutesBuilder({
         case 'flight_number': leg.flight_number = null; leg.airline_code = null; break
         case 'dep_station': leg.dep_station = ''; break
         case 'arr_station': leg.arr_station = ''; break
-        case 'std_local': leg.std_local = ''; leg.block_minutes = computeBlockMinutes('', leg.sta_local); break
-        case 'sta_local': leg.sta_local = ''; leg.block_minutes = computeBlockMinutes(leg.std_local, ''); break
+        case 'std_utc': leg.std_utc = ''; leg.block_minutes = computeBlockMinutes('', leg.sta_utc); break
+        case 'sta_utc': leg.sta_utc = ''; leg.block_minutes = computeBlockMinutes(leg.std_utc, ''); break
         case 'service_type': leg.service_type = ''; break
       }
       updated[row] = leg
@@ -1714,8 +1714,8 @@ export function AircraftRoutesBuilder({
           flight_number: l.flight_number,
           dep_station: l.dep_station,
           arr_station: l.arr_station,
-          std_local: l.std_local,
-          sta_local: l.sta_local,
+          std_utc: l.std_utc,
+          sta_utc: l.sta_utc,
           block_minutes: l.block_minutes,
           day_offset: l._dayOffset,
           arrives_next_day: l._arrivesNextDay,
@@ -1915,8 +1915,8 @@ export function AircraftRoutesBuilder({
           flight_number: null,
           dep_station: '',
           arr_station: '',
-          std_local: '',
-          sta_local: '',
+          std_utc: '',
+          sta_utc: '',
           dep_utc_offset: null,
           arr_utc_offset: null,
           block_minutes: null,
@@ -3076,12 +3076,12 @@ function LegRow({
       <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(3, 'arr_station')} onClick={e => cellClick(3, e)}>
         {renderEditableCell('arr_station', leg.arr_station, leg.arr_station, 3)}
       </td>
-      <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(4, 'std_local')} onClick={e => cellClick(4, e)}>
-        {(() => { const dv = convertTimeDisplay(leg.std_local, leg.dep_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset); return renderEditableCell('std_local', dv, dv, 4) })()}
+      <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(4, 'std_utc')} onClick={e => cellClick(4, e)}>
+        {(() => { const dv = convertTimeDisplay(leg.std_utc, leg.dep_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset); return renderEditableCell('std_utc', dv, dv, 4) })()}
       </td>
-      <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(5, 'sta_local')} onClick={e => cellClick(5, e)}>
-        {(() => { const dv = convertTimeDisplay(leg.sta_local, leg.arr_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset); return renderEditableCell('sta_local', dv, dv, 5) })()}
-        {!isEditing('sta_local') && !isCellSelected(5) && leg._arrivesNextDay && (
+      <td className={cn(bdr, 'text-center font-mono tabular-nums p-0 cursor-cell')} style={cellOutlineStyle(5, 'sta_utc')} onClick={e => cellClick(5, e)}>
+        {(() => { const dv = convertTimeDisplay(leg.sta_utc, leg.arr_station, timeDisplayMode, airportUtcMap, homeBaseUtcOffset); return renderEditableCell('sta_utc', dv, dv, 5) })()}
+        {!isEditing('sta_utc') && !isCellSelected(5) && leg._arrivesNextDay && (
           <sup className="text-[9px] font-semibold text-amber-600 dark:text-amber-400 ml-0.5">+1</sup>
         )}
       </td>
@@ -3148,14 +3148,14 @@ function FocusableEmptyRow({ index, onActivate, disabled }: {
       <td className={cn(bdr, 'py-1 text-center')}>
         <input type="text" readOnly tabIndex={-1}
           data-grid-row={index} data-grid-col={4}
-          onFocus={() => handleFocus('stdLocal')}
+          onFocus={() => handleFocus('stdUtc')}
           placeholder="&middot;&middot;:&middot;&middot;"
           className={cn(ghostInput, 'w-[45px]')} />
       </td>
       <td className={cn(bdr, 'py-1 text-center')}>
         <input type="text" readOnly tabIndex={-1}
           data-grid-row={index} data-grid-col={5}
-          onFocus={() => handleFocus('staLocal')}
+          onFocus={() => handleFocus('staUtc')}
           placeholder="&middot;&middot;:&middot;&middot;"
           className={cn(ghostInput, 'w-[45px]')} />
       </td>
@@ -3196,8 +3196,8 @@ function GridEntryRow({
       switch (focusField) {
         case 'depStation': depRef.current?.focus(); break
         case 'arrStation': arrRef.current?.focus(); break
-        case 'stdLocal': stdRef.current?.focus(); break
-        case 'staLocal': staRef.current?.focus(); break
+        case 'stdUtc': stdRef.current?.focus(); break
+        case 'staUtc': staRef.current?.focus(); break
         default: fltRef.current?.focus(); break
       }
     }, 0)
@@ -3208,16 +3208,16 @@ function GridEntryRow({
   useEffect(() => {
     const dep = draft.depStation.toUpperCase()
     const arr = draft.arrStation.toUpperCase()
-    const stdNorm = normalizeTime(draft.stdLocal)
-    if (dep.length === 3 && arr.length === 3 && isValidTime(stdNorm) && (!draft.staLocal || draft._autoFilledSta)) {
+    const stdNorm = normalizeTime(draft.stdUtc)
+    if (dep.length === 3 && arr.length === 3 && isValidTime(stdNorm) && (!draft.staUtc || draft._autoFilledSta)) {
       const blockMin = blockTimeMap.get(`${dep}-${arr}`)
       if (blockMin && blockMin > 0) {
         const stdMin = timeToMinutes(stdNorm)
         const staMin = (stdMin + blockMin) % 1440
-        setDraft(d => ({ ...d, staLocal: minutesToTimeStr(staMin), _autoFilledSta: true }))
+        setDraft(d => ({ ...d, staUtc: minutesToTimeStr(staMin), _autoFilledSta: true }))
       }
     }
-  }, [draft.depStation, draft.arrStation, draft.stdLocal, draft._autoFilledSta, blockTimeMap, setDraft])
+  }, [draft.depStation, draft.arrStation, draft.stdUtc, draft._autoFilledSta, blockTimeMap, setDraft])
 
   const arrowNav = (e: React.KeyboardEvent, col: number): boolean => {
     if (e.key === 'ArrowDown') { e.preventDefault(); focusGridCell(index + 1, col); return true }
@@ -3238,8 +3238,8 @@ function GridEntryRow({
     if (arrowNav(e, 5)) return
     if (e.key === 'Tab' && !e.shiftKey) {
       e.preventDefault()
-      if (draft.staLocal) {
-        setDraft(d => ({ ...d, staLocal: normalizeTime(d.staLocal) }))
+      if (draft.staUtc) {
+        setDraft(d => ({ ...d, staUtc: normalizeTime(d.staUtc) }))
       }
       blockRef.current?.focus()
     }
@@ -3275,7 +3275,7 @@ function GridEntryRow({
     setDraft(d => ({ ...d, ...patch, _errors: {}, _duplicateError: null }))
   }
 
-  const blockMin = computeBlockMinutes(normalizeTime(draft.stdLocal), normalizeTime(draft.staLocal))
+  const blockMin = computeBlockMinutes(normalizeTime(draft.stdUtc), normalizeTime(draft.staUtc))
   const depInvalid = draft.depStation.length === 3 && !airportIataSet.has(draft.depStation.toUpperCase())
   const arrInvalid = draft.arrStation.length === 3 && !airportIataSet.has(draft.arrStation.toUpperCase())
   const errBorder = (field: string) => draft._errors[field] ? 'border-red-400 dark:border-red-500' : ''
@@ -3324,24 +3324,24 @@ function GridEntryRow({
         </td>
 
         <td className={cn(bdr, 'py-1 text-center')}>
-          <input ref={stdRef} type="text" value={draft.stdLocal} tabIndex={legTabIndex(index, 4)}
+          <input ref={stdRef} type="text" value={draft.stdUtc} tabIndex={legTabIndex(index, 4)}
             data-grid-row={index} data-grid-col={4}
-            onChange={e => update({ stdLocal: e.target.value, _autoFilledStd: false })}
+            onChange={e => update({ stdUtc: e.target.value, _autoFilledStd: false })}
             onFocus={e => { if (draft._autoFilledStd) e.target.select() }}
-            onBlur={() => { if (draft.stdLocal) update({ stdLocal: normalizeTime(draft.stdLocal) }) }}
+            onBlur={() => { if (draft.stdUtc) update({ stdUtc: normalizeTime(draft.stdUtc) }) }}
             onKeyDown={e => handleKeyDown(e, 4)} placeholder="HH:MM"
-            className={cn(cellInputClass, 'w-[50px] text-center', errBorder('stdLocal'),
+            className={cn(cellInputClass, 'w-[50px] text-center', errBorder('stdUtc'),
               draft._autoFilledStd && 'italic text-[#9ca3af]')} />
         </td>
 
         <td className={cn(bdr, 'py-1 text-center')}>
-          <input ref={staRef} type="text" value={draft.staLocal} tabIndex={legTabIndex(index, 5)}
+          <input ref={staRef} type="text" value={draft.staUtc} tabIndex={legTabIndex(index, 5)}
             data-grid-row={index} data-grid-col={5}
-            onChange={e => update({ staLocal: e.target.value, _autoFilledSta: false })}
+            onChange={e => update({ staUtc: e.target.value, _autoFilledSta: false })}
             onFocus={e => { if (draft._autoFilledSta) e.target.select() }}
-            onBlur={() => { if (draft.staLocal) update({ staLocal: normalizeTime(draft.staLocal) }) }}
+            onBlur={() => { if (draft.staUtc) update({ staUtc: normalizeTime(draft.staUtc) }) }}
             onKeyDown={handleStaKeyDown} placeholder="HH:MM"
-            className={cn(cellInputClass, 'w-[50px] text-center', errBorder('staLocal'),
+            className={cn(cellInputClass, 'w-[50px] text-center', errBorder('staUtc'),
               draft._autoFilledSta && 'italic text-[#9ca3af]')} />
         </td>
 

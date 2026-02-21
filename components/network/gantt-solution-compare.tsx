@@ -253,7 +253,7 @@ export function GanttSolutionCompare({
                 />
                 <Kpi
                   s={s}
-                  label="DEP/ARR Incompatibility"
+                  label="Chain Breaks"
                   value={String(m.chainBreaks)}
                   bad={m.chainBreaks > 0}
                   good={m.chainBreaks === best.chainBreaks && m.chainBreaks === 0}

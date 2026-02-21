@@ -16,8 +16,8 @@ export interface AircraftRouteLeg {
   flight_number: number | null
   dep_station: string
   arr_station: string
-  std_local: string
-  sta_local: string
+  std_utc: string
+  sta_utc: string
   dep_utc_offset: string | null
   arr_utc_offset: string | null
   block_minutes: number | null
@@ -81,8 +81,8 @@ export async function getAircraftRoutes(scenarioId: string): Promise<AircraftRou
       id, route_id, leg_sequence, flight_id,
       airline_code, flight_number,
       dep_station, arr_station,
-      to_char(std_local, 'HH24:MI') AS std_local,
-      to_char(sta_local, 'HH24:MI') AS sta_local,
+      to_char(std_utc, 'HH24:MI') AS std_utc,
+      to_char(sta_utc, 'HH24:MI') AS sta_utc,
       dep_utc_offset, arr_utc_offset,
       block_minutes, day_offset, arrives_next_day, service_type
     FROM aircraft_route_legs
@@ -252,8 +252,8 @@ export interface SaveRouteLegInput {
   flight_number: number | null
   dep_station: string
   arr_station: string
-  std_local: string  // 'HH:MM'
-  sta_local: string  // 'HH:MM'
+  std_utc: string  // 'HH:MM'
+  sta_utc: string  // 'HH:MM'
   block_minutes: number | null
   day_offset: number
   arrives_next_day: boolean
@@ -348,7 +348,7 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
           UPDATE scheduled_flights SET
             airline_code = $2, flight_number = $3,
             dep_station = $4, arr_station = $5,
-            std_local = $6::time, sta_local = $7::time,
+            std_utc = $6::time, sta_utc = $7::time,
             block_minutes = $8, days_of_operation = $9,
             period_start = $10::date, period_end = $11::date,
             aircraft_type_icao = $12, aircraft_type_id = $13,
@@ -360,7 +360,7 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
           flightId,
           leg.airline_code, leg.flight_number,
           leg.dep_station, leg.arr_station,
-          leg.std_local, leg.sta_local,
+          leg.std_utc, leg.sta_utc,
           leg.block_minutes, input.days_of_operation,
           input.period_start, input.period_end,
           input.aircraft_type_icao, input.aircraft_type_id,
@@ -372,7 +372,7 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
         const sfRes = await client.query(`
           INSERT INTO scheduled_flights (
             operator_id, season_id, airline_code, flight_number,
-            dep_station, arr_station, std_local, sta_local,
+            dep_station, arr_station, std_utc, sta_utc,
             block_minutes, days_of_operation, period_start, period_end,
             aircraft_type_icao, aircraft_type_id, service_type,
             arrival_day_offset, source, status,
@@ -388,7 +388,7 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
           operatorId, input.season_id,
           leg.airline_code, leg.flight_number,
           leg.dep_station, leg.arr_station,
-          leg.std_local, leg.sta_local,
+          leg.std_utc, leg.sta_utc,
           leg.block_minutes, input.days_of_operation,
           input.period_start, input.period_end,
           input.aircraft_type_icao, input.aircraft_type_id,
@@ -401,14 +401,14 @@ export async function saveRoute(input: SaveRouteInput): Promise<{ id?: string; e
       await client.query(`
         INSERT INTO aircraft_route_legs (
           route_id, leg_sequence, flight_id, airline_code, flight_number,
-          dep_station, arr_station, std_local, sta_local,
+          dep_station, arr_station, std_utc, sta_utc,
           block_minutes, day_offset, arrives_next_day, service_type
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::time,$9::time,$10,$11,$12,$13)
       `, [
         routeId, i + 1, flightId,
         leg.airline_code, leg.flight_number,
         leg.dep_station, leg.arr_station,
-        leg.std_local, leg.sta_local,
+        leg.std_utc, leg.sta_utc,
         leg.block_minutes, leg.day_offset,
         leg.arrives_next_day, leg.service_type,
       ])
@@ -775,8 +775,8 @@ export interface RouteTemplateLeg {
   flight_number: number | null
   dep_station: string
   arr_station: string
-  std_local: string
-  sta_local: string
+  std_utc: string
+  sta_utc: string
   block_minutes: number | null
   service_type: string
 }
@@ -812,8 +812,8 @@ export async function getRouteTemplates(): Promise<RouteTemplate[]> {
   const routeIds = routeRes.rows.map(r => r.id)
   const legRes = await pool.query(`
     SELECT route_id, airline_code, flight_number, dep_station, arr_station,
-           to_char(std_local, 'HH24:MI') AS std_local,
-           to_char(sta_local, 'HH24:MI') AS sta_local,
+           to_char(std_utc, 'HH24:MI') AS std_utc,
+           to_char(sta_utc, 'HH24:MI') AS sta_utc,
            block_minutes, service_type, leg_sequence
     FROM aircraft_route_legs
     WHERE route_id = ANY($1)
@@ -851,13 +851,13 @@ export async function getRouteTemplates(): Promise<RouteTemplate[]> {
         days_of_operation: r.days_of_operation,
         leg_count: legs.length,
         total_block_minutes: totalBlock,
-        legs: legs.map((l: { airline_code: string | null; flight_number: number | null; dep_station: string; arr_station: string; std_local: string; sta_local: string; block_minutes: number | null; service_type: string }) => ({
+        legs: legs.map((l: { airline_code: string | null; flight_number: number | null; dep_station: string; arr_station: string; std_utc: string; sta_utc: string; block_minutes: number | null; service_type: string }) => ({
           airline_code: l.airline_code,
           flight_number: l.flight_number,
           dep_station: l.dep_station,
           arr_station: l.arr_station,
-          std_local: l.std_local,
-          sta_local: l.sta_local,
+          std_utc: l.std_utc,
+          sta_utc: l.sta_utc,
           block_minutes: l.block_minutes,
           service_type: l.service_type || 'J',
         })),

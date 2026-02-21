@@ -176,7 +176,7 @@ export function GanttOptimizerDialog({
   container,
   useMinimumTat,
   onUseMinimumTatChange,
-  chainContinuity = 'flexible',
+  chainContinuity,
   onChainContinuityChange,
 }: GanttOptimizerDialogProps) {
   const router = useRouter()
@@ -508,6 +508,44 @@ export function GanttOptimizerDialog({
                 onCheckedChange={(val) => onUseMinimumTatChange?.(val)}
               />
             </label>
+
+            {/* Chain Continuity toggle — only for CG solver */}
+            {selectedMethod === 'optimal' && (
+              <div className="mt-3">
+                <span
+                  className="text-muted-foreground block mb-2"
+                  style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}
+                >
+                  Chain Continuity
+                </span>
+                <div className="flex gap-1.5">
+                  {([
+                    { key: 'flexible' as const, label: 'Flexible', desc: 'Maximize coverage. Ferry positioning allowed to reduce unassigned flights.' },
+                    { key: 'strict' as const, label: 'Strict', desc: 'Enforce DEP/ARR continuity. No ferry flights. Higher risk of unassigned flights.' },
+                  ]).map(opt => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => onChainContinuityChange?.(opt.key)}
+                      className="flex-1 py-2 px-3 rounded-lg border text-left transition-colors"
+                      style={{
+                        borderColor: (chainContinuity ?? 'flexible') === opt.key ? 'hsl(var(--primary))' : 'var(--border)',
+                        background: (chainContinuity ?? 'flexible') === opt.key ? 'hsl(var(--primary) / 0.05)' : 'transparent',
+                      }}
+                      onMouseEnter={(e) => {
+                        if ((chainContinuity ?? 'flexible') !== opt.key) e.currentTarget.style.borderColor = 'var(--muted-foreground)'
+                      }}
+                      onMouseLeave={(e) => {
+                        if ((chainContinuity ?? 'flexible') !== opt.key) e.currentTarget.style.borderColor = 'var(--border)'
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 500 }}>{opt.label}</div>
+                      <div style={{ fontSize: 9, lineHeight: 1.4, marginTop: 2 }} className="text-muted-foreground">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Divider */}
@@ -597,54 +635,6 @@ export function GanttOptimizerDialog({
                     >
                       <div style={{ fontSize: 12, fontWeight: 500 }}>{preset.label}</div>
                       <div style={{ fontSize: 9 }} className="text-muted-foreground">{preset.desc}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Chain Continuity (CG solver only) */}
-            {selectedMethod === 'optimal' && (
-              <div className="mt-3 ml-1">
-                <span
-                  className="text-muted-foreground block mb-2"
-                  style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}
-                >
-                  Chain Continuity
-                </span>
-                <div className="flex" style={{ gap: 6 }}>
-                  {([
-                    {
-                      key: 'flexible' as const,
-                      label: 'Flexible',
-                      desc: 'Maximize coverage. Ferry positioning allowed to reduce unassigned flights.',
-                    },
-                    {
-                      key: 'strict' as const,
-                      label: 'Strict',
-                      desc: 'Enforce DEP/ARR continuity. No ferry flights. Higher risk of unassigned flights.',
-                    },
-                  ]).map(opt => (
-                    <button
-                      key={opt.key}
-                      type="button"
-                      onClick={() => onChainContinuityChange?.(opt.key)}
-                      className="flex-1 text-left transition-colors"
-                      style={{
-                        padding: '8px 12px',
-                        borderRadius: 8,
-                        border: chainContinuity === opt.key ? '1.5px solid hsl(var(--primary))' : '1.5px solid var(--border)',
-                        background: chainContinuity === opt.key ? 'hsl(var(--primary) / 0.05)' : 'transparent',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (chainContinuity !== opt.key) e.currentTarget.style.borderColor = 'var(--muted-foreground)'
-                      }}
-                      onMouseLeave={(e) => {
-                        if (chainContinuity !== opt.key) e.currentTarget.style.borderColor = chainContinuity === opt.key ? 'hsl(var(--primary))' : 'var(--border)'
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 500 }}>{opt.label}</div>
-                      <div style={{ fontSize: 9 }} className="text-muted-foreground">{opt.desc}</div>
                     </button>
                   ))}
                 </div>

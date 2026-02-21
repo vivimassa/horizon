@@ -205,10 +205,10 @@ function buildExportQuery(operatorId: string, filters: ExportFilters): { query: 
       sf.period_end,
       sf.days_of_operation,
       sf.dep_station,
-      sf.std_local,
+      sf.std_utc,
       sf.dep_utc_offset,
       sf.arr_station,
-      sf.sta_local,
+      sf.sta_utc,
       sf.arr_utc_offset,
       sf.aircraft_type_icao,
       sf.seat_config
@@ -248,8 +248,8 @@ async function buildExportOptions(operatorId: string, filters: ExportFilters): P
 
 function rowToFlightRecord(row: any): SSIMFlightRecord {
   // Convert TIME format (HH:MM:SS) to HHMM
-  const stdLocal = formatTimeToHHMM(row.std_local)
-  const staLocal = formatTimeToHHMM(row.sta_local)
+  const stdUtc = formatTimeToHHMM(row.std_utc)
+  const staUtc = formatTimeToHHMM(row.sta_utc)
 
   // Resolve ICAO aircraft type to IATA
   const acIata = row.aircraft_type_icao
@@ -266,10 +266,10 @@ function rowToFlightRecord(row: any): SSIMFlightRecord {
     periodEnd: row.period_end || '',
     daysOfOperation: row.days_of_operation || '       ',
     depStation: row.dep_station || '',
-    stdLocal,
+    stdUtc,
     depUtcOffset: row.dep_utc_offset || '+0000',
     arrStation: row.arr_station || '',
-    staLocal,
+    staUtc,
     arrUtcOffset: row.arr_utc_offset || '+0000',
     aircraftTypeIata: acIata,
     seatConfig: row.seat_config || undefined,
