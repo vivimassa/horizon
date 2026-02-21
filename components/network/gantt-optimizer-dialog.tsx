@@ -837,7 +837,7 @@ export function GanttOptimizerDialog({
                   <span>&middot;</span>
                   <span>{mipResult.overflow.length} overflow</span>
                   <span>&middot;</span>
-                  <span>{mipResult.chainBreaks.length} chain breaks</span>
+                  <span>{mipResult.chainBreaks.length} Departure/Arrival Incompatibility</span>
                 </div>
               )}
             </div>

@@ -1275,6 +1275,33 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     const first = isFirstLoadRef.current
     setRevealStage(0)
 
+    // ── Hard reset all transient state from previous period ──
+    // Optimizer
+    setOptimizerOpen(false)
+    setOptimizerRunning(false)
+    setLastOptRun(null)
+    setAiProgress(null)
+    setAiResult(null)
+    setMipProgress(null)
+    setMipResult(null)
+    preMipStateRef.current = null
+    if (aiAbortRef.current) { aiAbortRef.current.abort(); aiAbortRef.current = null }
+    // Solution comparison
+    setSolutionSlots([])
+    setActiveSlotId(null)
+    setCompareOpen(false)
+    // AI Advisor
+    setAdvisorLoading(false)
+    setAdvisorResult(null)
+    setAdvisorError(null)
+    // Selections & pending ops
+    setSelectedFlights(new Set())
+    setSelectedAircraftRow(null)
+    pendingOpsRef.current = { adds: new Map(), deletes: new Set() }
+    // Clear old flights immediately so stale data isn't shown during fetch
+    setFlights([])
+    setTailAssignments(new Map())
+
     // Phase 1: Fetching
     setLoadingPhase('fetching')
     setLoadProgress(0)
@@ -1672,12 +1699,13 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         setAssignmentMethod('optimal')
         setAssignmentsEnabled(true)
         preMipStateRef.current = null
-        storeSolution(result, `Optimal (${result.mip.status})`, {
+        const cgMode = (ganttSettings.chainContinuity ?? 'flexible') === 'strict' ? 'Strict' : 'Flex'
+        storeSolution(result, `Column Generation (${cgMode})`, {
           tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
           familySub: ganttSettings.allowFamilySub ?? false,
         })
         setLastOptRun({
-          method: `Optimal Solver (${result.mip.status})`,
+          method: `Column Generation (${cgMode})`,
           time: new Date(),
         })
       } catch (e) {

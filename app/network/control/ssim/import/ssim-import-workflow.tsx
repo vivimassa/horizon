@@ -251,11 +251,12 @@ export function SsimImportWorkflow({ seasons }: Props) {
         })
 
         const result = await createMissingCityPairs(pairs)
-        cityPairsCreated = result.created
+        cityPairsCreated = result.created + result.updated
+        const updatedDetail = result.updated > 0 ? `, ${result.updated} updated` : ''
         const fixedDetail = result.domesticFixed > 0 ? `, ${result.domesticFixed} reclassified` : ''
         completedSteps.push({
-          label: 'City pairs created',
-          detail: `${result.created} new city pair(s)${fixedDetail}`,
+          label: 'City pairs synced',
+          detail: `${result.created} new, ${result.updated} updated${fixedDetail}`,
         })
       } else {
         completedSteps.push({ label: 'City pairs', detail: 'All city pairs found' })

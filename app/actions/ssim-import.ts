@@ -8,6 +8,7 @@ import { parseSSIM } from '@/lib/utils/ssim-parser'
 import type { SSIMFlightLeg, SSIMParseResult } from '@/lib/utils/ssim-parser'
 import { AIRPORT_COUNTRY, classifyRoute } from '@/lib/data/airport-countries'
 import { lookupAirportByIATA } from '@/app/actions/airport-inquiry'
+import { repairCityPairData } from '@/app/actions/city-pairs'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -126,8 +127,12 @@ export async function parseSSIMFile(fileContent: string): Promise<ParseSSIMResul
     ? result.flights.length === (result.trailer.lastFlightSerial - 2)
     : true
 
-  const { data: airports } = await supabase.from('airports').select('iata_code')
+  const { data: airports } = await supabase.from('airports').select('id, iata_code')
   const existingAirports = new Set(airports?.map(a => a.iata_code).filter(Boolean))
+
+  // Build reverse map: airport UUID → IATA code (for city pair ID-based lookup)
+  const idToIata = new Map<string, string>()
+  airports?.forEach(a => { if (a.iata_code && a.id) idToIata.set(a.id, a.iata_code) })
 
   const allStations = new Set<string>()
   result.flights.forEach(f => { allStations.add(f.depStation); allStations.add(f.arrStation) })
@@ -135,8 +140,24 @@ export async function parseSSIMFile(fileContent: string): Promise<ParseSSIMResul
 
   const { data: cityPairs } = await supabase
     .from('city_pairs')
-    .select('departure_airport, arrival_airport')
-  const existingPairs = new Set(cityPairs?.map(cp => `${cp.departure_airport}-${cp.arrival_airport}`))
+    .select('departure_airport, arrival_airport, departure_airport_id, arrival_airport_id')
+  const existingPairs = new Set<string>()
+  cityPairs?.forEach(cp => {
+    // Match by string codes — add BOTH directions so A-B covers B-A too
+    if (cp.departure_airport && cp.arrival_airport) {
+      existingPairs.add(`${cp.departure_airport}-${cp.arrival_airport}`)
+      existingPairs.add(`${cp.arrival_airport}-${cp.departure_airport}`)
+    }
+    // Also match by airport UUIDs resolved to IATA (handles pairs with NULL string columns)
+    if (cp.departure_airport_id && cp.arrival_airport_id) {
+      const depIata = idToIata.get(cp.departure_airport_id)
+      const arrIata = idToIata.get(cp.arrival_airport_id)
+      if (depIata && arrIata) {
+        existingPairs.add(`${depIata}-${arrIata}`)
+        existingPairs.add(`${arrIata}-${depIata}`)
+      }
+    }
+  })
 
   const allRoutes = new Set<string>()
   result.flights.forEach(f => allRoutes.add(`${f.depStation}-${f.arrStation}`))
@@ -258,8 +279,8 @@ export async function createMissingAirports(
 
 export async function createMissingCityPairs(
   pairs: { dep: string; arr: string }[]
-): Promise<{ created: number; domesticFixed: number }> {
-  console.log('SSIM Import: Creating', pairs.length, 'missing city pairs')
+): Promise<{ created: number; updated: number; domesticFixed: number }> {
+  console.log('SSIM Import: Processing', pairs.length, 'missing city pairs (batch upsert)')
   const supabase = createAdminClient()
 
   // Build airport ID + country map for references and route type detection
@@ -276,34 +297,95 @@ export async function createMissingCityPairs(
     }
   })
 
-  let created = 0
+  // Fetch existing city pairs by airport UUIDs to detect duplicates
+  const existingResult = await pool.query(
+    'SELECT id, departure_airport_id, arrival_airport_id FROM city_pairs'
+  )
+  const existingByIds = new Map<string, string>()
+  for (const row of existingResult.rows) {
+    if (row.departure_airport_id && row.arrival_airport_id) {
+      existingByIds.set(`${row.departure_airport_id}-${row.arrival_airport_id}`, row.id)
+    }
+  }
+
+  // Separate into inserts vs updates, dedup within the batch
+  type PreparedPair = { dep: string; arr: string; depId: string; arrId: string; routeType: string }
+  const toInsert: PreparedPair[] = []
+  const toUpdate: (PreparedPair & { existingId: string })[] = []
+  const seen = new Set<string>()
+
   for (const { dep, arr } of pairs) {
     const depId = airportIdMap.get(dep)
     const arrId = airportIdMap.get(arr)
     if (!depId || !arrId) {
-      const missing = [!depId ? dep : null, !arrId ? arr : null].filter(Boolean).join(', ')
-      console.log('SSIM Import: Skipping city pair', dep, '->', arr, '— airport(s) not in DB:', missing)
+      console.log('SSIM Import: Skipping city pair', dep, '->', arr, '— airport(s) not in DB')
       continue
     }
+    const key = `${depId}-${arrId}`
+    const reverseKey = `${arrId}-${depId}`
+    // City pairs are bidirectional — skip if either direction already seen or exists
+    if (seen.has(key) || seen.has(reverseKey)) continue
+    seen.add(key)
+    seen.add(reverseKey)
+
     const routeType = getRouteType(dep, arr, dbCountryMap)
-    const { error } = await supabase.from('city_pairs').insert({
-      departure_airport: dep,
-      arrival_airport: arr,
-      departure_airport_id: depId,
-      arrival_airport_id: arrId,
-      route_type: routeType,
-      status: 'active',
-      is_active: true,
-    })
-    if (!error) {
-      created++
+    const existingId = existingByIds.get(key) || existingByIds.get(reverseKey)
+    if (existingId) {
+      toUpdate.push({ dep, arr, depId, arrId, routeType, existingId })
     } else {
-      console.error('SSIM Import: INSERT FAILED for city pair', dep, '->', arr, ':', error.message, error.details, error.hint)
+      toInsert.push({ dep, arr, depId, arrId, routeType })
     }
   }
 
+  // ── Batch INSERT new pairs (chunks of 50) ──
+  let created = 0
+  const BATCH = 50
+  for (let i = 0; i < toInsert.length; i += BATCH) {
+    const batch = toInsert.slice(i, i + BATCH)
+    const values: unknown[] = []
+    const placeholders: string[] = []
+    for (let j = 0; j < batch.length; j++) {
+      const p = batch[j]
+      const off = j * 7
+      placeholders.push(
+        `($${off + 1},$${off + 2},$${off + 3},$${off + 4},$${off + 5},$${off + 6},$${off + 7})`
+      )
+      values.push(p.dep, p.arr, p.depId, p.arrId, p.routeType, 'active', true)
+    }
+    const res = await pool.query(
+      `INSERT INTO city_pairs (departure_airport, arrival_airport, departure_airport_id, arrival_airport_id, route_type, status, is_active)
+       VALUES ${placeholders.join(',')}`,
+      values
+    )
+    created += res.rowCount || 0
+  }
+
+  // ── Batch UPDATE existing pairs (chunks of 50) ──
+  let updated = 0
+  for (let i = 0; i < toUpdate.length; i += BATCH) {
+    const batch = toUpdate.slice(i, i + BATCH)
+    const values: unknown[] = []
+    const placeholders: string[] = []
+    for (let j = 0; j < batch.length; j++) {
+      const p = batch[j]
+      const off = j * 4
+      placeholders.push(`($${off + 1},$${off + 2},$${off + 3},$${off + 4}::uuid)`)
+      values.push(p.dep, p.arr, p.routeType, p.existingId)
+    }
+    const res = await pool.query(
+      `UPDATE city_pairs cp SET
+        departure_airport = v.dep,
+        arrival_airport = v.arr,
+        route_type = v.rt,
+        updated_at = NOW()
+       FROM (VALUES ${placeholders.join(',')}) AS v(dep, arr, rt, cid)
+       WHERE cp.id = v.cid`,
+      values
+    )
+    updated += res.rowCount || 0
+  }
+
   // Fix existing misclassified domestic city pairs using hardcoded lookup
-  // Any pair where both airports are in the same country should be domestic
   const vnIatas = Object.entries(AIRPORT_COUNTRY)
     .filter(([, cc]) => cc === 'VN')
     .map(([iata]) => iata)
@@ -318,8 +400,8 @@ export async function createMissingCityPairs(
     console.log('SSIM Import: Fixed', domesticFixed, 'existing city pairs from international -> domestic')
   }
 
-  console.log('SSIM Import: Created', created, 'city pairs,', domesticFixed, 'existing pairs corrected')
-  return { created, domesticFixed }
+  console.log('SSIM Import: Created', created, ', updated', updated, 'city pairs,', domesticFixed, 'existing pairs corrected')
+  return { created, updated, domesticFixed }
 }
 
 // ─── ACTION 4: Import Flight Batch ────────────────────────────────
@@ -537,6 +619,7 @@ export async function finalizeImport(seasonId: string): Promise<{ synced: number
   `, [operatorId, seasonId])
   console.log('SSIM Import: Updated', r2.rowCount, 'arr_airport_id refs')
 
+  // city_pair_id: try string match first, then airport ID match as fallback
   const r3 = await pool.query(`
     UPDATE scheduled_flights sf SET city_pair_id = cp.id
     FROM city_pairs cp
@@ -544,7 +627,18 @@ export async function finalizeImport(seasonId: string): Promise<{ synced: number
       AND sf.city_pair_id IS NULL
       AND sf.operator_id = $1 AND sf.season_id = $2
   `, [operatorId, seasonId])
-  console.log('SSIM Import: Updated', r3.rowCount, 'city_pair_id refs')
+  console.log('SSIM Import: Updated', r3.rowCount, 'city_pair_id refs (string match)')
+
+  const r3b = await pool.query(`
+    UPDATE scheduled_flights sf SET city_pair_id = cp.id
+    FROM city_pairs cp
+    WHERE sf.dep_airport_id = cp.departure_airport_id
+      AND sf.arr_airport_id = cp.arrival_airport_id
+      AND sf.dep_airport_id IS NOT NULL
+      AND sf.city_pair_id IS NULL
+      AND sf.operator_id = $1 AND sf.season_id = $2
+  `, [operatorId, seasonId])
+  console.log('SSIM Import: Updated', r3b.rowCount, 'city_pair_id refs (airport ID match)')
 
   const r4 = await pool.query(`
     UPDATE scheduled_flights SET
@@ -564,6 +658,15 @@ export async function finalizeImport(seasonId: string): Promise<{ synced: number
   )
   const total = parseInt(countResult.rows[0].count) || 0
   console.log('SSIM Import: Total scheduled_flights after finalize:', total)
+
+  // ── Run comprehensive city pair data repair ──────────────────
+  // Fixes missing strings, route_type, and city_pair_id across ALL data
+  console.log('SSIM Import: Running city pair data repair...')
+  const repair = await repairCityPairData()
+  console.log('SSIM Import: Repair complete —',
+    repair.stringsBackfilled, 'strings backfilled,',
+    repair.routeTypesFixed, 'route types fixed,',
+    repair.cityPairIdsLinked, 'city_pair_ids linked')
 
   revalidatePath('/network/control/ssim')
   revalidatePath('/network/control/schedule-builder')
@@ -677,77 +780,65 @@ export async function seedCityPairBlockTimes(
     : 'annual'
   console.log('SSIM Import: Season code', seasonCode, '→ season_type', seasonType)
 
-  // 2. Compute median block_minutes per (dep, arr, aircraft_type, month)
-  //    We extract the month from period_start to group by calendar month.
-  const mediansResult = await pool.query(`
-    WITH flight_blocks AS (
-      SELECT
-        dep_station,
-        arr_station,
-        aircraft_type_id,
-        EXTRACT(MONTH FROM period_start)::int AS flight_month,
-        block_minutes,
-        ROW_NUMBER() OVER (
-          PARTITION BY dep_station, arr_station, aircraft_type_id, EXTRACT(MONTH FROM period_start)
-          ORDER BY block_minutes
-        ) AS rn,
-        COUNT(*) OVER (
-          PARTITION BY dep_station, arr_station, aircraft_type_id, EXTRACT(MONTH FROM period_start)
-        ) AS cnt
-      FROM scheduled_flights
-      WHERE operator_id = $1
-        AND season_id = $2
-        AND block_minutes > 0
-        AND aircraft_type_id IS NOT NULL
-    )
+  // 2. Compute MAX block_minutes per (dep, arr, aircraft_type, month)
+  //    MAX is used so the highest block time across variants is always kept.
+  const maxResult = await pool.query(`
     SELECT
       dep_station,
       arr_station,
       aircraft_type_id,
-      flight_month,
-      ROUND(AVG(block_minutes))::int AS median_block
-    FROM flight_blocks
-    WHERE rn IN (FLOOR((cnt + 1) / 2.0)::int, CEIL((cnt + 1) / 2.0)::int)
-    GROUP BY dep_station, arr_station, aircraft_type_id, flight_month
+      EXTRACT(MONTH FROM period_start)::int AS flight_month,
+      MAX(block_minutes)::int AS max_block
+    FROM scheduled_flights
+    WHERE operator_id = $1
+      AND season_id = $2
+      AND block_minutes > 0
+      AND aircraft_type_id IS NOT NULL
+    GROUP BY dep_station, arr_station, aircraft_type_id, EXTRACT(MONTH FROM period_start)
   `, [operatorId, seasonId])
 
-  if (mediansResult.rows.length === 0) {
+  if (maxResult.rows.length === 0) {
     console.log('SSIM Import: No block time data found')
     return { updated: 0 }
   }
 
-  // 3. Build a lookup: "DEP-ARR-acTypeId-month" → median_block (rounded up to 5 min)
+  // 3. Build a lookup: "DEP-ARR-acTypeId-month" → max_block (rounded up to 5 min)
   //    Also track which months are covered by this SSIM upload
   const blockMap = new Map<string, number>()
   const coveredMonthSet = new Set<number>()
-  for (const r of mediansResult.rows) {
+  for (const r of maxResult.rows) {
     const key = `${r.dep_station}-${r.arr_station}-${r.aircraft_type_id}-${r.flight_month}`
-    blockMap.set(key, roundUpTo5(r.median_block))
+    blockMap.set(key, roundUpTo5(r.max_block))
     coveredMonthSet.add(r.flight_month)
   }
   const coveredMonths = Array.from(coveredMonthSet).sort((a, b) => a - b)
-  console.log('SSIM Import: Computed', blockMap.size, 'directional block time medians across months:', coveredMonths.join(', '))
+  console.log('SSIM Import: Computed', blockMap.size, 'directional max block times across months:', coveredMonths.join(', '))
 
-  // 4. Get all city_pairs with their IDs
+  // 4. Get all city_pairs — deduplicate bidirectional pairs (A↔B = one pair)
   const cpResult = await pool.query(
     'SELECT id, departure_airport, arrival_airport FROM city_pairs'
   )
   const cpMap = new Map<string, { id: string; dep: string; arr: string }>()
+  const cpSeen = new Set<string>()
   for (const cp of cpResult.rows) {
+    // Normalize: sort alphabetically so HUI-SGN and SGN-HUI map to same key
+    const normalized = [cp.departure_airport, cp.arrival_airport].sort().join('-')
+    if (cpSeen.has(normalized)) continue
+    cpSeen.add(normalized)
     cpMap.set(`${cp.departure_airport}-${cp.arrival_airport}`, {
       id: cp.id, dep: cp.departure_airport, arr: cp.arrival_airport,
     })
   }
 
-  // 5. Collect all unique aircraft type IDs from the medians
+  // 5. Collect all unique aircraft type IDs from the block data
   const acTypeIdSet = new Set<string>()
-  for (const r of mediansResult.rows) {
+  for (const r of maxResult.rows) {
     acTypeIdSet.add(r.aircraft_type_id)
   }
   const acTypeIds = Array.from(acTypeIdSet)
 
   // 6. For each (city_pair, aircraft_type, month), build direction1 (dep→arr)
-  //    and direction2 (arr→dep) block times
+  //    and direction2 (arr→dep) block times. Takes MAX across both directions.
   type BlockRow = {
     city_pair_id: string
     aircraft_type_id: string
@@ -782,15 +873,13 @@ export async function seedCityPairBlockTimes(
 
   console.log('SSIM Import: Inserting', rows.length, 'city_pair_block_hours rows (season_type:', seasonType, ', months:', coveredMonths.join(','), ')')
 
-  // 7. Delete existing block_hours ONLY for the covered months + season_type
-  //    This preserves data from other months (e.g. uploading Jan won't wipe Feb)
-  const cpIds = Array.from(new Set(rows.map(r => r.city_pair_id)))
+  // 7. Delete existing block_hours for ALL city pairs in the covered months + season_type
+  //    Using broad delete (not just current cpIds) to clean up orphaned data from old duplicates
   await pool.query(
     `DELETE FROM city_pair_block_hours
-     WHERE city_pair_id = ANY($1::uuid[])
-       AND season_type = $2
-       AND (month_applicable = ANY($3::int[]) OR month_applicable IS NULL)`,
-    [cpIds, seasonType, coveredMonths]
+     WHERE season_type = $1
+       AND (month_applicable = ANY($2::int[]) OR month_applicable IS NULL)`,
+    [seasonType, coveredMonths]
   )
 
   // 8. Batch INSERT into city_pair_block_hours
@@ -821,24 +910,24 @@ export async function seedCityPairBlockTimes(
     inserted += res.rowCount || 0
   }
 
-  // 9. Also update summary columns on city_pairs for quick reference
+  // 9. Also update summary columns on city_pairs for quick reference (MAX block time)
   await pool.query(`
     WITH overall AS (
       SELECT
         dep_station,
         arr_station,
-        ROUND(AVG(block_minutes))::int AS avg_block
+        MAX(block_minutes)::int AS max_block
       FROM scheduled_flights
       WHERE operator_id = $1 AND season_id = $2 AND block_minutes > 0
       GROUP BY dep_station, arr_station
     )
     UPDATE city_pairs cp
-    SET block_time = o.avg_block,
-        standard_block_minutes = o.avg_block,
+    SET block_time = GREATEST(COALESCE(cp.block_time, 0), o.max_block),
+        standard_block_minutes = GREATEST(COALESCE(cp.standard_block_minutes, 0), o.max_block),
         updated_at = NOW()
     FROM overall o
-    WHERE cp.departure_airport = o.dep_station
-      AND cp.arrival_airport = o.arr_station
+    WHERE (cp.departure_airport = o.dep_station AND cp.arrival_airport = o.arr_station)
+       OR (cp.departure_airport = o.arr_station AND cp.arrival_airport = o.dep_station)
   `, [operatorId, seasonId])
 
   console.log('SSIM Import: Inserted', inserted, 'city_pair_block_hours rows')

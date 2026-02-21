@@ -279,11 +279,17 @@ export async function createCityPair(
   const region2 = (apt2.countries as any)?.region || null
   const routeType = determineRouteType(apt1.country_id, apt2.country_id, region1, region2, apt1.iata_code, apt2.iata_code)
 
+  // Always set both UUID and string columns so JOINs never break
+  const depCode = apt1.iata_code || apt1.icao_code
+  const arrCode = apt2.iata_code || apt2.icao_code
+
   const { data: newPair, error } = await supabase
     .from('city_pairs')
     .insert({
       departure_airport_id: airport1Id,
       arrival_airport_id: airport2Id,
+      departure_airport: depCode,
+      arrival_airport: arrCode,
       great_circle_distance_nm: distanceNm,
       route_type: routeType,
       status: 'active',
@@ -498,4 +504,181 @@ export async function fixCityPairClassification(): Promise<{
   }
 
   return { fixed, unknown, details }
+}
+
+// ─── Comprehensive data repair ──────────────────────────────────────────
+// Fixes ALL known data integrity issues in city_pairs + scheduled_flights.
+// Safe to call repeatedly — idempotent. Should be called after SSIM import
+// and can be triggered from admin UI if data looks wrong.
+
+export interface RepairResult {
+  stringsBackfilled: number
+  routeTypesFixed: number
+  cityPairIdsLinked: number
+  details: string[]
+}
+
+export async function repairCityPairData(): Promise<RepairResult> {
+  const supabase = createAdminClient()
+  const details: string[] = []
+
+  // ── Step 1: Backfill missing departure_airport / arrival_airport strings ──
+  // Any city_pair with UUID IDs but NULL string codes gets its strings filled
+  // from the linked airports' IATA codes.
+  const { data: pairsWithNulls } = await supabase
+    .from('city_pairs')
+    .select('id, departure_airport, arrival_airport, departure_airport_id, arrival_airport_id')
+    .or('departure_airport.is.null,arrival_airport.is.null')
+
+  let stringsBackfilled = 0
+  if (pairsWithNulls && pairsWithNulls.length > 0) {
+    // Collect all airport IDs we need to look up
+    const airportIds = new Set<string>()
+    for (const p of pairsWithNulls) {
+      if (p.departure_airport_id) airportIds.add(p.departure_airport_id)
+      if (p.arrival_airport_id) airportIds.add(p.arrival_airport_id)
+    }
+
+    const { data: airports } = await supabase
+      .from('airports')
+      .select('id, iata_code, icao_code')
+      .in('id', Array.from(airportIds))
+
+    const idToCode = new Map<string, string>()
+    airports?.forEach(a => {
+      idToCode.set(a.id, a.iata_code || a.icao_code)
+    })
+
+    for (const p of pairsWithNulls) {
+      const updates: Record<string, string> = {}
+      if (!p.departure_airport && p.departure_airport_id) {
+        const code = idToCode.get(p.departure_airport_id)
+        if (code) updates.departure_airport = code
+      }
+      if (!p.arrival_airport && p.arrival_airport_id) {
+        const code = idToCode.get(p.arrival_airport_id)
+        if (code) updates.arrival_airport = code
+      }
+      if (Object.keys(updates).length > 0) {
+        await supabase.from('city_pairs').update(updates).eq('id', p.id)
+        stringsBackfilled++
+        details.push(`Backfilled strings: ${updates.departure_airport || p.departure_airport}-${updates.arrival_airport || p.arrival_airport}`)
+      }
+    }
+  }
+
+  // ── Step 2: Recompute route_type from DB country data ─────────────────
+  // Uses airport → country UUID comparison as primary, IATA hardcoded as fallback.
+  // Fixes NULL, 'unknown', and any misclassified pairs.
+  const { data: allPairs } = await supabase
+    .from('city_pairs')
+    .select('id, departure_airport, arrival_airport, departure_airport_id, arrival_airport_id, route_type')
+
+  const { data: allAirports } = await supabase
+    .from('airports')
+    .select('id, iata_code, icao_code, country_id, countries(iso_code_2, region)')
+
+  // Build lookup maps
+  const airportById = new Map<string, { iata: string | null; countryId: string | null; iso: string | null; region: string | null }>()
+  const dbCountryMap = new Map<string, string>()
+  allAirports?.forEach(a => {
+    const iso = (a.countries as any)?.iso_code_2 || null
+    const region = (a.countries as any)?.region || null
+    airportById.set(a.id, { iata: a.iata_code, countryId: a.country_id, iso, region })
+    if (a.iata_code && iso) dbCountryMap.set(a.iata_code, iso)
+  })
+
+  let routeTypesFixed = 0
+  if (allPairs) {
+    for (const p of allPairs) {
+      const depApt = p.departure_airport_id ? airportById.get(p.departure_airport_id) : null
+      const arrApt = p.arrival_airport_id ? airportById.get(p.arrival_airport_id) : null
+
+      // Try UUID-based country comparison first
+      let computed: string | null = null
+      if (depApt?.countryId && arrApt?.countryId) {
+        if (depApt.countryId === arrApt.countryId) {
+          computed = 'domestic'
+        } else if (depApt.region && arrApt.region && depApt.region === arrApt.region) {
+          computed = 'regional'
+        } else {
+          computed = 'international'
+        }
+      }
+
+      // Fallback: IATA hardcoded + DB map
+      if (!computed) {
+        const depCode = p.departure_airport || depApt?.iata || null
+        const arrCode = p.arrival_airport || arrApt?.iata || null
+        if (depCode && arrCode) {
+          const result = classifyRoute(depCode, arrCode, dbCountryMap)
+          if (result !== 'unknown') computed = result
+        }
+      }
+
+      if (computed && computed !== p.route_type) {
+        await supabase.from('city_pairs').update({ route_type: computed }).eq('id', p.id)
+        routeTypesFixed++
+        details.push(`Route type: ${p.departure_airport || '?'}-${p.arrival_airport || '?'}: ${p.route_type || 'NULL'} → ${computed}`)
+      }
+    }
+  }
+
+  // ── Step 3: Backfill missing dep_airport_id / arr_airport_id on flights ──
+  // Ensures all flights have proper FK references to airports.
+  const { Pool } = await import('pg')
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+
+  const ra1 = await pool.query(`
+    UPDATE scheduled_flights sf SET dep_airport_id = a.id
+    FROM airports a
+    WHERE sf.dep_station = a.iata_code AND sf.dep_airport_id IS NULL
+  `)
+  const ra2 = await pool.query(`
+    UPDATE scheduled_flights sf SET arr_airport_id = a.id
+    FROM airports a
+    WHERE sf.arr_station = a.iata_code AND sf.arr_airport_id IS NULL
+  `)
+  const airportIdsFixed = (ra1.rowCount || 0) + (ra2.rowCount || 0)
+  if (airportIdsFixed > 0) {
+    details.push(`Backfilled ${airportIdsFixed} airport ID references on flights`)
+  }
+
+  // ── Step 4: Backfill missing city_pair_id on scheduled_flights ────────
+  // Tries string match first, then airport ID match.
+  // This ensures builder-created flights also get linked.
+
+  // 3a: String match (handles SSIM-imported flights)
+  const r1 = await pool.query(`
+    UPDATE scheduled_flights sf SET city_pair_id = cp.id
+    FROM city_pairs cp
+    WHERE sf.dep_station = cp.departure_airport
+      AND sf.arr_station = cp.arrival_airport
+      AND sf.city_pair_id IS NULL
+  `)
+  let cityPairIdsLinked = r1.rowCount || 0
+
+  // 3b: Airport ID match (handles builder-created flights + admin-created pairs)
+  const r2 = await pool.query(`
+    UPDATE scheduled_flights sf SET city_pair_id = cp.id
+    FROM city_pairs cp
+    WHERE sf.dep_airport_id = cp.departure_airport_id
+      AND sf.arr_airport_id = cp.arrival_airport_id
+      AND sf.city_pair_id IS NULL
+      AND sf.dep_airport_id IS NOT NULL
+      AND sf.arr_airport_id IS NOT NULL
+  `)
+  cityPairIdsLinked += r2.rowCount || 0
+
+  if (cityPairIdsLinked > 0) {
+    details.push(`Linked ${cityPairIdsLinked} flights to city pairs`)
+  }
+
+  await pool.end()
+
+  if (routeTypesFixed > 0 || stringsBackfilled > 0) {
+    revalidatePath('/admin/master-database/city-pairs')
+  }
+
+  return { stringsBackfilled, routeTypesFixed, cityPairIdsLinked, details }
 }

@@ -60,8 +60,19 @@ export async function getGanttFlights(
        COALESCE(sf.excluded_dates, '{}') AS excluded_dates
      FROM scheduled_flights sf
      LEFT JOIN aircraft_types at ON sf.aircraft_type_id = at.id
-     LEFT JOIN city_pairs cp ON cp.departure_airport = sf.dep_station
-       AND cp.arrival_airport = sf.arr_station
+     LEFT JOIN LATERAL (
+       SELECT route_type FROM city_pairs
+       WHERE id = sf.city_pair_id
+       UNION ALL
+       SELECT route_type FROM city_pairs
+       WHERE departure_airport = sf.dep_station AND arrival_airport = sf.arr_station
+       UNION ALL
+       SELECT route_type FROM city_pairs
+       WHERE departure_airport_id = sf.dep_airport_id
+         AND arrival_airport_id = sf.arr_airport_id
+         AND sf.dep_airport_id IS NOT NULL
+       LIMIT 1
+     ) cp ON true
      LEFT JOIN LATERAL (
        SELECT route_id, day_offset FROM aircraft_route_legs WHERE flight_id = sf.id LIMIT 1
      ) arl ON true
