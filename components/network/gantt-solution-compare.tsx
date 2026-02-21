@@ -36,6 +36,8 @@ export interface SolutionMetrics {
   fuelTons: number
   fuelCost: number
   opsCost: number
+  overflowRevenueLoss: number
+  chainBreakCosts: number
   totalCost: number
 }
 
@@ -251,7 +253,7 @@ export function GanttSolutionCompare({
                 />
                 <Kpi
                   s={s}
-                  label="Chain Breaks"
+                  label="DEP/ARR Incompatibility"
                   value={String(m.chainBreaks)}
                   bad={m.chainBreaks > 0}
                   good={m.chainBreaks === best.chainBreaks && m.chainBreaks === 0}
@@ -372,6 +374,12 @@ export function GanttSolutionCompare({
               <div className="grid grid-cols-2" style={{ gap: s(6) }}>
                 <Kpi s={s} label={`Fuel (${m.fuelTons}t)`} value={fmt$(m.fuelCost)} />
                 <Kpi s={s} label="Operations" value={fmt$(m.opsCost)} />
+                {m.overflowRevenueLoss > 0 && (
+                  <Kpi s={s} label="Revenue at Risk" value={fmt$(m.overflowRevenueLoss)} bad />
+                )}
+                {m.chainBreakCosts > 0 && (
+                  <Kpi s={s} label="Repositioning" value={fmt$(m.chainBreakCosts)} bad />
+                )}
               </div>
               <div
                 className="flex items-center justify-between"

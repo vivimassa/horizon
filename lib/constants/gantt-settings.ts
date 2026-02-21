@@ -40,6 +40,7 @@ export interface GanttSettingsData {
   // Optimizer
   allowFamilySub: boolean
   useMinimumTat: boolean
+  chainContinuity: 'strict' | 'flexible'
 
   // AC type display order (empty = alphabetical)
   acTypeOrder: string[]
@@ -50,6 +51,8 @@ export interface GanttSettingsData {
     avgRevenuePerSeat: number
     avgLoadFactor: number
     opsCostPerBlockHour: Record<string, number>
+    avgRevenuePerFlight: number
+    ferryCostPerChainBreak: number
   }
 
   // Existing
@@ -98,6 +101,7 @@ export const DEFAULT_GANTT_SETTINGS: GanttSettingsData = {
 
   allowFamilySub: false,
   useMinimumTat: false,
+  chainContinuity: 'flexible',
 
   acTypeOrder: [],
 
@@ -106,12 +110,12 @@ export const DEFAULT_GANTT_SETTINGS: GanttSettingsData = {
     avgRevenuePerSeat: 65,
     avgLoadFactor: 0.88,
     opsCostPerBlockHour: {
-      'A320': 2800,
-      'A321': 3200,
-      'A20N': 2800,
-      'A21N': 3200,
-      'A333': 5500,
+      '320': 2800,
+      '321': 3200,
+      '330': 5500,
     },
+    avgRevenuePerFlight: 12000,
+    ferryCostPerChainBreak: 8000,
   },
 
   tatOverrides: {},

@@ -40,7 +40,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { MiniBuilderModal } from './gantt-mini-builder'
 import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult, type AircraftTypeTAT } from '@/lib/utils/tail-assignment'
 import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } from '@/lib/utils/tail-assignment-sa'
-import { solveMIP, solveMIPAuto } from '@/app/actions/mip-solver'
+import { solveMIP } from '@/app/actions/mip-solver'
 
 // MIP types (previously from tail-assignment-mip.ts, now using Cloud Run solver)
 interface MIPProgress { phase: 'building' | 'solving' | 'extracting'; message: string; elapsedMs: number }
@@ -589,6 +589,12 @@ function computeSolutionMetrics(
     opsCost += Math.round(ft.blockHours * rate)
   }
 
+  // Overflow: lost revenue from unassigned flights
+  const overflowRevenueLoss = Math.round(result.overflow.length * (costAssumptions.avgRevenuePerFlight ?? 12000))
+
+  // Chain breaks: ferry/repositioning costs
+  const chainBreakCosts = Math.round((result.chainBreaks?.length ?? 0) * (costAssumptions.ferryCostPerChainBreak ?? 8000))
+
   return {
     totalFlights: expandedFlights.length,
     assigned: assignments.size,
@@ -614,7 +620,9 @@ function computeSolutionMetrics(
     fuelTons,
     fuelCost,
     opsCost,
-    totalCost: fuelCost + opsCost,
+    overflowRevenueLoss,
+    chainBreakCosts,
+    totalCost: fuelCost + opsCost + overflowRevenueLoss + chainBreakCosts,
   }
 }
 
@@ -1581,12 +1589,18 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         }))
 
       const tatObj: Record<string, number> = {}
+      const tatMinObj: Record<string, number> = {}
+      const tatFloorObj: Record<string, number> = {}
       for (const t of aircraftTypes) {
         if (ganttSettings.useMinimumTat ?? false) {
           tatObj[t.icao_type] = t.tat_min_dd_minutes ?? t.default_tat_minutes ?? 30
         } else {
           tatObj[t.icao_type] = t.tat_dom_dom_minutes ?? t.default_tat_minutes ?? 30
         }
+        // Minimum TAT: use min_dd field, fall back to 2/3 of default
+        tatMinObj[t.icao_type] = t.tat_min_dd_minutes ?? Math.round((t.default_tat_minutes ?? 30) * 0.67)
+        // Hard floor: 10 minutes for narrowbody, 15 for widebody
+        tatFloorObj[t.icao_type] = t.category === 'widebody' ? 15 : 10
       }
 
       const familyObj: Record<string, string> = {}
@@ -1597,14 +1611,21 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       try {
         setMipProgress({ phase: 'solving', message: 'Solving optimization...', elapsedMs: 0 })
 
-        const solverResponse = await solveMIPAuto({
+        const solverResponse = await solveMIP({
           flights: mipFlights,
           aircraft: mipAircraft,
           tatMinutes: tatObj,
+          tatMinMinutes: tatMinObj,
+          tatHardFloorMinutes: tatFloorObj,
           timeLimitSec: config.timeLimitSec,
           mipGap: config.mipGap,
           allowFamilySub: ganttSettings.allowFamilySub ?? false,
           familyMap: familyObj,
+          chainBreakCost: 15000,
+          overflowCost: 50000,
+          tightTatPenalty: 5000,
+          softTatPenalty: 2000,
+          chainContinuity: ganttSettings.chainContinuity ?? 'flexible',
         })
 
         setMipProgress({ phase: 'extracting', message: 'Processing result...', elapsedMs: 0 })
@@ -7401,6 +7422,8 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         onAllowFamilySubChange={(val) => updateGanttSettings({ allowFamilySub: val })}
         useMinimumTat={ganttSettings.useMinimumTat ?? false}
         onUseMinimumTatChange={(val) => updateGanttSettings({ useMinimumTat: val })}
+        chainContinuity={ganttSettings.chainContinuity ?? 'flexible'}
+        onChainContinuityChange={(val) => updateGanttSettings({ chainContinuity: val })}
         aiProgress={aiProgress}
         aiResult={aiResult}
         onCancelAi={handleCancelAi}
