@@ -1,9 +1,5 @@
 'use client'
 
-// TODO: Add CG solver and AI optimizer for 3-7 day operational disruption recovery
-// These were removed from the Network/Gantt commercial planning optimizer
-// and will be re-integrated here for operations use cases.
-
 import { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback, Fragment } from 'react'
 import {
   ChevronDown,
@@ -44,23 +40,12 @@ import { MiniBuilderModal } from './movement-mini-builder'
 import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult, type AircraftTypeTAT } from '@/lib/utils/ops-tail-assignment'
 import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } from '@/lib/utils/ops-tail-assignment-sa'
 import { solveMIP } from '@/app/actions/mip-solver'
-// MIP types — defined locally for ops module (will be re-integrated with CG/AI solver)
-interface MIPProgress { phase: 'building' | 'solving' | 'extracting'; message: string; elapsedMs: number }
-interface MIPResult extends TailAssignmentResult {
-  mip: {
-    status: 'Optimal' | 'Feasible' | 'Infeasible' | 'TimeLimitReached' | 'Error'
-    objectiveValue: number; totalVariables: number; totalConstraints: number
-    elapsedMs: number; timeLimitSec: number; gap?: number; message?: string
-  }
-}
+import { OpsOptimizerDialog, type OpsOptimizerMethod, type MIPProgress, type MIPResult } from './ops-optimizer-dialog'
 
 import { useMovementSettings } from '@/lib/hooks/use-movement-settings'
 import { type MovementSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/movement-settings'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
 import { MovementSettingsPanel, type FleetPreviewItem } from './movement-settings-panel'
-import { GanttOptimizerDialog } from '@/components/network/gantt-optimizer-dialog'
-// Ops module retains all 4 methods (AI/CG will be re-integrated here)
-type OptimizerMethod = 'greedy' | 'good' | 'ai' | 'optimal'
 import { useMovementClipboard } from '@/lib/hooks/use-movement-clipboard'
 import { useMovementDrag, type RowLayoutItem, type PendingDrop } from '@/lib/hooks/use-movement-drag'
 import { MovementClipboardPill } from './movement-clipboard-pill'
@@ -460,7 +445,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
   // ─── Optimizer state ───────────────────────────────────────────────
   const [optimizerOpen, setOptimizerOpen] = useState(false)
-  const [assignmentMethod, setAssignmentMethod] = useState<OptimizerMethod>('greedy')
+  const [assignmentMethod, setAssignmentMethod] = useState<OpsOptimizerMethod>('ai')
   const [optimizerRunning, setOptimizerRunning] = useState(false)
   const [lastOptRun, setLastOptRun] = useState<{ method: string; time: Date } | null>(null)
   const [scheduleRules, setScheduleRules] = useState<ScheduleRule[]>([])
@@ -469,7 +454,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   const aiAbortRef = useRef<AbortController | null>(null)
   const [mipProgress, setMipProgress] = useState<MIPProgress | null>(null)
   const [mipResult, setMipResult] = useState<MIPResult | null>(null)
-  const preMipStateRef = useRef<{ method: OptimizerMethod; mip: MIPResult | null; ai: SAResult | null } | null>(null)
+  const preMipStateRef = useRef<{ method: OpsOptimizerMethod; mip: MIPResult | null; ai: SAResult | null } | null>(null)
 
   // ─── AI Advisor state ─────────────────────────────────────────────
   const [advisorLoading, setAdvisorLoading] = useState(false)
@@ -1051,6 +1036,17 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
     const first = isFirstLoadRef.current
     setRevealStage(0)
 
+    // Reset optimizer state on period change
+    setOptimizerOpen(false)
+    setOptimizerRunning(false)
+    setLastOptRun(null)
+    setAiProgress(null)
+    setAiResult(null)
+    setMipProgress(null)
+    setMipResult(null)
+    preMipStateRef.current = null
+    if (aiAbortRef.current) { aiAbortRef.current.abort(); aiAbortRef.current = null }
+
     setLoadingPhase('fetching')
     setLoadProgress(0)
     animateProgress(0, 40, 600)
@@ -1290,7 +1286,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
   }, [registrations, aircraftTypes])
 
   // ─── Optimizer handler ─────────────────────────────────────────────
-  const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep') => {
+  const handleRunAssignment = useCallback(async (method: OpsOptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep') => {
     if (method === 'optimal') {
       // ── Optimal Solver via Cloud Run ──
       preMipStateRef.current = { method: assignmentMethod, mip: mipResult, ai: aiResult }
@@ -1353,7 +1349,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
           nextDep: cb.nextDep,
         }))
 
-        const result: MIPResult = {
+        const result = {
           assignments: mipAssignments,
           overflow: mipOverflow,
           chainBreaks: mipChainBreaks,
@@ -1368,10 +1364,10 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
             totalPenaltyCost: 0,
           },
           mip: {
-            status: solverResponse.status === 'Optimal' ? 'Optimal'
-              : solverResponse.status === 'Feasible' ? 'Feasible'
-              : solverResponse.status === 'Infeasible' ? 'Infeasible'
-              : 'Error',
+            status: solverResponse.status === 'Optimal' ? 'Optimal' as const
+              : solverResponse.status === 'Feasible' ? 'Feasible' as const
+              : solverResponse.status === 'Infeasible' ? 'Infeasible' as const
+              : 'Error' as const,
             objectiveValue: solverResponse.objectiveValue,
             totalVariables: solverResponse.totalVariables,
             totalConstraints: solverResponse.totalConstraints,
@@ -1403,7 +1399,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         setOptimizerRunning(false)
         setMipProgress(null)
       }
-    } else if (method === 'ai') {
+    } else {
       // ── AI Optimizer flow ──
       setOptimizerRunning(true)
       setAiProgress(null)
@@ -1485,16 +1481,6 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         setAiProgress(null)
         aiAbortRef.current = null
       }
-    } else {
-      // ── Greedy / Good flow ──
-      setOptimizerRunning(true)
-      setAiResult(null)
-      setMipResult(null)
-      setAssignmentsEnabled(true)
-      setAssignmentMethod(method)
-      await new Promise(r => setTimeout(r, 1200))
-      setOptimizerRunning(false)
-      setLastOptRun({ method: method === 'greedy' ? 'Automation: Greed Solution' : 'Automation: Good Solution', time: new Date() })
     }
   }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, movementSettings.allowFamilySub])
 
@@ -1566,7 +1552,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
 
     return autoAssignFlights(
       expandedFlights, assignableAircraft, tatByType,
-      assignmentMethod === 'good' ? 'balance' : 'minimize',
+      'minimize',
       scheduleRules, aircraftFamilies,
       movementSettings.allowFamilySub ?? false, typeFamilyMap
     )
@@ -1666,9 +1652,7 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
         chainBreaks: assignmentResult.chainBreaks,
         registrations: registrations as any[],
         aircraftTypes,
-        method: assignmentMethod === 'greedy' ? 'Greed'
-          : assignmentMethod === 'good' ? 'Balanced'
-          : 'AI Iteration',
+        method: assignmentMethod === 'optimal' ? 'Column Generation' : 'AI Iteration',
         rules: scheduleRules as any[],
       })
 
@@ -6134,17 +6118,24 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       />
 
       {/* ── OPTIMIZER DIALOG ─────────────────────────────────── */}
-      <GanttOptimizerDialog
+      <OpsOptimizerDialog
         open={optimizerOpen}
         onClose={() => setOptimizerOpen(false)}
-        onRunComplete={handleRunAssignment as any}
-        currentMethod={assignmentMethod as any}
+        onRunComplete={handleRunAssignment}
+        currentMethod={assignmentMethod}
         lastRun={lastOptRun}
         running={optimizerRunning}
         ruleCount={scheduleRules.length}
         allowFamilySub={movementSettings.allowFamilySub ?? false}
         onAllowFamilySubChange={(val) => updateMovementSettings({ allowFamilySub: val })}
+        aiProgress={aiProgress}
+        aiResult={aiResult}
+        onCancelAi={handleCancelAi}
+        mipProgress={mipProgress}
+        mipResult={mipResult}
+        onCancelMip={handleCancelMip}
         accentColor={movementSettings.colorAssignment?.assigned ?? '#3B82F6'}
+        container={dialogContainer}
       />
 
       {/* ── Fixed-position tooltip (rendered outside scroll containers) ── */}

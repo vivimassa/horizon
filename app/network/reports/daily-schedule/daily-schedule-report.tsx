@@ -3,7 +3,7 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
 import {
   Search, Calendar, ChevronDown, Check, Loader2, X, Download,
-  Columns3, CalendarDays,
+  Columns3,
 } from 'lucide-react'
 import { AircraftWithRelations } from '@/app/actions/aircraft-registrations'
 import { AircraftType } from '@/types/database'
@@ -734,10 +734,6 @@ export function DailyScheduleReport({ registrations, aircraftTypes }: Props) {
       <div className="h-full flex flex-col overflow-hidden relative bg-background">
         <div className="shrink-0 glass border-b z-20" style={{ padding: '8px 16px' }}>
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 mr-2">
-              <CalendarDays className="w-4 h-4 text-muted-foreground" />
-              <span className="text-[15px] font-bold tracking-tight">1.3.1 Daily Flight Schedule</span>
-            </div>
             {periodSelector}
           </div>
         </div>
@@ -778,10 +774,6 @@ export function DailyScheduleReport({ registrations, aircraftTypes }: Props) {
       {/* Header */}
       <div className="shrink-0 glass border-b z-20" style={{ padding: '8px 16px' }}>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 mr-2">
-            <CalendarDays className="w-4 h-4 text-muted-foreground" />
-            <span className="text-[15px] font-bold tracking-tight">1.3.1 Daily Flight Schedule</span>
-          </div>
           {periodSelector}
         </div>
       </div>

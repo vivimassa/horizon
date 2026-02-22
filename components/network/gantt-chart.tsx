@@ -39,19 +39,6 @@ import { friendlyError } from '@/lib/utils/error-handler'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { MiniBuilderModal } from './gantt-mini-builder'
 import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult, type AircraftTypeTAT } from '@/lib/utils/tail-assignment'
-import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } from '@/lib/utils/tail-assignment-sa'
-import { solveMIP } from '@/app/actions/mip-solver'
-
-// MIP types (previously from tail-assignment-mip.ts, now using Cloud Run solver)
-interface MIPProgress { phase: 'building' | 'solving' | 'extracting'; message: string; elapsedMs: number }
-interface MIPResult extends TailAssignmentResult {
-  mip: {
-    status: 'Optimal' | 'Feasible' | 'Infeasible' | 'TimeLimitReached' | 'Error'
-    objectiveValue: number; totalVariables: number; totalConstraints: number
-    elapsedMs: number; timeLimitSec: number; gap?: number; message?: string
-  }
-}
-
 import { useGanttSettings } from '@/lib/hooks/use-gantt-settings'
 import { type GanttSettingsData, DEFAULT_GANTT_SETTINGS, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/gantt-settings'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
@@ -658,12 +645,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   const [optimizerRunning, setOptimizerRunning] = useState(false)
   const [lastOptRun, setLastOptRun] = useState<{ method: string; time: Date } | null>(null)
   const [scheduleRules, setScheduleRules] = useState<ScheduleRule[]>([])
-  const [aiProgress, setAiProgress] = useState<SAProgress | null>(null)
-  const [aiResult, setAiResult] = useState<SAResult | null>(null)
-  const aiAbortRef = useRef<AbortController | null>(null)
-  const [mipProgress, setMipProgress] = useState<MIPProgress | null>(null)
-  const [mipResult, setMipResult] = useState<MIPResult | null>(null)
-  const preMipStateRef = useRef<{ method: OptimizerMethod; mip: MIPResult | null; ai: SAResult | null } | null>(null)
 
   // ─── Solution comparison state ────────────────────────────────────
   const [solutionSlots, setSolutionSlots] = useState<SolutionSlot[]>([])
@@ -1280,12 +1261,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
     setOptimizerOpen(false)
     setOptimizerRunning(false)
     setLastOptRun(null)
-    setAiProgress(null)
-    setAiResult(null)
-    setMipProgress(null)
-    setMipResult(null)
-    preMipStateRef.current = null
-    if (aiAbortRef.current) { aiAbortRef.current.abort(); aiAbortRef.current = null }
     // Solution comparison
     setSolutionSlots([])
     setActiveSlotId(null)
@@ -1584,297 +1559,51 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
   }, [expandedFlights, registrations, aircraftTypes, seatingConfigs, ganttSettings.costAssumptions])
 
   // ─── Optimizer handler ─────────────────────────────────────────────
-  const handleRunAssignment = useCallback(async (method: OptimizerMethod, aiPreset?: 'quick' | 'normal' | 'deep') => {
-    if (method === 'optimal') {
-      // ── Optimal Solver via Cloud Run ──
-      preMipStateRef.current = { method: assignmentMethod, mip: mipResult, ai: aiResult }
-      setOptimizerRunning(true)
-      setMipProgress({ phase: 'building', message: 'Preparing payload...', elapsedMs: 0 })
+  const handleRunAssignment = useCallback(async (method: OptimizerMethod) => {
+    // ── Greedy / Good flow ──
+    setOptimizerRunning(true)
+    setAssignmentsEnabled(true)
+    setAssignmentMethod(method)
 
-      const config = { timeLimitSec: 120, mipGap: 0.02 }
+    // Show loading overlay briefly, then compute
+    await new Promise(r => setTimeout(r, 800))
 
-      // Build payload for the remote solver
-      const mipFlights = expandedFlights.map(f => ({
-        id: f.id,
-        depStation: f.depStation,
-        arrStation: f.arrStation,
-        startMs: (Math.floor((f.date.getTime() - startDate.getTime()) / 86400000) * 1440 + f.stdMinutes) * 60000,
-        endMs: (Math.floor((f.date.getTime() - startDate.getTime()) / 86400000) * 1440 + f.staMinutes) * 60000,
-        icaoType: f.aircraftTypeIcao || '',
-        pinned: !!f.aircraftReg,
-        pinnedReg: f.aircraftReg || null,
-        routeType: f.routeType || null,
-      }))
+    const label = method === 'greedy' ? 'Automation: Greed' : 'Automation: Good'
 
-      const mipAircraft = registrations
-        .filter(r => r.status === 'active' || r.status === 'operational')
-        .map((r, i) => ({
-          index: i,
-          registration: r.registration,
-          icaoType: r.aircraft_types?.icao_type || 'UNKN',
-          family: aircraftTypes.find(t => t.icao_type === r.aircraft_types?.icao_type)?.family || null,
-        }))
-
-      const tatObj: Record<string, number> = {}
-      const tatMinObj: Record<string, number> = {}
-      const tatFloorObj: Record<string, number> = {}
-      for (const t of aircraftTypes) {
-        if (ganttSettings.useMinimumTat ?? false) {
-          tatObj[t.icao_type] = t.tat_min_dd_minutes ?? t.default_tat_minutes ?? 30
-        } else {
-          tatObj[t.icao_type] = t.tat_dom_dom_minutes ?? t.default_tat_minutes ?? 30
-        }
-        // Minimum TAT: use min_dd field, fall back to 2/3 of default
-        tatMinObj[t.icao_type] = t.tat_min_dd_minutes ?? Math.round((t.default_tat_minutes ?? 30) * 0.67)
-        // Hard floor: 10 minutes for narrowbody, 15 for widebody
-        tatFloorObj[t.icao_type] = t.category === 'widebody' ? 15 : 10
-      }
-
-      const familyObj: Record<string, string> = {}
-      for (const t of aircraftTypes) {
-        if (t.family) familyObj[t.icao_type] = t.family
-      }
-
-      try {
-        setMipProgress({ phase: 'solving', message: 'Solving optimization...', elapsedMs: 0 })
-
-        const solverResponse = await solveMIP({
-          flights: mipFlights,
-          aircraft: mipAircraft,
-          tatMinutes: tatObj,
-          tatMinMinutes: tatMinObj,
-          tatHardFloorMinutes: tatFloorObj,
-          timeLimitSec: config.timeLimitSec,
-          mipGap: config.mipGap,
-          allowFamilySub: ganttSettings.allowFamilySub ?? false,
-          familyMap: familyObj,
-          chainBreakCost: 15000,
-          overflowCost: 50000,
-          tightTatPenalty: 5000,
-          softTatPenalty: 2000,
-          chainContinuity: ganttSettings.chainContinuity ?? 'flexible',
-        })
-
-        setMipProgress({ phase: 'extracting', message: 'Processing result...', elapsedMs: 0 })
-
-        // Convert server response → MIPResult
-        const mipAssignments = new Map<string, string>(Object.entries(solverResponse.assignments))
-        const mipOverflow = expandedFlights.filter(f => solverResponse.overflow.includes(f.id))
-        const mipChainBreaks = (solverResponse.chainBreaks || []).map(cb => ({
-          flightId: cb.flightId,
-          prevArr: cb.prevArr,
-          nextDep: cb.nextDep,
-        }))
-
-        const result: MIPResult = {
-          assignments: mipAssignments,
-          overflow: mipOverflow,
-          chainBreaks: mipChainBreaks,
-          ruleViolations: new Map(),
-          rejections: new Map(),
-          summary: {
-            totalFlights: expandedFlights.length,
-            assigned: mipAssignments.size,
-            overflowed: mipOverflow.length,
-            hardRulesEnforced: 0,
-            softRulesBent: 0,
-            totalPenaltyCost: 0,
-          },
-          mip: {
-            status: solverResponse.status === 'Optimal' ? 'Optimal'
-              : solverResponse.status === 'Feasible' ? 'Feasible'
-              : solverResponse.status === 'Infeasible' ? 'Infeasible'
-              : 'Error',
-            objectiveValue: solverResponse.objectiveValue,
-            totalVariables: solverResponse.totalVariables,
-            totalConstraints: solverResponse.totalConstraints,
-            elapsedMs: solverResponse.elapsedMs,
-            timeLimitSec: config.timeLimitSec,
-            message: solverResponse.message,
-          },
-        }
-
-        setMipResult(result)
-        setAiResult(null)
-        setAssignmentMethod('optimal')
-        setAssignmentsEnabled(true)
-        preMipStateRef.current = null
-        const cgMode = (ganttSettings.chainContinuity ?? 'flexible') === 'strict' ? 'Strict' : 'Flex'
-        storeSolution(result, `ColGen (${cgMode})`, {
-          tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
-          familySub: ganttSettings.allowFamilySub ?? false,
-        })
-        setLastOptRun({
-          method: `ColGen (${cgMode})`,
-          time: new Date(),
-        })
-      } catch (e) {
-        console.error('MIP solver failed:', e)
-        const prev = preMipStateRef.current
-        if (prev) {
-          setAssignmentMethod(prev.method)
-          setMipResult(prev.mip)
-          setAiResult(prev.ai)
-          preMipStateRef.current = null
-        }
-      } finally {
-        setOptimizerRunning(false)
-        setMipProgress(null)
-      }
-    } else if (method === 'ai') {
-      // ── AI Optimizer flow ──
-      setOptimizerRunning(true)
-      setAiProgress(null)
-      setAiResult(null)
-
-      // Build inputs for greedy baseline
-      const assignableAircraft: AssignableAircraft[] = registrations
-        .filter(r => r.status === 'active' || r.status === 'operational')
-        .map(r => ({
-          registration: r.registration,
-          icaoType: r.aircraft_types?.icao_type || 'UNKN',
-          homeBase: r.home_base?.iata_code || null,
-        }))
-
-      const tatByType = new Map<string, AircraftTypeTAT>()
-      for (const t of aircraftTypes) {
-        tatByType.set(t.icao_type, {
-          sched_dd: t.tat_dom_dom_minutes, sched_di: t.tat_dom_int_minutes,
-          sched_id: t.tat_int_dom_minutes, sched_ii: t.tat_int_int_minutes,
-          min_dd: t.tat_min_dd_minutes, min_di: t.tat_min_di_minutes,
-          min_id: t.tat_min_id_minutes, min_ii: t.tat_min_ii_minutes,
-          default: t.default_tat_minutes ?? 30,
-        })
-      }
-
-      const greedyResult = autoAssignFlights(
-        expandedFlights, assignableAircraft, tatByType, 'minimize',
-        scheduleRules, aircraftFamilies,
-        ganttSettings.allowFamilySub ?? false,
-        new Map(aircraftTypes.filter(t => t.family).map(t => [t.icao_type, t.family!])),
-        ganttSettings.useMinimumTat ?? false
-      )
-
-      // Run SA
-      const abort = new AbortController()
-      aiAbortRef.current = abort
-      const config = SA_PRESETS[aiPreset || 'normal']
-
-      const saTypeFamilyMap = new Map<string, string>()
-      for (const t of aircraftTypes) {
-        if (t.family) saTypeFamilyMap.set(t.icao_type, t.family)
-      }
-
-      try {
-        const result = await runSimulatedAnnealing(
-          greedyResult,
-          expandedFlights.map(ef => ({
-            id: ef.id,
-            flightId: ef.flightId,
-            depStation: ef.depStation,
-            arrStation: ef.arrStation,
-            stdMinutes: ef.stdMinutes,
-            staMinutes: ef.staMinutes,
-            aircraftTypeIcao: ef.aircraftTypeIcao,
-            date: ef.date,
-            routeId: ef.routeId,
-            aircraftReg: ef.aircraftReg,
-            dayOffset: ef.dayOffset,
-            serviceType: ef.serviceType,
-            routeType: ef.routeType,
-          })),
-          assignableAircraft,
-          tatByType,
-          config,
-          (progress) => setAiProgress(progress),
-          abort.signal,
-          ganttSettings.allowFamilySub ?? false,
-          saTypeFamilyMap,
-        )
-
-        setAiResult(result)
-        setAssignmentMethod('ai')
-        setAssignmentsEnabled(true)
-        storeSolution(result, `AI ${aiPreset || 'normal'}`, {
-          tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
-          familySub: ganttSettings.allowFamilySub ?? false,
-          saPreset: aiPreset || 'normal',
-        })
-        setLastOptRun({
-          method: `AI Iteration (${result.sa.improvement.toFixed(1)}% improvement)`,
-          time: new Date(),
-        })
-      } catch (e) {
-        console.error('SA failed:', e)
-      } finally {
-        setOptimizerRunning(false)
-        setAiProgress(null)
-        aiAbortRef.current = null
-      }
-    } else {
-      // ── Greedy / Good flow ──
-      setOptimizerRunning(true)
-      setAiResult(null)
-      setMipResult(null)
-      setAssignmentsEnabled(true)
-      setAssignmentMethod(method)
-
-      // Show loading overlay briefly, then compute
-      await new Promise(r => setTimeout(r, 800))
-
-      const label = method === 'greedy' ? 'Automation: Greed' : 'Automation: Good'
-
-      // Compute result inline for comparison slot
-      const greedyAC: AssignableAircraft[] = registrations
-        .filter(r => r.status === 'active' || r.status === 'operational')
-        .map(r => ({ registration: r.registration, icaoType: r.aircraft_types?.icao_type || 'UNKN', homeBase: r.home_base?.iata_code || null }))
-      const greedyTat = new Map<string, AircraftTypeTAT>()
-      for (const t of aircraftTypes) {
-        greedyTat.set(t.icao_type, {
-          sched_dd: t.tat_dom_dom_minutes, sched_di: t.tat_dom_int_minutes,
-          sched_id: t.tat_int_dom_minutes, sched_ii: t.tat_int_int_minutes,
-          min_dd: t.tat_min_dd_minutes, min_di: t.tat_min_di_minutes,
-          min_id: t.tat_min_id_minutes, min_ii: t.tat_min_ii_minutes,
-          default: t.default_tat_minutes ?? 30,
-        })
-      }
-      const greedyFamilyMap = new Map<string, string>()
-      for (const t of aircraftTypes) {
-        if (t.family) greedyFamilyMap.set(t.icao_type, t.family)
-      }
-      const greedyResult = autoAssignFlights(
-        expandedFlights, greedyAC, greedyTat,
-        method === 'good' ? 'balance' : 'minimize',
-        scheduleRules, aircraftFamilies,
-        ganttSettings.allowFamilySub ?? false, greedyFamilyMap,
-        ganttSettings.useMinimumTat ?? false
-      )
-      storeSolution(greedyResult, label, {
-        tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
-        familySub: ganttSettings.allowFamilySub ?? false,
+    // Compute result inline for comparison slot
+    const greedyAC: AssignableAircraft[] = registrations
+      .filter(r => r.status === 'active' || r.status === 'operational')
+      .map(r => ({ registration: r.registration, icaoType: r.aircraft_types?.icao_type || 'UNKN', homeBase: r.home_base?.iata_code || null }))
+    const greedyTat = new Map<string, AircraftTypeTAT>()
+    for (const t of aircraftTypes) {
+      greedyTat.set(t.icao_type, {
+        sched_dd: t.tat_dom_dom_minutes, sched_di: t.tat_dom_int_minutes,
+        sched_id: t.tat_int_dom_minutes, sched_ii: t.tat_int_int_minutes,
+        min_dd: t.tat_min_dd_minutes, min_di: t.tat_min_di_minutes,
+        min_id: t.tat_min_id_minutes, min_ii: t.tat_min_ii_minutes,
+        default: t.default_tat_minutes ?? 30,
       })
-
-      await new Promise(r => setTimeout(r, 400))
-      setOptimizerRunning(false)
-      setLastOptRun({ method: `${label} Solution`, time: new Date() })
     }
-  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat, ganttSettings.chainContinuity, storeSolution])
-
-  const handleCancelAi = useCallback(() => {
-    aiAbortRef.current?.abort()
-  }, [])
-
-  const handleCancelMip = useCallback(() => {
-    const prev = preMipStateRef.current
-    if (prev) {
-      setAssignmentMethod(prev.method)
-      setMipResult(prev.mip)
-      setAiResult(prev.ai)
-      preMipStateRef.current = null
+    const greedyFamilyMap = new Map<string, string>()
+    for (const t of aircraftTypes) {
+      if (t.family) greedyFamilyMap.set(t.icao_type, t.family)
     }
-    setMipProgress(null)
+    const greedyResult = autoAssignFlights(
+      expandedFlights, greedyAC, greedyTat,
+      method === 'good' ? 'balance' : 'minimize',
+      scheduleRules, aircraftFamilies,
+      ganttSettings.allowFamilySub ?? false, greedyFamilyMap,
+      ganttSettings.useMinimumTat ?? false
+    )
+    storeSolution(greedyResult, label, {
+      tatMode: (ganttSettings.useMinimumTat ?? false) ? 'minimum' : 'scheduled',
+      familySub: ganttSettings.allowFamilySub ?? false,
+    })
+
+    await new Promise(r => setTimeout(r, 400))
     setOptimizerRunning(false)
-  }, [])
+    setLastOptRun({ method: `${label} Solution`, time: new Date() })
+  }, [expandedFlights, registrations, aircraftTypes, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat, storeSolution])
 
   // ─── Virtual tail assignment engine ──────────────────────────────
   const assignmentResult = useMemo<TailAssignmentResult>(() => {
@@ -1888,15 +1617,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         rejections: new Map(),
         summary: { totalFlights: 0, assigned: 0, overflowed: 0, hardRulesEnforced: 0, softRulesBent: 0, totalPenaltyCost: 0 },
       }
-    }
-
-    // If MIP solver produced a result, use it directly
-    if (assignmentMethod === 'optimal' && mipResult) {
-      return mipResult
-    }
-    // If AI optimizer produced a result, use it directly
-    if (assignmentMethod === 'ai' && aiResult) {
-      return aiResult
     }
 
     // Build assignable aircraft list
@@ -1933,7 +1653,7 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
       ganttSettings.allowFamilySub ?? false, typeFamilyMap,
       ganttSettings.useMinimumTat ?? false
     )
-  }, [assignmentsEnabled, expandedFlights, registrations, aircraftTypes, assignmentMethod, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat, aiResult, mipResult])
+  }, [assignmentsEnabled, expandedFlights, registrations, aircraftTypes, assignmentMethod, scheduleRules, aircraftFamilies, ganttSettings.allowFamilySub, ganttSettings.useMinimumTat])
 
   /** The result currently displayed on the Gantt — either from a selected slot or the live engine. */
   const activeResult = useMemo<TailAssignmentResult>(() => {
@@ -7455,15 +7175,6 @@ export function GanttChart({ registrations, aircraftTypes, seatingConfigs, airpo
         onAllowFamilySubChange={(val) => updateGanttSettings({ allowFamilySub: val })}
         useMinimumTat={ganttSettings.useMinimumTat ?? false}
         onUseMinimumTatChange={(val) => updateGanttSettings({ useMinimumTat: val })}
-        chainContinuity={ganttSettings.chainContinuity ?? 'flexible'}
-        onChainContinuityChange={(val) => updateGanttSettings({ chainContinuity: val })}
-        aiProgress={aiProgress}
-        aiResult={aiResult}
-        onCancelAi={handleCancelAi}
-        onAskAdvisor={handleAskAdvisor}
-        mipProgress={mipProgress}
-        mipResult={mipResult}
-        onCancelMip={handleCancelMip}
         accentColor={ganttSettings.colorAssignment?.assigned ?? '#3B82F6'}
         container={dialogContainer}
       />
