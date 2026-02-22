@@ -60,6 +60,8 @@ function mergeWithDefaults(partial: Record<string, unknown>): GanttSettingsData 
     allowFamilySub: typeof partial.allowFamilySub === 'boolean' ? partial.allowFamilySub : d.allowFamilySub,
     useMinimumTat: typeof partial.useMinimumTat === 'boolean' ? partial.useMinimumTat : d.useMinimumTat,
     chainContinuity: (partial.chainContinuity === 'strict' || partial.chainContinuity === 'flexible') ? partial.chainContinuity : d.chainContinuity,
+    maxFerryMinutes: typeof partial.maxFerryMinutes === 'number' ? partial.maxFerryMinutes : d.maxFerryMinutes,
+    flightPriority: (partial.flightPriority === 'time' || partial.flightPriority === 'coverage') ? partial.flightPriority : d.flightPriority,
 
     costAssumptions: { ...d.costAssumptions, ...(partial.costAssumptions as object | undefined) },
 

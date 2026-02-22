@@ -377,7 +377,12 @@ export function autoAssignFlights(
   aircraftFamilies: Map<string, string> = new Map(),
   allowFamilySub: boolean = false,
   typeFamilyMap: Map<string, string> = new Map(),
-  useMinimumTat: boolean = false
+  useMinimumTat: boolean = false,
+  // Enhanced greedy params (reserved — ops module will use CG/AI instead)
+  _chainContinuity: 'strict' | 'flexible' = 'flexible',
+  _flightPriority: 'time' | 'coverage' = 'time',
+  _maxFerryMinutes: number = 0,
+  _cityPairBlockTimes?: Map<string, number>,
 ): TailAssignmentResult {
   const assignments = new Map<string, string>()
   const overflow: AssignableFlight[] = []

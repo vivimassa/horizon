@@ -41,6 +41,8 @@ export interface GanttSettingsData {
   allowFamilySub: boolean
   useMinimumTat: boolean
   chainContinuity: 'strict' | 'flexible'
+  maxFerryMinutes: number
+  flightPriority: 'time' | 'coverage'
 
   // AC type display order (empty = alphabetical)
   acTypeOrder: string[]
@@ -102,6 +104,8 @@ export const DEFAULT_GANTT_SETTINGS: GanttSettingsData = {
   allowFamilySub: false,
   useMinimumTat: false,
   chainContinuity: 'flexible',
+  maxFerryMinutes: 120,
+  flightPriority: 'time',
 
   acTypeOrder: [],
 

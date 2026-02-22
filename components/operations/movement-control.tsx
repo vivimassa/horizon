@@ -1,5 +1,9 @@
 'use client'
 
+// TODO: Add CG solver and AI optimizer for 3-7 day operational disruption recovery
+// These were removed from the Network/Gantt commercial planning optimizer
+// and will be re-integrated here for operations use cases.
+
 import { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback, Fragment } from 'react'
 import {
   ChevronDown,
@@ -40,13 +44,23 @@ import { MiniBuilderModal } from './movement-mini-builder'
 import { autoAssignFlights, type AssignableAircraft, type TailAssignmentResult, type AircraftTypeTAT } from '@/lib/utils/ops-tail-assignment'
 import { runSimulatedAnnealing, SA_PRESETS, type SAProgress, type SAResult } from '@/lib/utils/ops-tail-assignment-sa'
 import { solveMIP } from '@/app/actions/mip-solver'
-import type { MIPProgress, MIPResult } from '@/components/network/gantt-optimizer-dialog'
+// MIP types — defined locally for ops module (will be re-integrated with CG/AI solver)
+interface MIPProgress { phase: 'building' | 'solving' | 'extracting'; message: string; elapsedMs: number }
+interface MIPResult extends TailAssignmentResult {
+  mip: {
+    status: 'Optimal' | 'Feasible' | 'Infeasible' | 'TimeLimitReached' | 'Error'
+    objectiveValue: number; totalVariables: number; totalConstraints: number
+    elapsedMs: number; timeLimitSec: number; gap?: number; message?: string
+  }
+}
 
 import { useMovementSettings } from '@/lib/hooks/use-movement-settings'
 import { type MovementSettingsData, AC_TYPE_COLOR_PALETTE } from '@/lib/constants/movement-settings'
 import { getBarTextColor, getContrastTextColor, desaturate, darkModeVariant } from '@/lib/utils/color-helpers'
 import { MovementSettingsPanel, type FleetPreviewItem } from './movement-settings-panel'
-import { GanttOptimizerDialog, type OptimizerMethod } from '@/components/network/gantt-optimizer-dialog'
+import { GanttOptimizerDialog } from '@/components/network/gantt-optimizer-dialog'
+// Ops module retains all 4 methods (AI/CG will be re-integrated here)
+type OptimizerMethod = 'greedy' | 'good' | 'ai' | 'optimal'
 import { useMovementClipboard } from '@/lib/hooks/use-movement-clipboard'
 import { useMovementDrag, type RowLayoutItem, type PendingDrop } from '@/lib/hooks/use-movement-drag'
 import { MovementClipboardPill } from './movement-clipboard-pill'
@@ -6123,20 +6137,13 @@ export function MovementControl({ registrations, aircraftTypes, seatingConfigs, 
       <GanttOptimizerDialog
         open={optimizerOpen}
         onClose={() => setOptimizerOpen(false)}
-        onRunComplete={handleRunAssignment}
-        currentMethod={assignmentMethod}
+        onRunComplete={handleRunAssignment as any}
+        currentMethod={assignmentMethod as any}
         lastRun={lastOptRun}
         running={optimizerRunning}
         ruleCount={scheduleRules.length}
         allowFamilySub={movementSettings.allowFamilySub ?? false}
         onAllowFamilySubChange={(val) => updateMovementSettings({ allowFamilySub: val })}
-        aiProgress={aiProgress}
-        aiResult={aiResult}
-        onCancelAi={handleCancelAi}
-        onAskAdvisor={handleAskAdvisor}
-        mipProgress={mipProgress}
-        mipResult={mipResult}
-        onCancelMip={handleCancelMip}
         accentColor={movementSettings.colorAssignment?.assigned ?? '#3B82F6'}
       />
 

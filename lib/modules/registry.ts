@@ -45,7 +45,7 @@ export const MODULE_REGISTRY: ModuleEntry[] = [
   // 1.3 Reports
   { code: '1.3', name: 'Reports', description: 'Network reports and analytics', icon: 'FileText', route: '/network/reports', parent_module: 'Network', parent_code: '1', required_module: 'network', level: 1 },
   { code: '1.3.1', name: 'Daily Flight Schedule', description: 'View daily flight schedules in tabular form', icon: 'CalendarDays', route: '/network/reports/daily-schedule', parent_module: 'Reports', parent_code: '1.3', required_module: 'network', level: 2 },
-  { code: '1.3.2', name: 'Route Performance', description: 'Analyse route performance metrics', icon: 'TrendingUp', route: '/network/reports/route-performance', parent_module: 'Reports', parent_code: '1.3', required_module: 'network', level: 2 },
+  { code: '1.3.2', name: 'Fleet Utilization', description: 'Scheduled fleet utilization analysis', icon: 'BarChart3', route: '/network/reports/fleet-utilization', parent_module: 'Reports', parent_code: '1.3', required_module: 'network', level: 2 },
   { code: '1.3.3', name: 'Network Summary', description: 'Overall network statistics', icon: 'LayoutDashboard', route: '/network/reports/network-summary', parent_module: 'Reports', parent_code: '1.3', required_module: 'network', level: 2 },
   { code: '1.3.4', name: 'Slot Utilisation', description: 'Airport slot utilisation analysis', icon: 'PieChart', route: '/network/reports/slot-utilisation', parent_module: 'Reports', parent_code: '1.3', required_module: 'network', level: 2 },
 
